@@ -219,7 +219,7 @@ fun MainScreen() {
                     ) {
                         Icon(Icons.Default.Settings, contentDescription = null, modifier = Modifier.size(18.dp))
                         Spacer(modifier = Modifier.width(6.dp))
-                        Text("Settings", fontSize = 13.sp)
+                        Text("Setting", fontSize = 12.sp)
                     }
 
                     // Кнопка старт/стоп
