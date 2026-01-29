@@ -90,7 +90,7 @@ fun TokenItemCard(token: MonitoredToken) {
             containerColor = when (token.status) {
                 TokenStatus.STOPPED_TP -> Color(0xFF1B5E20).copy(alpha = 0.1f)
                 TokenStatus.STOPPED_SL -> Color(0xFFB71C1C).copy(alpha = 0.1f)
-                else -> MaterialTheme.colorScheme.surface
+                else -> Color(0xFFFFD28E)
             }
         ),
         shape = RoundedCornerShape(14.dp)
@@ -464,7 +464,10 @@ fun TokenItemCard(token: MonitoredToken) {
     }
 }
 
+
 // 🔧 Улучшенные функции форматирования (кросс-платформенные)
+
+
 
 /**
  * Форматирование адреса (первые 6 и последние 4 символа)
@@ -474,6 +477,7 @@ private fun formatAddress(address: String?): String {
     if (address.length <= 10) return address
     return "${address.take(6)}...${address.takeLast(4)}"
 }
+
 
 /**
  * Умное форматирование цены
@@ -498,6 +502,8 @@ private fun Double.roundToDecimals(decimals: Int): String {
     val rounded = round(this * factor) / factor
     return rounded.toString()
 }
+
+
 
 
 

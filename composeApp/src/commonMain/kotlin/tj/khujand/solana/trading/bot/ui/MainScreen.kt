@@ -86,6 +86,8 @@ fun MainScreen() {
         monitoredTokens = emptyList()
     }
 
+
+
     fun updateSettings(newSettings: FilterSettings) {
         currentSettings = newSettings
         if (isMonitoring) {
@@ -132,7 +134,8 @@ fun MainScreen() {
         ) {
             // 📊 Верхняя панель
             Card(
-                modifier = Modifier.fillMaxWidth(),
+                modifier = Modifier.fillMaxWidth()
+                    .padding(top = 35.dp),
                 colors = CardDefaults.cardColors(
                     containerColor = MaterialTheme.colorScheme.surfaceVariant
                 ),
@@ -155,7 +158,8 @@ fun MainScreen() {
                         Text(
                             if (isMonitoring) "🟢 Active" else "⚪ Stopped",
                             fontSize = 14.sp,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(top = 5.dp)
                         )
                     }
 
