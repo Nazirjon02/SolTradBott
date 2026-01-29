@@ -210,7 +210,53 @@ fun FilterScreen(
 
         Spacer(modifier = Modifier.height(16.dp))
 
-        // 4. Выбор блокчейнов
+// 4. Максимальное количество токенов
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            colors = CardDefaults.cardColors(
+                containerColor = MaterialTheme.colorScheme.surfaceVariant
+            )
+        ) {
+            Column(modifier = Modifier.padding(16.dp)) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Text("🎯 Max Tokens", fontWeight = FontWeight.Medium)
+                    Text(
+                        "${currentSettings.maxTokensToMonitor}",
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(12.dp))
+
+                Slider(
+                    value = currentSettings.maxTokensToMonitor.toFloat(),
+                    onValueChange = { newValue ->
+                        val newSettings = currentSettings.copy(maxTokensToMonitor = newValue.toInt())
+                        onSettingsChanged(newSettings)
+                        saveSettings(newSettings)
+                    },
+                    valueRange = 1f..50f,
+                    steps = 49
+                )
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Text("1", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text("25", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text("50", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+            }
+        }
+
+        Spacer(modifier = Modifier.height(16.dp))
+
+        // 5. Выбор блокчейнов
         Card(
             modifier = Modifier.fillMaxWidth(),
             colors = CardDefaults.cardColors(

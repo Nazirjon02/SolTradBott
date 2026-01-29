@@ -85,7 +85,8 @@ data class FilterSettings(
     val minLiquidityUSD: Double = 10000.0,
     val chains: List<String> = listOf("solana"),
     val excludeRugPull: Boolean = true,
-    val checkHolders: Boolean = false
+    val checkHolders: Boolean = false,
+    val maxTokensToMonitor: Int = 10 // 👈 Новое поле: максимум токенов
 )
 
 // API КЛИЕНТ
@@ -272,7 +273,7 @@ class DexScreenerApi {
         if (sells > 0 && buys > 0 && sells.toDouble() / buys > 3) return true
 
         // 3. Слишком маленькая ликвидность при большом объеме
-        val volumeToLiquidityRatio = (token.volume?.h24 ?: 0.0) / (token.liquidity?.usd ?: 1.0)
+        val volumeToLiquidityRatio = (token.volume?.h24 ?: 0.0) / token.liquidity.usd
         if (volumeToLiquidityRatio > 10) return true
 
         return false

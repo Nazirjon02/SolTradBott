@@ -8,6 +8,7 @@ import kotlin.time.Clock
 data class MonitoredToken(
     val tokenPair: TokenPair,
     val foundTime: Long = Clock.System.now().toEpochMilliseconds(),
+    val ageToken: String = "0.0",
     val entryPrice: Double = 0.0,
     var currentPrice: String = "0.0",
     var priceChangePercent: Double = 0.0,
@@ -82,7 +83,8 @@ class TokenMonitor {
                                 val monitoredToken = MonitoredToken(
                                     tokenPair = token,
                                     entryPrice = price,
-                                    currentPrice = token.priceUsd.toString()
+                                    currentPrice = token.priceUsd.toString(),
+                                    ageToken = token.pairCreatedAt.toString()
                                 )
 
                                 _monitoredTokens.add(monitoredToken)

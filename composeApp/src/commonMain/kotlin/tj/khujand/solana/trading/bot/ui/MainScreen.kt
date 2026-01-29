@@ -63,7 +63,7 @@ fun MainScreen() {
                 tokenMonitor.startMonitoring(
                     intervalSeconds = 3, // ⏱️ 30 секунд для соблюдения rate limits
                     onNewTokenFound = { newToken ->
-                        if (tokenMonitor.monitoredTokens.size >= 5) {
+                        if (tokenMonitor.monitoredTokens.size >= currentSettings.maxTokensToMonitor) {
                             return@startMonitoring
                         }
 
@@ -98,7 +98,7 @@ fun MainScreen() {
                 tokenMonitor.startMonitoring(
                     intervalSeconds = 3, // ⏱️ 30 секунд для соблюдения rate limits
                     onNewTokenFound = { newToken ->
-                        if (tokenMonitor.monitoredTokens.size >= 5) {
+                        if (tokenMonitor.monitoredTokens.size >= currentSettings.maxTokensToMonitor) {
                             return@startMonitoring
                         }
                         monitoredTokens = tokenMonitor.monitoredTokens

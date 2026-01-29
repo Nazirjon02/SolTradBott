@@ -454,7 +454,7 @@ fun TokenItemCard(token: MonitoredToken) {
                         tint = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                     Text(
-                        "Age: ${formatAge(token.foundTime)}",
+                        "Age: ${formatTimeAgo(token.ageToken.toLong())}",
                         fontSize = 11.sp,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
