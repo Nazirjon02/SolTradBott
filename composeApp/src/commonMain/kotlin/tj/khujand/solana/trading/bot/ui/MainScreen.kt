@@ -63,9 +63,6 @@ fun MainScreen() {
                 tokenMonitor.startMonitoring(
                     intervalSeconds = 3, // ⏱️ 30 секунд для соблюдения rate limits
                     onNewTokenFound = { newToken ->
-                        if (tokenMonitor.monitoredTokens.size >= currentSettings.maxTokensToMonitor) {
-                            return@startMonitoring
-                        }
 
                         monitoredTokens = tokenMonitor.monitoredTokens
                     },
@@ -98,9 +95,6 @@ fun MainScreen() {
                 tokenMonitor.startMonitoring(
                     intervalSeconds = 3, // ⏱️ 30 секунд для соблюдения rate limits
                     onNewTokenFound = { newToken ->
-                        if (tokenMonitor.monitoredTokens.size >= currentSettings.maxTokensToMonitor) {
-                            return@startMonitoring
-                        }
                         monitoredTokens = tokenMonitor.monitoredTokens
                     },
                     onTokenUpdated = { updatedToken ->
@@ -135,7 +129,7 @@ fun MainScreen() {
             // 📊 Верхняя панель
             Card(
                 modifier = Modifier.fillMaxWidth()
-                    .padding(top = 35.dp),
+                    .padding(top = 55.dp),
                 colors = CardDefaults.cardColors(
                     containerColor = MaterialTheme.colorScheme.surfaceVariant
                 ),
@@ -163,16 +157,39 @@ fun MainScreen() {
                         )
                     }
 
+                    // Сделать так:
                     Badge(
-                        containerColor = MaterialTheme.colorScheme.primaryContainer,
-                        contentColor = MaterialTheme.colorScheme.onPrimaryContainer
+                        containerColor = when {
+                            monitoredTokens.size >= currentSettings.maxTokensToMonitor ->
+                                MaterialTheme.colorScheme.tertiaryContainer
+                            else -> MaterialTheme.colorScheme.primaryContainer
+                        },
+                        contentColor = when {
+                            monitoredTokens.size >= currentSettings.maxTokensToMonitor ->
+                                MaterialTheme.colorScheme.onTertiaryContainer
+                            else -> MaterialTheme.colorScheme.onPrimaryContainer
+                        }
                     ) {
-                        Text(
-                            "Tokens: ${monitoredTokens.size}",
-                            fontSize = 14.sp,
-                            fontWeight = FontWeight.Medium,
-                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
-                        )
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(4.dp)
+                        ) {
+                            Text(
+                                "${monitoredTokens.size}/${currentSettings.maxTokensToMonitor}",
+                                fontSize = 14.sp,
+                                fontWeight = FontWeight.Medium,
+                                modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp)
+                            )
+
+                            // Индикатор если достигнут лимит
+                            if (monitoredTokens.size >= currentSettings.maxTokensToMonitor) {
+                                Icon(
+                                    Icons.Default.PauseCircle,
+                                    contentDescription = "Limit reached",
+                                    modifier = Modifier.size(14.dp)
+                                )
+                            }
+                        }
                     }
                 }
             }

@@ -201,23 +201,6 @@ class DexScreenerApi {
         return emptyList()
     }
 
-    // 🆕 АЛЬТЕРНАТИВНЫЙ МЕТОД: Получение САМЫХ СВЕЖИХ токенов через Token Boosts
-    suspend fun getLatestBoostedTokens(): List<TokenPair> {
-        return try {
-            println("🚀 Получение буcтнутых токенов (обычно самые новые)...")
-
-            val url = "https://api.dexscreener.com/token-boosts/latest/v1"
-            val response: DexScreenerResponse = client.get(url).body()
-
-            val solanaTokens = response.pairs.filter { it.chainId == "solana" }
-            println("✅ Найдено буcтнутых Solana токенов: ${solanaTokens.size}")
-
-            solanaTokens
-        } catch (e: Exception) {
-            println("⚠️ Ошибка получения буcтнутых токенов: ${e.message}")
-            emptyList()
-        }
-    }
 
     // ✅ РАБОЧИЙ МЕТОД: Получить информацию о токене
     suspend fun getTokenDetails(pairAddress: String): TokenPair? {
@@ -275,6 +258,13 @@ class DexScreenerApi {
         // 3. Слишком маленькая ликвидность при большом объеме
         val volumeToLiquidityRatio = (token.volume?.h24 ?: 0.0) / token.liquidity.usd
         if (volumeToLiquidityRatio > 10) return true
+
+        // 4. Нет ликвидности или она заблокирована слишком слабо
+        if ((token.liquidity?.usd ?: 0.0) < 3000) return true
+
+        // 5. Нет покупок вообще
+        val buys5m = token.txns?.m5?.buys ?: 0
+        if (buys5m == 0) return true
 
         return false
     }

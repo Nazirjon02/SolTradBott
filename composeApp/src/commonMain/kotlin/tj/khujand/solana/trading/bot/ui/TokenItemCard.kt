@@ -554,16 +554,6 @@ fun formatSimpleNumber(number: Int): String {
     }
 }
 
-/**
- * Удаление незначащих нулей и точки
- */
-//private fun String.removeTrailingZeros(): String {
-//    return if (contains(".")) {
-//        this.trimEnd('0').trimEnd('.')
-//    } else {
-//        this
-//    }
-//}
 
 private fun Double.roundToDecimalss(decimals: Int): Double {
     val factor = 10.0.pow(decimals)

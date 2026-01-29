@@ -41,7 +41,7 @@ fun FilterScreen(
         // Заголовок
         Row(
             modifier = Modifier.fillMaxWidth()
-                .padding(top = 20.dp),
+                .padding(top = 30.dp),
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
@@ -272,11 +272,6 @@ fun FilterScreen(
                     "solana" to "Solana",
                     "ethereum" to "Ethereum",
                     "bsc" to "BNB Chain",
-                    "arbitrum" to "Arbitrum",
-                    "polygon" to "Polygon",
-                    "base" to "Base",
-                    "avalanche" to "Avalanche",
-                    "optimism" to "Optimism"
                 )
 
                 availableChains.forEach { (chainId, chainName) ->
