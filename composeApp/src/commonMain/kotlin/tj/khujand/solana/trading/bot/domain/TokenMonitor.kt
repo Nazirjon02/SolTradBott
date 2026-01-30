@@ -2,10 +2,13 @@ package tj.khujand.solana.trading.bot.domain
 
 import androidx.compose.runtime.mutableStateListOf
 import kotlinx.coroutines.*
+import kotlinx.serialization.Serializable
 import tj.khujand.solana.trading.bot.network.*
+import tj.khujand.solana.trading.bot.util.AppSettings
 import kotlin.time.Clock
 
 // Создаем недостающие модели прямо здесь
+@Serializable
 data class MonitoredToken(
     val tokenPair: TokenPair,
     val foundTime: Long = Clock.System.now().toEpochMilliseconds(),
@@ -17,6 +20,7 @@ data class MonitoredToken(
     var status: TokenStatus = TokenStatus.MONITORING
 )
 
+@Serializable
 enum class TokenStatus {
     MONITORING,    // В мониторинге
     STOPPED_TP,    // Остановлен по тейк-профиту (+30%)
@@ -24,6 +28,7 @@ enum class TokenStatus {
 }
 
 class TokenMonitor {
+    private  val CACHE_KEY_TOKENS = "cached_monitored_tokens"
 
     private var allowNewTokenDiscovery = true  // 🔴 Добавляем флаг
 
@@ -329,9 +334,33 @@ class TokenMonitor {
         if (index != -1) {
             _monitoredTokens[index] = updatedToken
             onUpdate(updatedToken)
+            saveTokensToCache()
         }
     }
 
+    private fun saveTokensToCache() {
+        AppSettings.putObject(
+            CACHE_KEY_TOKENS,
+            _monitoredTokens.toList()
+        )
+        println("💾 Токены сохранены в кеш (${_monitoredTokens.size})")
+    }
+
+    fun restoreFromCache() {
+        val cached = AppSettings.getObjectSafe(
+            CACHE_KEY_TOKENS,
+            emptyList<MonitoredToken>()
+        )
+
+        if (cached.isNotEmpty()) {
+            _monitoredTokens.clear()
+            _monitoredTokens.addAll(cached)
+            allowNewTokenDiscovery =
+                _monitoredTokens.size < filterSettings.maxTokensToMonitor
+
+            println("♻️ Восстановлено токенов из кеша: ${cached.size}")
+        }
+    }
 
 
     // 🎯 Проверка условий для остановки мониторинга

@@ -52,6 +52,27 @@ fun MainScreen() {
         tokenMonitor.filterSettings = currentSettings
     }
 
+    LaunchedEffect(Unit) {
+        tokenMonitor.restoreFromCache()
+        monitoredTokens = tokenMonitor.monitoredTokens.toList()
+        // 🔥 АВТО-СТАРТ если есть токены в кеше
+        if (monitoredTokens.isNotEmpty()) {
+            tokenMonitor.startMonitoring(
+                intervalSeconds = 3,
+                onNewTokenFound = {
+                    monitoredTokens = tokenMonitor.monitoredTokens.toList()
+                },
+                onTokenUpdated = {
+                    monitoredTokens = tokenMonitor.monitoredTokens.toList()
+                },
+                onError = { error ->
+                    println("Ошибка: $error")
+                }
+            )
+            isMonitoring = true
+        }
+
+    }
 
     fun toggleMonitoring() {
         if (isMonitoring) {
@@ -150,7 +171,8 @@ fun MainScreen() {
                             color = MaterialTheme.colorScheme.primary
                         )
                         Text(
-                            if (isMonitoring) "🟢 Active" else "⚪ Stopped",
+                            if (isMonitoring) "🟢 Active (auto)"
+                            else "⚪ Stopped",
                             fontSize = 14.sp,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                             modifier = Modifier.padding(top = 5.dp)
