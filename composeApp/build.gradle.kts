@@ -1,3 +1,4 @@
+import org.jetbrains.compose.desktop.application.dsl.TargetFormat
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 
 plugins {
@@ -25,6 +26,9 @@ kotlin {
             isStatic = true
         }
     }
+
+    // Добавьте это:
+    jvm()
     
     sourceSets {
         androidMain.dependencies {
@@ -68,6 +72,14 @@ kotlin {
             implementation(libs.ktor.client.darwin)
         }
 
+        jvmMain.dependencies {
+            implementation(compose.desktop.currentOs)
+            implementation(libs.kotlinx.coroutinesSwing)
+            implementation(libs.ktor.client.okhttp) // для desktop
+            implementation(libs.logback.classic) // Добавьте эту строку
+
+        }
+
         commonTest.dependencies {
             implementation(libs.kotlin.test)
         }
@@ -103,5 +115,16 @@ android {
 
 dependencies {
     debugImplementation(libs.compose.uiTooling)
+}
+compose.desktop {
+    application {
+        mainClass = "tj.khujand.solana.trading.bot.MainKt"
+
+        nativeDistributions {
+            targetFormats(TargetFormat.Dmg, TargetFormat.Msi, TargetFormat.Deb)
+            packageName = "tj.khujand.solana.trading.bot"
+            packageVersion = "1.0.0"
+        }
+    }
 }
 
