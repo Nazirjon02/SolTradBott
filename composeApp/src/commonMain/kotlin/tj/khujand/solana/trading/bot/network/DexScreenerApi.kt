@@ -121,7 +121,10 @@ class DexScreenerApi {
             val searchQueries = listOf(
                 "Raydium",
                 "Orca",
-                "Meteora"
+                "Meteora",
+                "Pump.fan",
+                "PumpSwap",
+                "Bags",
             )
             for (query in searchQueries) {
                 try {
