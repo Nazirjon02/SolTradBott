@@ -6,10 +6,17 @@ import io.ktor.client.plugins.*
 import io.ktor.client.plugins.contentnegotiation.*
 import io.ktor.client.plugins.logging.*
 import io.ktor.client.request.*
+import io.ktor.client.statement.*
 import io.ktor.http.*
 import io.ktor.serialization.kotlinx.json.*
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.decodeFromJsonElement
+import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.jsonObject
 import kotlinx.coroutines.delay
 import kotlin.time.Clock
 
@@ -77,6 +84,12 @@ data class BuySell(
     val sells: Int? = null
 )
 
+@Serializable
+data class TokenProfile(
+    val chainId: String? = null,
+    val tokenAddress: String? = null
+)
+
 // НАСТРОЙКИ ФИЛЬТРОВ
 @Serializable
 data class FilterSettings(
@@ -110,49 +123,43 @@ class DexScreenerApi {
         }
     }
 
+    private val json = Json {
+        isLenient = true
+        ignoreUnknownKeys = true
+        explicitNulls = false
+    }
+
+    private val maxProfileTokens = 25
+    private val minRequestDelayMs = 250L
+    private val maxRetries = 3
+
     // ✅ УЛУЧШЕННЫЙ МЕТОД: Получение НОВЫХ токенов Solana
     suspend fun getNewTokens(settings: FilterSettings): List<TokenPair> {
         val allTokens = mutableListOf<TokenPair>()
 
         try {
-            println("🔍 Поиск новых токенов Solana...")
+            println("🔍 Поиск новых токенов...")
 
-            // СТРАТЕГИЯ 1: Поиск по популярным парам Solana
-            val searchQueries = listOf(
-                "Raydium",
-                "Orca",
-                "Meteora",
-                "Pump.fan",
-                "PumpSwap",
-                "Bags",
-            )
-            for (query in searchQueries) {
-                try {
-                    println("🔍 Поиск по запросу: $query")
-
-                    val url = "https://api.dexscreener.com/latest/dex/search"
-                    val response: DexScreenerResponse = client.get(url) {
-                        parameter("q", query)
-                    }.body()
-
-                    println("📊 Получено пар для '$query': ${response.pairs.size}")
-
-                    // Фильтруем только Solana токены
-                    val solanaTokens = response.pairs.filter { it.chainId == "solana" }
-                    allTokens.addAll(solanaTokens)
-
-                    // Задержка между запросами (rate limit: 300/min)
-                    delay(500)
-
-                } catch (e: Exception) {
-                    println("⚠️ Ошибка при поиске '$query': ${e.message}")
-                }
+            // СТРАТЕГИЯ 1: Последние токены из token-profiles/latest
+            val profileTokens = getLatestTokenProfilePairs(settings)
+            if (profileTokens.isNotEmpty()) {
+                println("🧩 Найдено пар через token-profiles: ${profileTokens.size}")
+                allTokens.addAll(profileTokens)
+            } else {
+                println("⚠️ token-profiles не вернул данные или пусто")
             }
 
-            println("🔗 Всего Solana пар найдено: ${allTokens.size}")
+            // СТРАТЕГИЯ 2: Поиск по популярным DEX/платформам
+            val searchTokens = getSearchTokens(settings)
+            if (searchTokens.isNotEmpty()) {
+                println("🧩 Найдено пар через search: ${searchTokens.size}")
+                allTokens.addAll(searchTokens)
+            }
+
+            println("🔗 Всего пар найдено: ${allTokens.size}")
 
             // Убираем дубликаты
-            val uniqueTokens = allTokens.distinctBy { it.pairAddress }
+            val uniqueTokens = allTokens.distinctBy { it.pairAddress ?: it.baseToken?.address }
             println("🔗 Уникальных пар: ${uniqueTokens.size}")
 
             // Применяем фильтры для поиска НОВЫХ токенов
@@ -161,8 +168,17 @@ class DexScreenerApi {
                 if (token.baseToken?.address.isNullOrEmpty()) return@filter false
                 if (token.baseToken?.symbol.isNullOrEmpty()) return@filter false
 
-                // 1. ⏰ ГЛАВНЫЙ ФИЛЬТР: Проверка возраста (НОВЫЕ токены)
-                val ageOk =if (token.pairCreatedAt != null && token.pairCreatedAt > 0) {
+                // 1. 🔗 Проверка цепочки (если список пустой - пропускаем)
+                val chainOk = if (settings.chains.isEmpty()) {
+                    true
+                } else {
+                    settings.chains.contains(token.chainId)
+                }
+
+                if (!chainOk) return@filter false
+
+                // 2. ⏰ ГЛАВНЫЙ ФИЛЬТР: Проверка возраста (НОВЫЕ токены)
+                val ageOk = if (token.pairCreatedAt != null && token.pairCreatedAt > 0) {
                     val ageHours = (Clock.System.now().toEpochMilliseconds() - token.pairCreatedAt) / (1000 * 60 * 60)
                     val isNew = ageHours <= settings.maxAgeHours
                     if (isNew) {
@@ -170,20 +186,20 @@ class DexScreenerApi {
                     }
                     isNew
                 } else {
-                    // Если нет даты создания - пропускаем (не можем определить новизну)
-                    println("⚠️ ${token.baseToken?.symbol}: нет даты создания пары")
-                    false
+                    // Если нет даты создания - разрешаем, но логируем
+                    println("⚠️ ${token.baseToken?.symbol}: нет даты создания пары, пропускаем фильтр возраста")
+                    true
                 }
 
                 if (!ageOk) return@filter false
 
-                // 2. 💰 Проверка объема (должен быть > minVolumeUSD)
+                // 3. 💰 Проверка объема (должен быть > minVolumeUSD)
                 val volumeOk = token.volume?.h24 ?: 0.0 >= settings.minVolumeUSD
 
-                // 3. 💧 Проверка ликвидности
+                // 4. 💧 Проверка ликвидности
                 val liquidityOk = token.liquidity?.usd ?: 0.0 >= settings.minLiquidityUSD
 
-                // 4. 🚨 Проверка на скам (если включено)
+                // 5. 🚨 Проверка на скам (если включено)
                 val notScam = if (settings.excludeRugPull) {
                     !isPotentialScam(token)
                 } else true
@@ -194,7 +210,7 @@ class DexScreenerApi {
             println("✅ После фильтрации (только НОВЫЕ): ${filtered.size}")
 
             // Сортируем по времени создания (самые новые первыми)
-            return filtered.sortedByDescending { it.pairCreatedAt }
+            return filtered.sortedByDescending { it.pairCreatedAt ?: 0L }
 
         } catch (e: Exception) {
             println("❌ Ошибка получения токенов: ${e.message}")
@@ -213,9 +229,10 @@ class DexScreenerApi {
             // Используем endpoint для конкретной пары
             // Формат: /latest/dex/pairs/{chainId}/{pairAddress}
             val url = "https://api.dexscreener.com/latest/dex/pairs/solana/$pairAddress"
-            val response: DexScreenerResponse = client.get(url).body()
+            val jsonElement = getJsonElementWithRetry(url) ?: return null
+            val pairs = parsePairsFromJson(jsonElement)
 
-            response.pairs.firstOrNull()?.also {
+            pairs.firstOrNull()?.also {
                 println("✅ Информация получена: ${it.baseToken?.symbol}")
             }
 
@@ -274,5 +291,138 @@ class DexScreenerApi {
 
     fun close() {
         client.close()
+    }
+
+    private suspend fun getSearchTokens(settings: FilterSettings): List<TokenPair> {
+        val searchQueries = listOf(
+            "Raydium",
+            "Orca",
+            "Meteora",
+            "Pump.fun",
+            "PumpSwap",
+            "Bags",
+        )
+
+        val searchTokens = mutableListOf<TokenPair>()
+        for (query in searchQueries) {
+            try {
+                println("🔍 Поиск по запросу: $query")
+
+                val url = "https://api.dexscreener.com/latest/dex/search"
+                val jsonElement = getJsonElementWithRetry(url, mapOf("q" to query))
+                if (jsonElement != null) {
+                    val pairs = parsePairsFromJson(jsonElement)
+                    val filteredByChain = if (settings.chains.isEmpty()) {
+                        pairs
+                    } else {
+                        pairs.filter { settings.chains.contains(it.chainId) }
+                    }
+                    println("📊 Получено пар для '$query': ${filteredByChain.size}")
+                    searchTokens.addAll(filteredByChain)
+                }
+            } catch (e: Exception) {
+                println("⚠️ Ошибка при поиске '$query': ${e.message}")
+            }
+        }
+
+        return searchTokens
+    }
+
+    private suspend fun getLatestTokenProfilePairs(settings: FilterSettings): List<TokenPair> {
+        val url = "https://api.dexscreener.com/token-profiles/latest/v1"
+        val jsonElement = getJsonElementWithRetry(url) ?: return emptyList()
+        val profiles = parseTokenProfilesFromJson(jsonElement)
+
+        val recentTokens = profiles.mapNotNull { profile ->
+            val chainId = profile.chainId
+            val tokenAddress = profile.tokenAddress
+            if (chainId.isNullOrBlank() || tokenAddress.isNullOrBlank()) return@mapNotNull null
+            if (settings.chains.isNotEmpty() && !settings.chains.contains(chainId)) return@mapNotNull null
+            chainId to tokenAddress
+        }.distinct().take(maxProfileTokens)
+
+        if (recentTokens.isEmpty()) return emptyList()
+
+        val pairs = mutableListOf<TokenPair>()
+        for ((chainId, tokenAddress) in recentTokens) {
+            val tokenPairs = getTokenPairsForAddress(chainId, tokenAddress)
+            if (tokenPairs.isNotEmpty()) {
+                pairs.addAll(tokenPairs)
+            }
+            delay(minRequestDelayMs)
+        }
+
+        return pairs
+    }
+
+    private suspend fun getTokenPairsForAddress(chainId: String, tokenAddress: String): List<TokenPair> {
+        val url = "https://api.dexscreener.com/token-pairs/v1/$chainId/$tokenAddress"
+        val jsonElement = getJsonElementWithRetry(url) ?: return emptyList()
+        return parsePairsFromJson(jsonElement)
+    }
+
+    private suspend fun getJsonElementWithRetry(
+        url: String,
+        queryParams: Map<String, String> = emptyMap()
+    ): JsonElement? {
+        var attempt = 0
+        var backoffMs = 500L
+
+        while (attempt < maxRetries) {
+            try {
+                val response = client.get(url) {
+                    queryParams.forEach { (key, value) -> parameter(key, value) }
+                }
+
+                val status = response.status
+                if (status.value == 429 || status.value >= 500) {
+                    println("⏳ Rate limit/Server error ${status.value}, retry in ${backoffMs}ms...")
+                    delay(backoffMs)
+                    backoffMs = (backoffMs * 2).coerceAtMost(4000L)
+                    attempt++
+                    continue
+                }
+
+                if (!status.isSuccess()) {
+                    println("⚠️ Ошибка HTTP ${status.value} для $url")
+                    return null
+                }
+
+                return response.body()
+            } catch (e: Exception) {
+                println("⚠️ Ошибка запроса: ${e.message}")
+                attempt++
+                if (attempt < maxRetries) {
+                    delay(backoffMs)
+                    backoffMs = (backoffMs * 2).coerceAtMost(4000L)
+                }
+            }
+        }
+
+        return null
+    }
+
+    private fun parsePairsFromJson(jsonElement: JsonElement): List<TokenPair> {
+        val array = when (jsonElement) {
+            is JsonObject -> jsonElement["pairs"]?.jsonArray
+            is JsonArray -> jsonElement
+            else -> null
+        } ?: return emptyList()
+
+        return array.mapNotNull { element ->
+            runCatching { json.decodeFromJsonElement<TokenPair>(element) }.getOrNull()
+        }
+    }
+
+    private fun parseTokenProfilesFromJson(jsonElement: JsonElement): List<TokenProfile> {
+        val array = when (jsonElement) {
+            is JsonArray -> jsonElement
+            is JsonObject -> jsonElement["data"]?.jsonArray ?: jsonElement["profiles"]?.jsonArray
+            else -> null
+        } ?: return emptyList()
+
+        return array.mapNotNull { element ->
+            runCatching { json.decodeFromJsonElement<TokenProfile>(element) }.getOrNull()
+        }
     }
 }

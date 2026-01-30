@@ -2,6 +2,8 @@ package tj.khujand.solana.trading.bot.domain
 
 import androidx.compose.runtime.mutableStateListOf
 import kotlinx.coroutines.*
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
 import kotlinx.serialization.Serializable
 import tj.khujand.solana.trading.bot.network.*
 import tj.khujand.solana.trading.bot.util.AppSettings
@@ -35,6 +37,8 @@ class TokenMonitor {
     private val api = DexScreenerApi()
     private var monitorJob: Job? = null
     private var isMonitoring = false
+    private val maxParallelUpdates = 3
+    private val updateSemaphore = Semaphore(maxParallelUpdates)
 
     // Список отслеживаемых токенов
     private val _monitoredTokens = mutableStateListOf<MonitoredToken>()
@@ -90,7 +94,7 @@ class TokenMonitor {
 
                             if (!exists) {
                                 // 2. Проверяем лимит токенов
-                                if (_monitoredTokens.size >= filterSettings.maxTokensToMonitor) {
+                                if (monitoringCount() >= filterSettings.maxTokensToMonitor) {
                                     println("⏸️ Достигнут лимит ${filterSettings.maxTokensToMonitor} токенов. Поиск приостановлен.")
                                     allowNewTokenDiscovery = false
                                     break  // 🛑 Прерываем добавление новых
@@ -128,6 +132,8 @@ class TokenMonitor {
                         updateMonitoredTokensParallel(onTokenUpdated)
                     }
 
+                    refreshDiscoveryFlag()
+
                     // Ожидание перед следующим циклом
                     println("⏳ Ожидание $intervalSeconds секунд...")
                     delay(intervalSeconds * 1000L)
@@ -147,33 +153,37 @@ class TokenMonitor {
     private suspend fun updateMonitoredTokensParallel(onUpdate: (MonitoredToken) -> Unit) {
         println("📈 Параллельное обновление цен для ${_monitoredTokens.size} токенов...")
 
-        // Создаем список корутин для параллельного выполнения
-        val updateJobs = _monitoredTokens
-            .filter { it.status == TokenStatus.MONITORING }
-            .map { monitoredToken ->
-                CoroutineScope(Dispatchers.IO).async {
-                    try {
-                        val updatedToken = api.updateTokenPrice(monitoredToken.tokenPair)
-                        if (updatedToken != null) {
-                            val newPrice = parsePrice(updatedToken.priceUsd)
-                            if (newPrice > 0) {
-                                updateTokenPrice(monitoredToken, newPrice, onUpdate)
-                                println("✅ ${monitoredToken.tokenPair.baseToken?.symbol}: цена обновлена до $${newPrice}")
+        coroutineScope {
+            val updateJobs = _monitoredTokens
+                .filter { it.status == TokenStatus.MONITORING }
+                .map { monitoredToken ->
+                    async(Dispatchers.IO) {
+                        updateSemaphore.withPermit {
+                            try {
+                                val updatedToken = api.updateTokenPrice(monitoredToken.tokenPair)
+                                if (updatedToken != null) {
+                                    val newPrice = parsePrice(updatedToken.priceUsd)
+                                    if (newPrice > 0) {
+                                        updateTokenPrice(monitoredToken, newPrice, onUpdate)
+                                        println("✅ ${monitoredToken.tokenPair.baseToken?.symbol}: цена обновлена до $${newPrice}")
+                                    }
+                                }
+                            } catch (e: Exception) {
+                                println("❌ Ошибка обновления токена ${monitoredToken.tokenPair.baseToken?.symbol}: ${e.message}")
+                            } finally {
+                                delay(150)
                             }
                         }
-                    } catch (e: Exception) {
-                        println("❌ Ошибка обновления токена ${monitoredToken.tokenPair.baseToken?.symbol}: ${e.message}")
                     }
                 }
-            }
 
-        // Ждем завершения ВСЕХ обновлений
-        updateJobs.awaitAll()
+            updateJobs.awaitAll()
+        }
     }
 
     // 🔴 ДОБАВИТЬ: метод для возобновления поиска (например, при удалении токена)
     fun checkAndResumeDiscovery() {
-        if (_monitoredTokens.size < filterSettings.maxTokensToMonitor) {
+        if (monitoringCount() < filterSettings.maxTokensToMonitor) {
             allowNewTokenDiscovery = true
             println("🔍 Поиск новых токенов возобновлен [${_monitoredTokens.size}/${filterSettings.maxTokensToMonitor}]")
         }
@@ -224,6 +234,14 @@ class TokenMonitor {
 
             hasData && volumeOk && liquidityOk && ageOk && notScam
         }
+    }
+
+    private fun monitoringCount(): Int {
+        return _monitoredTokens.count { it.status == TokenStatus.MONITORING }
+    }
+
+    private fun refreshDiscoveryFlag() {
+        allowNewTokenDiscovery = monitoringCount() < filterSettings.maxTokensToMonitor
     }
 
     // ⏰ Проверка возраста токена
