@@ -11,6 +11,7 @@ plugins {
 }
 
 kotlin {
+   // jvmToolchain(17) // Gradle сам найдет или скачает нужный JDK с jpackage
     androidTarget {
         compilerOptions {
             jvmTarget.set(JvmTarget.JVM_11)

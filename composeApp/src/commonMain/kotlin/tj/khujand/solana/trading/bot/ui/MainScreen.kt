@@ -24,10 +24,13 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import tj.khujand.solana.trading.bot.ServiceController
+import tj.khujand.solana.trading.bot.createServiceController
 import tj.khujand.solana.trading.bot.data.FilterSettingsManager
 import tj.khujand.solana.trading.bot.domain.MonitoredToken
 import tj.khujand.solana.trading.bot.domain.TokenMonitor
 import tj.khujand.solana.trading.bot.domain.TokenStatus
+import tj.khujand.solana.trading.bot.isAndroid
 import tj.khujand.solana.trading.bot.network.FilterSettings
 import kotlin.math.pow
 import kotlin.math.round
@@ -41,7 +44,7 @@ fun MainScreen() {
     var currentSettings by remember {
         mutableStateOf(FilterSettingsManager.loadSettings())
     }
-
+    val serviceController = remember { createServiceController() }
     var isMonitoring by remember { mutableStateOf(false) }
     var monitoredTokens by remember { mutableStateOf(emptyList<MonitoredToken>()) }
     var showFilterSettings by remember { mutableStateOf(false) }
@@ -246,7 +249,19 @@ fun MainScreen() {
 
                     // Кнопка старт/стоп
                     Button(
-                        onClick = { toggleMonitoring() },
+                        onClick = {
+                            if (isAndroid()) {
+                                if (isMonitoring) {
+                                    // Сейчас работает → останавливаем
+                                    serviceController?.stopMonitoring()
+                                } else {
+                                    // Сейчас не работает → запускаем
+                                    serviceController?.startMonitoring()
+                                }
+                            }
+                            // ПОСЛЕ работы с сервисом меняем состояние
+                            toggleMonitoring()
+                                  },
                         colors = ButtonDefaults.buttonColors(
                             containerColor = if (isMonitoring) MaterialTheme.colorScheme.errorContainer
                             else MaterialTheme.colorScheme.primaryContainer,

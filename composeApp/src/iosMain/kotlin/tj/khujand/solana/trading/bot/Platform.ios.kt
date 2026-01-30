@@ -7,3 +7,19 @@ class IOSPlatform: Platform {
 }
 
 actual fun getPlatform(): Platform = IOSPlatform()
+
+actual class ServiceController {
+    actual fun startMonitoring() {
+        println("Desktop: Monitoring started")
+    }
+
+    actual fun stopMonitoring() {
+        println("Desktop: Monitoring stopped")
+    }
+}
+
+actual fun createServiceController(): ServiceController {
+    return ServiceController()
+}
+
+actual fun isAndroid(): Boolean = false
