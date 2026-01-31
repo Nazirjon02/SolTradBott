@@ -74,19 +74,34 @@ object FilterSettingsManager {
             try {
                 json.decodeFromString<List<String>>(chainsJson)
             } catch (e: Exception) {
-                listOf("solana", "ethereum") // По умолчанию
+                listOf("solana") // По умолчанию только Solana
             }
         } else {
-            listOf("solana", "ethereum") // По умолчанию
+            listOf("solana") // По умолчанию только Solana
         }
 
+        // Загружаем новые поля из конфига (значения по умолчанию)
         return FilterSettings(
             minVolumeUSD = minVolume,
             maxAgeHours = maxAge,
             minLiquidityUSD = minLiquidity,
             chains = chains,
             excludeRugPull = excludeRug,
-            checkHolders = checkHolders
+            checkHolders = checkHolders,
+            // Новые поля из конфига
+            liquidityMinUsd = 200.0,
+            volumeH24MinUsd = 1000.0,
+            pairMaxAgeHours = 1.0,
+            buysH1Min = 1,
+            maxSellsToBuysRatioH1 = 1.2,
+            maxAbsPriceChangeH1Pct = 250.0,
+            maxTokensPerTick = 2,
+            minScoreAccept = 10,
+            rpcUrl = "https://api.mainnet-beta.solana.com",
+            rpcTimeoutSeconds = 12,
+            useTokenBoostsApi = true, // По умолчанию используем token-boosts
+            cooldownMinutes = 180,
+            maxReentriesAfterClose = 1
         )
     }
 

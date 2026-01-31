@@ -18,6 +18,9 @@ import kotlinx.serialization.json.decodeFromJsonElement
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlin.time.Clock
 
 // МОДЕЛИ ДАННЫХ (перенесем сюда чтобы все в одном месте)
@@ -90,7 +93,15 @@ data class TokenProfile(
     val tokenAddress: String? = null
 )
 
+@Serializable
+data class TokenBoost(
+    val chainId: String? = null,
+    val tokenAddress: String? = null,
+    val createdAt: Long? = null
+)
+
 // НАСТРОЙКИ ФИЛЬТРОВ
+@OptIn(kotlinx.serialization.ExperimentalSerializationApi::class)
 @Serializable
 data class FilterSettings(
     val minVolumeUSD: Double = 5000.0,
@@ -99,7 +110,30 @@ data class FilterSettings(
     val chains: List<String> = listOf("solana"),
     val excludeRugPull: Boolean = true,
     val checkHolders: Boolean = false,
-    val maxTokensToMonitor: Int = 10 // 👈 Новое поле: максимум токенов
+    val maxTokensToMonitor: Int = 10, // 👈 Новое поле: максимум токенов
+    
+    // Новые поля из конфига
+    val liquidityMinUsd: Double = 200.0,
+    val volumeH24MinUsd: Double = 1000.0,
+    val pairMaxAgeHours: Double = 1.0,
+    val buysH1Min: Int = 1,
+    val maxSellsToBuysRatioH1: Double = 1.2,
+    val maxAbsPriceChangeH1Pct: Double = 250.0,
+    val maxTokensPerTick: Int = 2,
+    val minScoreAccept: Int = 10,
+    
+    // Solana RPC настройки
+    val rpcUrl: String = "https://api.mainnet-beta.solana.com",
+    val rpcTimeoutSeconds: Int = 12,
+    
+    // Выбор API для поиска токенов
+    val useTokenBoostsApi: Boolean = true, // true = token-boosts, false = token-profiles
+
+    // Кулдаун: минуты, в течение которых закрытый по TP/SL токен не добавляется снова в мониторинг
+    val cooldownMinutes: Int = 180,
+
+    // Сколько раз один и тот же токен можно снова добавить в мониторинг после TP/SL. 0 = только один раз (после закрытия больше не добавлять), 1 = один повтор, 2 = два повтора и т.д.
+    val maxReentriesAfterClose: Int = 1
 )
 
 // API КЛИЕНТ
@@ -133,27 +167,30 @@ class DexScreenerApi {
     private val minRequestDelayMs = 250L
     private val maxRetries = 3
 
-    // ✅ УЛУЧШЕННЫЙ МЕТОД: Получение НОВЫХ токенов Solana
+    // ✅ УЛУЧШЕННЫЙ МЕТОД: Получение НОВЫХ токенов Solana (выбор API через настройки)
     suspend fun getNewTokens(settings: FilterSettings): List<TokenPair> {
         val allTokens = mutableListOf<TokenPair>()
 
         try {
-            println("🔍 Поиск новых токенов...")
-
-            // СТРАТЕГИЯ 1: Последние токены из token-profiles/latest
-            val profileTokens = getLatestTokenProfilePairs(settings)
-            if (profileTokens.isNotEmpty()) {
-                println("🧩 Найдено пар через token-profiles: ${profileTokens.size}")
-                allTokens.addAll(profileTokens)
+            // Выбираем API в зависимости от настройки
+            if (settings.useTokenBoostsApi) {
+                println("🔍 Поиск новых токенов через token-boosts...")
+                val boostTokens = getLatestTokenBoosts(settings)
+                if (boostTokens.isNotEmpty()) {
+                    println("🧩 Найдено токенов через token-boosts: ${boostTokens.size}")
+                    allTokens.addAll(boostTokens)
+                } else {
+                    println("⚠️ token-boosts не вернул данные или пусто")
+                }
             } else {
-                println("⚠️ token-profiles не вернул данные или пусто")
-            }
-
-            // СТРАТЕГИЯ 2: Поиск по популярным DEX/платформам
-            val searchTokens = getSearchTokens(settings)
-            if (searchTokens.isNotEmpty()) {
-                println("🧩 Найдено пар через search: ${searchTokens.size}")
-                allTokens.addAll(searchTokens)
+                println("🔍 Поиск новых токенов через token-profiles...")
+                val profileTokens = getLatestTokenProfilePairs(settings)
+                if (profileTokens.isNotEmpty()) {
+                    println("🧩 Найдено токенов через token-profiles: ${profileTokens.size}")
+                    allTokens.addAll(profileTokens)
+                } else {
+                    println("⚠️ token-profiles не вернул данные или пусто")
+                }
             }
 
             println("🔗 Всего пар найдено: ${allTokens.size}")
@@ -168,36 +205,31 @@ class DexScreenerApi {
                 if (token.baseToken?.address.isNullOrEmpty()) return@filter false
                 if (token.baseToken?.symbol.isNullOrEmpty()) return@filter false
 
-                // 1. 🔗 Проверка цепочки (если список пустой - пропускаем)
-                val chainOk = if (settings.chains.isEmpty()) {
-                    true
-                } else {
-                    settings.chains.contains(token.chainId)
+                // 1. 🔗 Проверка цепочки (только Solana)
+                if (!settings.chains.contains("solana") && token.chainId != "solana") {
+                    return@filter false
                 }
 
-                if (!chainOk) return@filter false
-
-                // 2. ⏰ ГЛАВНЫЙ ФИЛЬТР: Проверка возраста (НОВЫЕ токены)
+                // 2. ⏰ Проверка возраста (НОВЫЕ токены)
                 val ageOk = if (token.pairCreatedAt != null && token.pairCreatedAt > 0) {
-                    val ageHours = (Clock.System.now().toEpochMilliseconds() - token.pairCreatedAt) / (1000 * 60 * 60)
-                    val isNew = ageHours <= settings.maxAgeHours
+                    val ageHours = (Clock.System.now().toEpochMilliseconds() - token.pairCreatedAt) / (1000.0 * 60.0 * 60.0)
+                    val isNew = ageHours <= settings.pairMaxAgeHours
                     if (isNew) {
                         println("🆕 НОВЫЙ: ${token.baseToken?.symbol} (возраст: ${ageHours}ч)")
                     }
                     isNew
                 } else {
-                    // Если нет даты создания - разрешаем, но логируем
                     println("⚠️ ${token.baseToken?.symbol}: нет даты создания пары, пропускаем фильтр возраста")
                     true
                 }
 
                 if (!ageOk) return@filter false
 
-                // 3. 💰 Проверка объема (должен быть > minVolumeUSD)
-                val volumeOk = token.volume?.h24 ?: 0.0 >= settings.minVolumeUSD
+                // 3. 💰 Проверка объема (должен быть >= volumeH24MinUsd)
+                val volumeOk = (token.volume?.h24 ?: 0.0) >= settings.volumeH24MinUsd
 
-                // 4. 💧 Проверка ликвидности
-                val liquidityOk = token.liquidity?.usd ?: 0.0 >= settings.minLiquidityUSD
+                // 4. 💧 Проверка ликвидности (должна быть >= liquidityMinUsd)
+                val liquidityOk = (token.liquidity?.usd ?: 0.0) >= settings.liquidityMinUsd
 
                 // 5. 🚨 Проверка на скам (если включено)
                 val notScam = if (settings.excludeRugPull) {
@@ -209,8 +241,11 @@ class DexScreenerApi {
 
             println("✅ После фильтрации (только НОВЫЕ): ${filtered.size}")
 
+            // Ограничиваем количество токенов за один тик
+            val limited = filtered.take(settings.maxTokensPerTick)
+
             // Сортируем по времени создания (самые новые первыми)
-            return filtered.sortedByDescending { it.pairCreatedAt ?: 0L }
+            return limited.sortedByDescending { it.pairCreatedAt ?: 0L }
 
         } catch (e: Exception) {
             println("❌ Ошибка получения токенов: ${e.message}")
@@ -244,11 +279,12 @@ class DexScreenerApi {
 
     // ✅ РАБОЧИЙ МЕТОД: Обновить цену токена
     suspend fun updateTokenPrice(token: TokenPair): TokenPair? {
-        if (token.pairAddress.isNullOrEmpty()) return null
+        val pairAddress = token.pairAddress
+        if (pairAddress.isNullOrEmpty()) return null
 
         return try {
             // Получаем обновленные данные
-            val updated = getTokenDetails(token.pairAddress!!)
+            val updated = getTokenDetails(pairAddress)
             updated?.let {
                 println("📈 Цена обновлена: ${it.baseToken?.symbol} -> $${it.priceUsd}")
             }
@@ -328,6 +364,37 @@ class DexScreenerApi {
         return searchTokens
     }
 
+    // ✅ НОВЫЙ МЕТОД: Получение токенов через token-boosts/latest/v1 (оптимизировано с параллельными запросами)
+    private suspend fun getLatestTokenBoosts(settings: FilterSettings): List<TokenPair> {
+        val url = "https://api.dexscreener.com/token-boosts/latest/v1"
+        val jsonElement = getJsonElementWithRetry(url) ?: return emptyList()
+        
+        // Парсим массив токенов из ответа
+        val boosts = parseTokenBoostsFromJson(jsonElement)
+        
+        // Фильтруем только Solana токены
+        val solanaTokens = boosts.filter { it.chainId == "solana" && !it.tokenAddress.isNullOrBlank() }
+        
+        if (solanaTokens.isEmpty()) return emptyList()
+
+        // ✅ ОПТИМИЗАЦИЯ: Параллельные запросы для получения деталей токенов
+        return coroutineScope {
+            solanaTokens.map { boost ->
+                async {
+                    val tokenAddress = boost.tokenAddress ?: return@async emptyList<TokenPair>()
+                    try {
+                        val tokenPairs = getTokenPairsForAddress("solana", tokenAddress)
+                        delay(minRequestDelayMs) // Задержка для rate limiting
+                        tokenPairs
+                    } catch (e: Exception) {
+                        println("⚠️ Ошибка получения пар для $tokenAddress: ${e.message}")
+                        emptyList()
+                    }
+                }
+            }.awaitAll().flatten()
+        }
+    }
+    
     private suspend fun getLatestTokenProfilePairs(settings: FilterSettings): List<TokenPair> {
         val url = "https://api.dexscreener.com/token-profiles/latest/v1"
         val jsonElement = getJsonElementWithRetry(url) ?: return emptyList()
@@ -343,16 +410,21 @@ class DexScreenerApi {
 
         if (recentTokens.isEmpty()) return emptyList()
 
-        val pairs = mutableListOf<TokenPair>()
-        for ((chainId, tokenAddress) in recentTokens) {
-            val tokenPairs = getTokenPairsForAddress(chainId, tokenAddress)
-            if (tokenPairs.isNotEmpty()) {
-                pairs.addAll(tokenPairs)
-            }
-            delay(minRequestDelayMs)
+        // ✅ ОПТИМИЗАЦИЯ: Параллельные запросы для получения деталей токенов
+        return coroutineScope {
+            recentTokens.map { (chainId, tokenAddress) ->
+                async {
+                    try {
+                        val tokenPairs = getTokenPairsForAddress(chainId, tokenAddress)
+                        delay(minRequestDelayMs) // Задержка для rate limiting
+                        tokenPairs
+                    } catch (e: Exception) {
+                        println("⚠️ Ошибка получения пар для $chainId/$tokenAddress: ${e.message}")
+                        emptyList()
+                    }
+                }
+            }.awaitAll().flatten()
         }
-
-        return pairs
     }
 
     private suspend fun getTokenPairsForAddress(chainId: String, tokenAddress: String): List<TokenPair> {
@@ -390,11 +462,24 @@ class DexScreenerApi {
 
                 return response.body()
             } catch (e: Exception) {
-                println("⚠️ Ошибка запроса: ${e.message}")
+                val errorMessage = e.message ?: "Unknown error"
+                val isNetworkError = errorMessage.contains("Unable to resolve", ignoreCase = true) ||
+                        errorMessage.contains("No address associated", ignoreCase = true) ||
+                        errorMessage.contains("Network", ignoreCase = true) ||
+                        errorMessage.contains("timeout", ignoreCase = true)
+                
+                if (isNetworkError) {
+                    println("🌐 Сетевая ошибка (попытка ${attempt + 1}/$maxRetries): $errorMessage")
+                } else {
+                    println("⚠️ Ошибка запроса (попытка ${attempt + 1}/$maxRetries): $errorMessage")
+                }
+                
                 attempt++
                 if (attempt < maxRetries) {
                     delay(backoffMs)
                     backoffMs = (backoffMs * 2).coerceAtMost(4000L)
+                } else {
+                    println("❌ Все попытки исчерпаны для $url")
                 }
             }
         }
@@ -423,6 +508,18 @@ class DexScreenerApi {
 
         return array.mapNotNull { element ->
             runCatching { json.decodeFromJsonElement<TokenProfile>(element) }.getOrNull()
+        }
+    }
+    
+    private fun parseTokenBoostsFromJson(jsonElement: JsonElement): List<TokenBoost> {
+        val array = when (jsonElement) {
+            is JsonArray -> jsonElement
+            is JsonObject -> jsonElement["data"]?.jsonArray ?: jsonElement["boosts"]?.jsonArray ?: jsonElement["tokens"]?.jsonArray
+            else -> null
+        } ?: return emptyList()
+
+        return array.mapNotNull { element ->
+            runCatching { json.decodeFromJsonElement<TokenBoost>(element) }.getOrNull()
         }
     }
 }

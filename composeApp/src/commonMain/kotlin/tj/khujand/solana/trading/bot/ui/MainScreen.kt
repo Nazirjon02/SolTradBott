@@ -48,6 +48,7 @@ fun MainScreen() {
     var isMonitoring by remember { mutableStateOf(false) }
     var monitoredTokens by remember { mutableStateOf(emptyList<MonitoredToken>()) }
     var showFilterSettings by remember { mutableStateOf(false) }
+    var showProfitLoss by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
 
     // Обновляем настройки в мониторе при изменении
@@ -85,10 +86,9 @@ fun MainScreen() {
             tokenMonitor.filterSettings = currentSettings
             scope.launch {
                 tokenMonitor.startMonitoring(
-                    intervalSeconds = 3, // ⏱️ 30 секунд для соблюдения rate limits
+                    intervalSeconds = 3, // ⏱️ 3 секунды для тестирования (в продакшене 600 = 10 минут)
                     onNewTokenFound = { newToken ->
-
-                        monitoredTokens = tokenMonitor.monitoredTokens
+                        monitoredTokens = tokenMonitor.monitoredTokens.toList()
                     },
                     onTokenUpdated = { updatedToken ->
                         monitoredTokens = tokenMonitor.monitoredTokens.toList()
@@ -117,9 +117,9 @@ fun MainScreen() {
             scope.launch {
                 tokenMonitor.filterSettings = newSettings
                 tokenMonitor.startMonitoring(
-                    intervalSeconds = 3, // ⏱️ 30 секунд для соблюдения rate limits
+                    intervalSeconds = 3, // ⏱️ 3 секунды для тестирования (в продакшене 600 = 10 минут)
                     onNewTokenFound = { newToken ->
-                        monitoredTokens = tokenMonitor.monitoredTokens
+                        monitoredTokens = tokenMonitor.monitoredTokens.toList()
                     },
                     onTokenUpdated = { updatedToken ->
                         monitoredTokens = tokenMonitor.monitoredTokens.toList()
@@ -133,7 +133,11 @@ fun MainScreen() {
         }
     }
 
-    if (showFilterSettings) {
+    if (showProfitLoss) {
+        ProfitLossScreen(
+            onClose = { showProfitLoss = false }
+        )
+    } else if (showFilterSettings) {
         FilterScreen(
             currentSettings = currentSettings,
             onSettingsChanged = { newSettings ->
@@ -226,74 +230,97 @@ fun MainScreen() {
                 modifier = Modifier.fillMaxWidth(),
                 shape = RoundedCornerShape(12.dp)
             ) {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(12.dp),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    // Кнопка настроек
-                    Button(
-                        onClick = { showFilterSettings = true },
-                        colors = ButtonDefaults.buttonColors(
-                            containerColor = MaterialTheme.colorScheme.secondaryContainer,
-                            contentColor = MaterialTheme.colorScheme.onSecondaryContainer
-                        ),
-                        modifier = Modifier.weight(1f),
-                        shape = RoundedCornerShape(8.dp)
+                Column {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(12.dp),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
-                        Icon(Icons.Default.Settings, contentDescription = null, modifier = Modifier.size(18.dp))
-                        Spacer(modifier = Modifier.width(6.dp))
-                        Text("Setting", fontSize = 12.sp)
-                    }
+                        // Кнопка настроек
+                        Button(
+                            onClick = { showFilterSettings = true },
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = MaterialTheme.colorScheme.secondaryContainer,
+                                contentColor = MaterialTheme.colorScheme.onSecondaryContainer
+                            ),
+                            modifier = Modifier.weight(1f),
+                            shape = RoundedCornerShape(8.dp)
+                        ) {
+                            Icon(Icons.Default.Settings, contentDescription = null, modifier = Modifier.size(18.dp))
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text("Setting", fontSize = 12.sp)
+                        }
 
-                    // Кнопка старт/стоп
-                    Button(
-                        onClick = {
-                            if (isAndroid()) {
-                                if (isMonitoring) {
-                                    // Сейчас работает → останавливаем
-                                    serviceController?.stopMonitoring()
-                                } else {
-                                    // Сейчас не работает → запускаем
-                                    serviceController?.startMonitoring()
+                        // Кнопка Profit/Loss
+                        Button(
+                            onClick = { showProfitLoss = true },
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = MaterialTheme.colorScheme.tertiaryContainer,
+                                contentColor = MaterialTheme.colorScheme.onTertiaryContainer
+                            ),
+                            modifier = Modifier.weight(1f),
+                            shape = RoundedCornerShape(8.dp)
+                        ) {
+                            Icon(Icons.Default.Assessment, contentDescription = null, modifier = Modifier.size(18.dp))
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text("P&L", fontSize = 12.sp)
+                        }
+                    }
+                    
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 12.dp, vertical = 8.dp),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+
+
+                        // Кнопка старт/стоп
+                        Button(
+                            onClick = {
+                                if (isAndroid()) {
+                                    if (isMonitoring) {
+                                        serviceController?.stopMonitoring()
+                                    } else {
+                                        serviceController?.startMonitoring()
+                                    }
                                 }
-                            }
-                            // ПОСЛЕ работы с сервисом меняем состояние
-                            toggleMonitoring()
-                                  },
-                        colors = ButtonDefaults.buttonColors(
-                            containerColor = if (isMonitoring) MaterialTheme.colorScheme.errorContainer
-                            else MaterialTheme.colorScheme.primaryContainer,
-                            contentColor = if (isMonitoring) MaterialTheme.colorScheme.onErrorContainer
-                            else MaterialTheme.colorScheme.onPrimaryContainer
-                        ),
-                        modifier = Modifier.weight(1f),
-                        shape = RoundedCornerShape(8.dp)
-                    ) {
-                        Icon(
-                            if (isMonitoring) Icons.Default.Stop else Icons.Default.PlayArrow,
-                            contentDescription = null,
-                            modifier = Modifier.size(18.dp)
-                        )
-                        Spacer(modifier = Modifier.width(6.dp))
-                        Text(if (isMonitoring) "STOP" else "START", fontSize = 13.sp)
-                    }
+                                toggleMonitoring()
+                            },
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = if (isMonitoring) MaterialTheme.colorScheme.errorContainer
+                                else MaterialTheme.colorScheme.primaryContainer,
+                                contentColor = if (isMonitoring) MaterialTheme.colorScheme.onErrorContainer
+                                else MaterialTheme.colorScheme.onPrimaryContainer
+                            ),
+                            modifier = Modifier.weight(1f),
+                            shape = RoundedCornerShape(8.dp)
+                        ) {
+                            Icon(
+                                if (isMonitoring) Icons.Default.Stop else Icons.Default.PlayArrow,
+                                contentDescription = null,
+                                modifier = Modifier.size(18.dp)
+                            )
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text(if (isMonitoring) "STOP" else "START", fontSize = 13.sp)
+                        }
 
-                    // Кнопка очистки
-                    Button(
-                        onClick = { clearAllTokens() },
-                        colors = ButtonDefaults.buttonColors(
-                            containerColor = MaterialTheme.colorScheme.tertiaryContainer,
-                            contentColor = MaterialTheme.colorScheme.onTertiaryContainer
-                        ),
-                        enabled = monitoredTokens.isNotEmpty(),
-                        modifier = Modifier.weight(1f),
-                        shape = RoundedCornerShape(8.dp)
-                    ) {
-                        Icon(Icons.Default.Delete, contentDescription = null, modifier = Modifier.size(18.dp))
-                        Spacer(modifier = Modifier.width(6.dp))
-                        Text("Clear", fontSize = 13.sp)
+                        // Кнопка очистки
+                        Button(
+                            onClick = { clearAllTokens() },
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = MaterialTheme.colorScheme.errorContainer,
+                                contentColor = MaterialTheme.colorScheme.onErrorContainer
+                            ),
+                            enabled = monitoredTokens.isNotEmpty(),
+                            modifier = Modifier.weight(1f),
+                            shape = RoundedCornerShape(8.dp)
+                        ) {
+                            Icon(Icons.Default.Delete, contentDescription = null, modifier = Modifier.size(18.dp))
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text("Clear", fontSize = 13.sp)
+                        }
                     }
                 }
             }
@@ -327,8 +354,9 @@ fun MainScreen() {
                             Text("Active filters:", fontSize = 12.sp, fontWeight = FontWeight.Medium)
                         }
                         Text(
-                            "Vol >$${formatSimpleNumber(currentSettings.minVolumeUSD.toInt())} • " +
-                                    "Age <${currentSettings.maxAgeHours}",
+                            "Vol ≥$${formatSimpleNumber(currentSettings.volumeH24MinUsd.toInt())} • " +
+                                    "Liq ≥$${formatSimpleNumber(currentSettings.liquidityMinUsd.toInt())} • " +
+                                    "Age ≤${currentSettings.pairMaxAgeHours}h",
                             fontSize = 11.sp,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -345,7 +373,13 @@ fun MainScreen() {
                     contentPadding = PaddingValues(vertical = 4.dp)
                 ) {
                     items(monitoredTokens) { token ->
-                        TokenItemCard(token = token)
+                        TokenItemCard(
+                            token = token,
+                            onCloseToken = { pairAddress, isProfit ->
+                                tokenMonitor.closeTokenManually(pairAddress, isProfit)
+                                monitoredTokens = tokenMonitor.monitoredTokens.toList()
+                            }
+                        )
                     }
                 }
             } else {

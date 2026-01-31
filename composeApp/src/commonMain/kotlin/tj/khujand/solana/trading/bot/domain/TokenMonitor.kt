@@ -8,6 +8,8 @@ import kotlinx.serialization.Serializable
 import tj.khujand.solana.trading.bot.network.*
 import tj.khujand.solana.trading.bot.util.AppSettings
 import kotlin.time.Clock
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
 
 // Создаем недостающие модели прямо здесь
 @Serializable
@@ -35,6 +37,7 @@ class TokenMonitor {
     private var allowNewTokenDiscovery = true  // 🔴 Добавляем флаг
 
     private val api = DexScreenerApi()
+    private var rpcClient: SolanaRpcClient? = null
     private var monitorJob: Job? = null
     private var isMonitoring = false
     private val maxParallelUpdates = 3
@@ -44,6 +47,11 @@ class TokenMonitor {
     private val _monitoredTokens = mutableStateListOf<MonitoredToken>()
     val monitoredTokens: List<MonitoredToken> get() = _monitoredTokens
 
+    // Кулдаун: pairAddress -> timestamp до которого токен нельзя снова добавлять (после TP/SL)
+    private val cooldownUntil = mutableMapOf<String, Long>()
+
+    // Счётчик: сколько раз каждый токен уже был закрыт (TP/SL). Лимит повторных входов задаётся в настройках.
+    private val closedCount = mutableMapOf<String, Int>()
 
     // Настройки по умолчанию
     var filterSettings = FilterSettings()
@@ -62,7 +70,13 @@ class TokenMonitor {
 
         isMonitoring = true
         allowNewTokenDiscovery = true  // 🔴 Сбрасываем флаг
-        println("🚀 Запуск мониторинга с фильтрами: $filterSettings")
+        println("🚀 Запуск мониторинга с фильтрами:")
+        println("   - Минимальная ликвидность: ${filterSettings.liquidityMinUsd} USD")
+        println("   - Минимальный объем 24ч: ${filterSettings.volumeH24MinUsd} USD")
+        println("   - Максимальный возраст пары: ${filterSettings.pairMaxAgeHours} часов")
+        println("   - Минимум покупок H1: ${filterSettings.buysH1Min}")
+        println("   - Максимальное соотношение продаж/покупок: ${filterSettings.maxSellsToBuysRatioH1}")
+        println("   - Минимальный балл для принятия: ${filterSettings.minScoreAccept}")
 
         monitorJob = CoroutineScope(Dispatchers.Default).launch {
             while (isMonitoring) {
@@ -72,35 +86,47 @@ class TokenMonitor {
                     // ✅ ФАЗА 1: Поиск НОВЫХ токенов (только если разрешено)
                     if (allowNewTokenDiscovery) {
                         println("📡 Запрос новых токенов...")
-                        val newTokens = api.getNewTokens(filterSettings)
-                        println("📊 Получено токенов: ${newTokens.size}")
+                        try {
+                            val newTokens = api.getNewTokens(filterSettings)
+                            println("📊 Получено токенов: ${newTokens.size}")
 
-                        if (newTokens.isEmpty()) {
-                            println("⚠️ Нет новых токенов, проверьте фильтры")
-                            onError("Нет новых токенов, проверьте фильтры (объем > ${filterSettings.minVolumeUSD})")
-                        }
+                            if (newTokens.isEmpty()) {
+                                println("⚠️ Нет новых токенов, проверьте фильтры или подключение к интернету")
+                                // Не вызываем onError для пустого результата - это нормально
+                            }
 
-                        // Фильтрация
-                        val filteredTokens = filterTokens(newTokens)
-                        println("✅ После фильтрации: ${filteredTokens.size}")
+                            // Фильтрация с проверкой SPL Mint и подсчетом очков
+                            val filteredTokens = filterTokensWithScoring(newTokens)
+                            println("✅ После фильтрации: ${filteredTokens.size}")
 
-                        // 🔴 КЛЮЧЕВОЕ ИЗМЕНЕНИЕ: проверяем лимит ПЕРЕД добавлением
-                        var addedCount = 0
-                        for (token in filteredTokens) {
+                            // 🔴 КЛЮЧЕВОЕ ИЗМЕНЕНИЕ: проверяем лимит ПЕРЕД добавлением
+                            var addedCount = 0
+                            for (token in filteredTokens) {
+                            val pairAddress = token.pairAddress ?: continue
                             // 1. Проверяем дубликаты
                             val exists = _monitoredTokens.any {
-                                it.tokenPair.pairAddress == token.pairAddress
+                                it.tokenPair.pairAddress == pairAddress
+                            }
+
+                            // 2. Пропускаем токены в кулдауне (недавно закрыты по TP/SL)
+                            if (isInCooldown(pairAddress)) {
+                                continue
+                            }
+
+                            // 3. Проверяем лимит повторных входов после TP/SL
+                            if (!canReenterAfterClose(pairAddress)) {
+                                continue
                             }
 
                             if (!exists) {
-                                // 2. Проверяем лимит токенов
+                                // 4. Проверяем лимит токенов
                                 if (monitoringCount() >= filterSettings.maxTokensToMonitor) {
                                     println("⏸️ Достигнут лимит ${filterSettings.maxTokensToMonitor} токенов. Поиск приостановлен.")
                                     allowNewTokenDiscovery = false
                                     break  // 🛑 Прерываем добавление новых
                                 }
 
-                                // 3. Добавляем токен
+                                // 5. Добавляем токен
                                 val price = parsePrice(token.priceUsd)
                                 if (price > 0) {
                                     val monitoredToken = MonitoredToken(
@@ -118,8 +144,22 @@ class TokenMonitor {
                             }
                         }
 
-                        if (addedCount > 0) {
-                            println("🎯 Добавлено новых токенов: $addedCount")
+                            if (addedCount > 0) {
+                                println("🎯 Добавлено новых токенов: $addedCount")
+                            }
+                        } catch (e: Exception) {
+                            val errorMsg = e.message ?: "Unknown error"
+                            val isNetworkError = errorMsg.contains("Unable to resolve", ignoreCase = true) ||
+                                    errorMsg.contains("No address associated", ignoreCase = true) ||
+                                    errorMsg.contains("Network", ignoreCase = true)
+                            
+                            if (isNetworkError) {
+                                println("🌐 Проблема с сетью при поиске токенов: $errorMsg")
+                                onError("Проблема с подключением к интернету. Проверьте соединение.")
+                            } else {
+                                println("⚠️ Ошибка при поиске токенов: $errorMsg")
+                                onError("Ошибка поиска токенов: $errorMsg")
+                            }
                         }
                     } else {
                         // 🔴 Поиск приостановлен - только логируем
@@ -139,10 +179,21 @@ class TokenMonitor {
                     delay(intervalSeconds * 1000L)
 
                 } catch (e: Exception) {
-                    val errorMsg = "Ошибка мониторинга: ${e.message}"
-                    println("❌ $errorMsg")
-                    onError(errorMsg)
-                    delay(15000)
+                    val errorMsg = e.message ?: "Unknown error"
+                    val isNetworkError = errorMsg.contains("Unable to resolve", ignoreCase = true) ||
+                            errorMsg.contains("No address associated", ignoreCase = true) ||
+                            errorMsg.contains("Network", ignoreCase = true)
+                    
+                    if (isNetworkError) {
+                        println("🌐 Сетевая ошибка в цикле мониторинга: $errorMsg")
+                        onError("Проблема с подключением к интернету. Проверьте соединение.")
+                    } else {
+                        println("❌ Ошибка мониторинга: $errorMsg")
+                        onError("Ошибка мониторинга: $errorMsg")
+                    }
+                    
+                    // Увеличиваем задержку при сетевых ошибках
+                    delay(if (isNetworkError) 30000 else 15000)
                 }
             }
             println("⏹️ Цикл мониторинга завершен")
@@ -154,28 +205,38 @@ class TokenMonitor {
         println("📈 Параллельное обновление цен для ${_monitoredTokens.size} токенов...")
 
         coroutineScope {
-            val updateJobs = _monitoredTokens
-                .filter { it.status == TokenStatus.MONITORING }
-                .map { monitoredToken ->
-                    async(Dispatchers.IO) {
-                        updateSemaphore.withPermit {
-                            try {
-                                val updatedToken = api.updateTokenPrice(monitoredToken.tokenPair)
-                                if (updatedToken != null) {
-                                    val newPrice = parsePrice(updatedToken.priceUsd)
-                                    if (newPrice > 0) {
-                                        updateTokenPrice(monitoredToken, newPrice, onUpdate)
-                                        println("✅ ${monitoredToken.tokenPair.baseToken?.symbol}: цена обновлена до $${newPrice}")
-                                    }
-                                }
-                            } catch (e: Exception) {
-                                println("❌ Ошибка обновления токена ${monitoredToken.tokenPair.baseToken?.symbol}: ${e.message}")
-                            } finally {
-                                delay(150)
+            // Создаем копию списка для безопасной итерации (на случай удаления токенов)
+            val tokensToUpdate = _monitoredTokens.filter { it.status == TokenStatus.MONITORING }
+            
+            val updateJobs = tokensToUpdate.map { monitoredToken ->
+                async {
+                    updateSemaphore.withPermit {
+                        try {
+                            // Проверяем, что токен все еще в списке
+                            val currentIndex = _monitoredTokens.indexOfFirst { 
+                                it.tokenPair.pairAddress == monitoredToken.tokenPair.pairAddress 
                             }
+                            if (currentIndex == -1) {
+                                println("⚠️ Токен ${monitoredToken.tokenPair.baseToken?.symbol} уже удален, пропускаем обновление")
+                                return@withPermit
+                            }
+                            
+                            val updatedToken = api.updateTokenPrice(monitoredToken.tokenPair)
+                            if (updatedToken != null) {
+                                val newPrice = parsePrice(updatedToken.priceUsd)
+                                if (newPrice > 0) {
+                                    updateTokenPrice(monitoredToken, newPrice, onUpdate)
+                                    println("✅ ${monitoredToken.tokenPair.baseToken?.symbol}: цена обновлена до $${newPrice}")
+                                }
+                            }
+                        } catch (e: Exception) {
+                            println("❌ Ошибка обновления токена ${monitoredToken.tokenPair.baseToken?.symbol}: ${e.message}")
+                        } finally {
+                            delay(150)
                         }
                     }
                 }
+            }
 
             updateJobs.awaitAll()
         }
@@ -196,12 +257,74 @@ class TokenMonitor {
             checkAndResumeDiscovery()  // 🔴 Проверяем, можно ли возобновить поиск
         }
     }
+    
+    // ✅ НОВЫЙ МЕТОД: Ручное закрытие токена (фиксация прибыли/убытка)
+    fun closeTokenManually(pairAddress: String, isProfit: Boolean = true) {
+        val index = _monitoredTokens.indexOfFirst { it.tokenPair.pairAddress == pairAddress }
+        if (index != -1) {
+            val token = _monitoredTokens[index]
+            if (token.status == TokenStatus.MONITORING) {
+                // Определяем статус на основе текущей прибыли
+                val newStatus = if (isProfit || token.profitUsd >= 0) {
+                    TokenStatus.STOPPED_TP
+                } else {
+                    TokenStatus.STOPPED_SL
+                }
+                
+                val updatedToken = token.copy(status = newStatus)
+                
+                // Сохраняем в историю
+                TokenHistoryManager.saveToHistory(updatedToken)
+                token.tokenPair.pairAddress?.let {
+                    putCooldown(it)
+                    incrementClosedCount(it)
+                }
 
-    // 🔴 ОБНОВИТЬ: метод очистки всех токенов
+                // ✅ Автоматически удаляем из списка мониторинга
+                _monitoredTokens.removeAt(index)
+                checkAndResumeDiscovery() // Проверяем, можно ли возобновить поиск
+
+                saveTokensToCache()
+
+                println("✅ Токен ${token.tokenPair.baseToken?.symbol} закрыт вручную и удален из мониторинга: ${if (isProfit) "Profit" else "Loss"}")
+            }
+        }
+    }
+
+    // 🔴 ОБНОВИТЬ: метод очистки всех токенов (закрывает все сделки перед удалением)
     fun clearAllTokens() {
-        println("🗑️ Очистка всех токенов (было: ${_monitoredTokens.size})")
+        println("🗑️ Очистка всех токенов...")
+        
+        // 1. Закрываем все активные токены (сохраняем в историю P&L и добавляем в кулдаун)
+        val activeTokens = _monitoredTokens.filter { it.status == TokenStatus.MONITORING }
+        activeTokens.forEach { token ->
+            token.tokenPair.pairAddress?.let {
+                putCooldown(it)
+                incrementClosedCount(it)
+            }
+            val isProfit = token.profitUsd >= 0
+            val closedToken = token.copy(
+                status = if (isProfit) TokenStatus.STOPPED_TP else TokenStatus.STOPPED_SL
+            )
+            TokenHistoryManager.saveToHistory(closedToken)
+            println("💾 Токен ${token.tokenPair.baseToken?.symbol} закрыт и сохранен в историю")
+        }
+        
+        // 2. Очищаем список мониторинга
+        val tokensCount = _monitoredTokens.size
         _monitoredTokens.clear()
         allowNewTokenDiscovery = true  // 🔴 Сбрасываем флаг
+        
+        // 3. Очищаем кеш мониторинга
+        AppSettings.remove(CACHE_KEY_TOKENS)
+        
+        println("✅ Очищено:")
+        println("   - Токенов в мониторинге: $tokensCount")
+        println("   - Закрыто и сохранено в историю: ${activeTokens.size}")
+        println("   - Кеш мониторинга")
+        println("   ⚠️ История P&L НЕ очищена (используйте Clear в экране P&L)")
+        println("   ⚠️ Кулдаун НЕ очищен (закрытые токены не будут добавлены снова до истечения времени)")
+        println("   ⚠️ Настройки фильтров НЕ затронуты")
     }
 
     // ⏹️ Остановка мониторинга
@@ -213,7 +336,75 @@ class TokenMonitor {
         println("✅ Мониторинг остановлен")
     }
 
-    // 🔍 Фильтрация токенов по критериям (ДОПОЛНИТЕЛЬНАЯ)
+    // 🔍 Фильтрация токенов по критериям с проверкой SPL Mint и подсчетом очков
+    private suspend fun filterTokensWithScoring(tokens: List<TokenPair>): List<TokenPair> {
+        return coroutineScope {
+            tokens.map { token ->
+                async {
+                    // Базовые проверки
+                    val symbol = token.baseToken?.symbol ?: ""
+                    val price = token.priceUsd ?: ""
+                    if (symbol.isBlank() || price.isBlank()) return@async null
+
+                    // Проверка возраста
+                    if (!checkTokenAge(token)) return@async null
+
+                    // Проверка на скам
+                    if (filterSettings.excludeRugPull && isPotentialScam(token)) {
+                        return@async null
+                    }
+
+                    // Проверка базовых фильтров
+                    val volumeH24 = token.volume?.h24 ?: 0.0
+                    val liquidity = token.liquidity?.usd ?: 0.0
+                    
+                    if (volumeH24 < filterSettings.volumeH24MinUsd) {
+                        println("❌ Токен ${token.baseToken?.symbol} отклонен: объем $volumeH24 < ${filterSettings.volumeH24MinUsd}")
+                        return@async null
+                    }
+                    if (liquidity < filterSettings.liquidityMinUsd) {
+                        println("❌ Токен ${token.baseToken?.symbol} отклонен: ликвидность $liquidity < ${filterSettings.liquidityMinUsd}")
+                        return@async null
+                    }
+
+                    // Проверка покупок H1
+                    val buysH1 = token.txns?.h1?.buys ?: 0
+                    if (buysH1 < filterSettings.buysH1Min) return@async null
+
+                    // Проверка соотношения продаж/покупок H1
+                    val sellsH1 = token.txns?.h1?.sells ?: 0
+                    if (buysH1 > 0) {
+                        val sellBuyRatio = sellsH1.toDouble() / buysH1
+                        if (sellBuyRatio > filterSettings.maxSellsToBuysRatioH1) return@async null
+                    }
+
+                    // Получаем SPL Mint информацию
+                    val mintAddress = token.baseToken?.address
+                    val mintInfo = if (!mintAddress.isNullOrBlank()) {
+                        val rpc = rpcClient ?: SolanaRpcClient(
+                            rpcUrl = filterSettings.rpcUrl,
+                            timeoutSeconds = filterSettings.rpcTimeoutSeconds
+                        ).also { rpcClient = it }
+                        rpc.getSplMintInfo(mintAddress)
+                    } else null
+
+                    // Подсчитываем очки
+                    val scoreResult = TokenScoring.calculateScore(token, mintInfo, filterSettings)
+
+                    // Проверяем условие принятия
+                    if (!scoreResult.isAccepted) {
+                        println("❌ Токен ${token.baseToken?.symbol} отклонен: score=${scoreResult.totalScore}, reasons=${scoreResult.reasons}, hardReject=${scoreResult.hardRejectReasons}")
+                        return@async null
+                    }
+
+                    println("✅ Токен ${token.baseToken?.symbol} принят: score=${scoreResult.totalScore}, reasons=${scoreResult.reasons}")
+                    token
+                }
+            }.awaitAll().filterNotNull()
+        }
+    }
+    
+    // 🔍 Старая фильтрация (для обратной совместимости)
     private fun filterTokens(tokens: List<TokenPair>): List<TokenPair> {
         return tokens.filter { token ->
             val symbol = token.baseToken?.symbol ?: ""
@@ -240,6 +431,40 @@ class TokenMonitor {
         return _monitoredTokens.count { it.status == TokenStatus.MONITORING }
     }
 
+    /** Добавить токен в кулдаун после TP/SL (не добавлять снова в мониторинг до истечения времени). */
+    private fun putCooldown(pairAddress: String) {
+        val minutes = filterSettings.cooldownMinutes
+        if (minutes <= 0) return
+        val untilMs = Clock.System.now().toEpochMilliseconds() + minutes * 60L * 1000L
+        cooldownUntil[pairAddress] = untilMs
+        println("⏳ Кулдаун: ${pairAddress.take(8)}... не добавлять в мониторинг ${minutes} мин")
+    }
+
+    /** Проверка: токен ещё в кулдауне? Очищает истёкшие записи. */
+    private fun isInCooldown(pairAddress: String): Boolean {
+        val now = Clock.System.now().toEpochMilliseconds()
+        val expired = cooldownUntil.filter { it.value <= now }.keys.toList()
+        expired.forEach { cooldownUntil.remove(it) }
+        val until = cooldownUntil[pairAddress] ?: return false
+        return now < until
+    }
+
+    /** Увеличить счётчик закрытий по TP/SL для пары (вызывать при каждом закрытии). */
+    private fun incrementClosedCount(pairAddress: String) {
+        closedCount[pairAddress] = (closedCount[pairAddress] ?: 0) + 1
+        println("📊 Закрытий по TP/SL для пары: ${closedCount[pairAddress]} (лимит повторов: ${filterSettings.maxReentriesAfterClose})")
+    }
+
+    /** Можно ли снова добавить токен в мониторинг после TP/SL (лимит повторных входов). */
+    private fun canReenterAfterClose(pairAddress: String): Boolean {
+        val count = closedCount[pairAddress] ?: 0
+        val allowed = count <= filterSettings.maxReentriesAfterClose
+        if (!allowed) {
+            println("⛔ Токен $pairAddress пропущен: уже закрыт ${count} раз(а), лимит повторов = ${filterSettings.maxReentriesAfterClose}")
+        }
+        return allowed
+    }
+
     private fun refreshDiscoveryFlag() {
         allowNewTokenDiscovery = monitoringCount() < filterSettings.maxTokensToMonitor
     }
@@ -247,8 +472,8 @@ class TokenMonitor {
     // ⏰ Проверка возраста токена
     private fun checkTokenAge(token: TokenPair): Boolean {
         return token.pairCreatedAt?.let { createdAt ->
-            val ageHours = (Clock.System.now().toEpochMilliseconds() - createdAt) / (1000 * 60 * 60)
-            ageHours <= filterSettings.maxAgeHours
+            val ageHours = (Clock.System.now().toEpochMilliseconds() - createdAt) / (1000.0 * 60.0 * 60.0)
+            ageHours <= filterSettings.pairMaxAgeHours
         } ?: true // Если даты нет, пропускаем
     }
 
@@ -350,7 +575,20 @@ class TokenMonitor {
         }
 
         if (index != -1) {
-            _monitoredTokens[index] = updatedToken
+            // 💾 Сохраняем в историю если достигнут TP или SL
+            if (newStatus != TokenStatus.MONITORING) {
+                TokenHistoryManager.saveToHistory(updatedToken)
+                token.tokenPair.pairAddress?.let {
+                    putCooldown(it)
+                    incrementClosedCount(it)
+                }
+                // ✅ Автоматически удаляем из списка мониторинга
+                _monitoredTokens.removeAt(index)
+                println("🗑️ Токен ${token.tokenPair.baseToken?.symbol} удален из мониторинга (${if (newStatus == TokenStatus.STOPPED_TP) "TP HIT" else "SL HIT"})")
+                checkAndResumeDiscovery() // Проверяем, можно ли возобновить поиск
+            } else {
+                _monitoredTokens[index] = updatedToken
+            }
             onUpdate(updatedToken)
             saveTokensToCache()
         }
@@ -420,6 +658,7 @@ class TokenMonitor {
     fun close() {
         stopMonitoring()
         api.close()
+        rpcClient?.close()
         println("🔌 Ресурсы закрыты")
     }
 }

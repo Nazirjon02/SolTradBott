@@ -72,7 +72,7 @@ fun FilterScreen(
 
         Spacer(modifier = Modifier.height(16.dp))
 
-        // 1. Минимальный объем (USD)
+        // 1. Минимальный объем 24ч (USD) - ИСПОЛЬЗУЕТСЯ В ФИЛЬТРАЦИИ
         Card(
             modifier = Modifier.fillMaxWidth(),
             colors = CardDefaults.cardColors(
@@ -86,7 +86,7 @@ fun FilterScreen(
                 ) {
                     Text("💰 Min 24h Volume", fontWeight = FontWeight.Medium)
                     Text(
-                        "$${currentSettings.minVolumeUSD.toInt()}",
+                        "$${currentSettings.volumeH24MinUsd.toInt()}",
                         fontWeight = FontWeight.Bold,
                         color = MaterialTheme.colorScheme.primary
                     )
@@ -95,30 +95,30 @@ fun FilterScreen(
                 Spacer(modifier = Modifier.height(12.dp))
 
                 Slider(
-                    value = currentSettings.minVolumeUSD.toFloat(),
+                    value = currentSettings.volumeH24MinUsd.toFloat(),
                     onValueChange = { newValue ->
-                        val newSettings = currentSettings.copy(minVolumeUSD = newValue.toDouble())
+                        val newSettings = currentSettings.copy(volumeH24MinUsd = newValue.toDouble())
                         onSettingsChanged(newSettings)
                         saveSettings(newSettings)
                     },
-                    valueRange = 1000f..50000f,
-                    steps = 49
+                    valueRange = 100f..10000f,
+                    steps = 99
                 )
 
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween
                 ) {
-                    Text("1K", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    Text("25K", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    Text("50K", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text("100", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text("5K", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text("10K", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
             }
         }
 
         Spacer(modifier = Modifier.height(16.dp))
 
-        // 2. Максимальный возраст токена
+        // 2. Максимальный возраст пары (часы) - ИСПОЛЬЗУЕТСЯ В ФИЛЬТРАЦИИ
         Card(
             modifier = Modifier.fillMaxWidth(),
             colors = CardDefaults.cardColors(
@@ -130,9 +130,9 @@ fun FilterScreen(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween
                 ) {
-                    Text("⏰ Max Token Age", fontWeight = FontWeight.Medium)
+                    Text("⏰ Max Pair Age", fontWeight = FontWeight.Medium)
                     Text(
-                        "${currentSettings.maxAgeHours}h",
+                        "${currentSettings.pairMaxAgeHours}h",
                         fontWeight = FontWeight.Bold,
                         color = MaterialTheme.colorScheme.primary
                     )
@@ -141,30 +141,30 @@ fun FilterScreen(
                 Spacer(modifier = Modifier.height(12.dp))
 
                 Slider(
-                    value = currentSettings.maxAgeHours.toFloat(),
+                    value = currentSettings.pairMaxAgeHours.toFloat(),
                     onValueChange = { newValue ->
-                        val newSettings = currentSettings.copy(maxAgeHours = newValue.toInt())
+                        val newSettings = currentSettings.copy(pairMaxAgeHours = newValue.toDouble())
                         onSettingsChanged(newSettings)
                         saveSettings(newSettings)
                     },
-                    valueRange = 1f..72f,
-                    steps = 71
+                    valueRange = 0.5f..4f,
+                    steps = 7
                 )
 
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween
                 ) {
-                    Text("1h", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    Text("36h", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    Text("72h", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text("0.5h", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text("2h", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text("4h", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
             }
         }
 
         Spacer(modifier = Modifier.height(16.dp))
 
-        // 3. Минимальная ликвидность
+        // 3. Минимальная ликвидность (USD) - ИСПОЛЬЗУЕТСЯ В ФИЛЬТРАЦИИ
         Card(
             modifier = Modifier.fillMaxWidth(),
             colors = CardDefaults.cardColors(
@@ -178,7 +178,7 @@ fun FilterScreen(
                 ) {
                     Text("💧 Min Liquidity", fontWeight = FontWeight.Medium)
                     Text(
-                        "$${currentSettings.minLiquidityUSD.toInt()}",
+                        "$${currentSettings.liquidityMinUsd.toInt()}",
                         fontWeight = FontWeight.Bold,
                         color = MaterialTheme.colorScheme.primary
                     )
@@ -187,30 +187,126 @@ fun FilterScreen(
                 Spacer(modifier = Modifier.height(12.dp))
 
                 Slider(
-                    value = currentSettings.minLiquidityUSD.toFloat(),
+                    value = currentSettings.liquidityMinUsd.toFloat(),
                     onValueChange = { newValue ->
-                        val newSettings = currentSettings.copy(minLiquidityUSD = newValue.toDouble())
+                        val newSettings = currentSettings.copy(liquidityMinUsd = newValue.toDouble())
                         onSettingsChanged(newSettings)
                         saveSettings(newSettings)
                     },
-                    valueRange = 5000f..50000f,
-                    steps = 45
+                    valueRange = 100f..5000f,
+                    steps = 49
                 )
 
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween
                 ) {
+                    Text("100", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text("2.5K", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     Text("5K", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    Text("25K", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    Text("50K", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
             }
         }
 
         Spacer(modifier = Modifier.height(16.dp))
 
-// 4. Максимальное количество токенов
+        // 4. Кулдаун после TP/SL (минуты, в течение которых токен не добавляется снова)
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            colors = CardDefaults.cardColors(
+                containerColor = MaterialTheme.colorScheme.surfaceVariant
+            )
+        ) {
+            Column(modifier = Modifier.padding(16.dp)) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Text("⏳ Cooldown (мин)", fontWeight = FontWeight.Medium)
+                    Text(
+                        "${currentSettings.cooldownMinutes}",
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                }
+                Text(
+                    "После TP/SL токен не добавляется в мониторинг повторно",
+                    fontSize = 12.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Spacer(modifier = Modifier.height(12.dp))
+                Slider(
+                    value = currentSettings.cooldownMinutes.toFloat(),
+                    onValueChange = { newValue ->
+                        val newSettings = currentSettings.copy(cooldownMinutes = newValue.toInt())
+                        onSettingsChanged(newSettings)
+                        saveSettings(newSettings)
+                    },
+                    valueRange = 0f..480f,
+                    steps = 47
+                )
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Text("0", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text("4h", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text("8h", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+            }
+        }
+
+        Spacer(modifier = Modifier.height(16.dp))
+
+        // Макс. повторов: сколько раз один токен можно снова добавить в мониторинг после TP/SL
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            colors = CardDefaults.cardColors(
+                containerColor = MaterialTheme.colorScheme.surfaceVariant
+            )
+        ) {
+            Column(modifier = Modifier.padding(16.dp)) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Text("🔄 Повторов после TP/SL", fontWeight = FontWeight.Medium)
+                    Text(
+                        "${currentSettings.maxReentriesAfterClose}",
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                }
+                Text(
+                    "0 = только один раз, 1 = один повтор, 2 = два повтора и т.д.",
+                    fontSize = 12.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Spacer(modifier = Modifier.height(12.dp))
+                Slider(
+                    value = currentSettings.maxReentriesAfterClose.toFloat(),
+                    onValueChange = { newValue ->
+                        val newSettings = currentSettings.copy(maxReentriesAfterClose = newValue.toInt())
+                        onSettingsChanged(newSettings)
+                        saveSettings(newSettings)
+                    },
+                    valueRange = 0f..5f,
+                    steps = 5
+                )
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Text("0", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text("2-3", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text("5", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+            }
+        }
+
+        Spacer(modifier = Modifier.height(16.dp))
+
+// 5. Максимальное количество токенов
         Card(
             modifier = Modifier.fillMaxWidth(),
             colors = CardDefaults.cardColors(
@@ -256,7 +352,7 @@ fun FilterScreen(
 
         Spacer(modifier = Modifier.height(16.dp))
 
-        // 5. Выбор блокчейнов
+        // 6. Выбор блокчейнов
         Card(
             modifier = Modifier.fillMaxWidth(),
             colors = CardDefaults.cardColors(
@@ -358,7 +454,7 @@ fun FilterScreen(
 
         Spacer(modifier = Modifier.height(16.dp))
 
-        // 5. Дополнительные фильтры
+        // 7. Дополнительные фильтры
         Card(
             modifier = Modifier.fillMaxWidth(),
             colors = CardDefaults.cardColors(
@@ -426,6 +522,83 @@ fun FilterScreen(
             }
         }
 
+        Spacer(modifier = Modifier.height(16.dp))
+
+        // 8. Выбор API для поиска токенов
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            colors = CardDefaults.cardColors(
+                containerColor = MaterialTheme.colorScheme.surfaceVariant
+            )
+        ) {
+            Column(modifier = Modifier.padding(16.dp)) {
+                Text("🔌 API Source", fontWeight = FontWeight.Medium, fontSize = 16.sp)
+
+                Spacer(modifier = Modifier.height(12.dp))
+
+                // Переключатель между API
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Switch(
+                        checked = currentSettings.useTokenBoostsApi,
+                        onCheckedChange = { checked ->
+                            val newSettings = currentSettings.copy(useTokenBoostsApi = checked)
+                            onSettingsChanged(newSettings)
+                            saveSettings(newSettings)
+                        }
+                    )
+
+                    Spacer(modifier = Modifier.width(12.dp))
+
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            if (currentSettings.useTokenBoostsApi) "Token Boosts API" else "Token Profiles API",
+                            fontWeight = FontWeight.Medium
+                        )
+                        Text(
+                            if (currentSettings.useTokenBoostsApi) 
+                                "token-boosts/latest/v1 (рекомендуется)"
+                            else 
+                                "token-profiles/latest/v1 (альтернатива)",
+                            fontSize = 12.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(8.dp))
+
+                // Информация о выбранном API
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = CardDefaults.cardColors(
+                        containerColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.3f)
+                    )
+                ) {
+                    Column(modifier = Modifier.padding(12.dp)) {
+                        Text(
+                            "Текущий API:",
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Medium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text(
+                            if (currentSettings.useTokenBoostsApi)
+                                "https://api.dexscreener.com/token-boosts/latest/v1"
+                            else
+                                "https://api.dexscreener.com/token-profiles/latest/v1",
+                            fontSize = 10.sp,
+                            color = MaterialTheme.colorScheme.primary,
+                            fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace
+                        )
+                    }
+                }
+            }
+        }
+
         Spacer(modifier = Modifier.height(24.dp))
 
         // Статистика настроек
@@ -457,9 +630,9 @@ fun FilterScreen(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween
                 ) {
-                    Text("Min volume:", fontSize = 12.sp)
+                    Text("Min volume 24h:", fontSize = 12.sp)
                     Text(
-                        "$${currentSettings.minVolumeUSD.toInt()}",
+                        "$${currentSettings.volumeH24MinUsd.toInt()}",
                         fontSize = 12.sp,
                         fontWeight = FontWeight.Bold
                     )
@@ -469,9 +642,45 @@ fun FilterScreen(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween
                 ) {
-                    Text("Max age:", fontSize = 12.sp)
+                    Text("Min liquidity:", fontSize = 12.sp)
                     Text(
-                        "${currentSettings.maxAgeHours}h",
+                        "$${currentSettings.liquidityMinUsd.toInt()}",
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Text("Max pair age:", fontSize = 12.sp)
+                    Text(
+                        "${currentSettings.pairMaxAgeHours}h",
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Text("Cooldown after TP/SL:", fontSize = 12.sp)
+                    Text(
+                        "${currentSettings.cooldownMinutes} min",
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Text("Повторов после TP/SL:", fontSize = 12.sp)
+                    Text(
+                        "${currentSettings.maxReentriesAfterClose}",
                         fontSize = 12.sp,
                         fontWeight = FontWeight.Bold
                     )

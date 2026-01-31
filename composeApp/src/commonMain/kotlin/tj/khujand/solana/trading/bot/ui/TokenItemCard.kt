@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.BarChart
@@ -25,7 +26,11 @@ import androidx.compose.material.icons.filled.TrendingUp
 import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material.icons.filled.WaterDrop
+import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.Cancel
 import androidx.compose.material3.Badge
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Icon
@@ -59,7 +64,10 @@ import kotlin.time.Clock
 
 // 📄 Улучшенная карточка токена
 @Composable
-fun TokenItemCard(token: MonitoredToken) {
+fun TokenItemCard(
+    token: MonitoredToken,
+    onCloseToken: ((String, Boolean) -> Unit)? = null
+) {
     val clipboardManager = LocalClipboardManager.current
     var showCopiedMessage by remember { mutableStateOf(false) }
     var showFullAddress by remember { mutableStateOf(false) }
@@ -420,7 +428,7 @@ fun TokenItemCard(token: MonitoredToken) {
 
             Spacer(modifier = Modifier.height(16.dp))
 
-            // Нижняя строка: время и возраст
+            // Нижняя строка: время, возраст и кнопка Profit
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
@@ -457,6 +465,46 @@ fun TokenItemCard(token: MonitoredToken) {
                         "Age: ${formatTimeAgo(token.ageToken.toLong())}",
                         fontSize = 11.sp,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+
+            // Кнопка Profit (только для активных токенов)
+            if (token.status == TokenStatus.MONITORING && onCloseToken != null) {
+                Spacer(modifier = Modifier.height(12.dp))
+                
+                Button(
+                    onClick = {
+                        val isProfit = token.profitUsd >= 0
+                        token.tokenPair.pairAddress?.let { address ->
+                            onCloseToken(address, isProfit)
+                        }
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = if (token.profitUsd >= 0) 
+                            Color(0xFF4CAF50) 
+                        else 
+                            Color(0xFFF44336),
+                        contentColor = Color.White
+                    ),
+                    shape = RoundedCornerShape(10.dp)
+                ) {
+                    Icon(
+                        if (token.profitUsd >= 0) Icons.Default.CheckCircle else Icons.Default.Cancel,
+                        contentDescription = null,
+                        modifier = Modifier.size(18.dp)
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        if (token.profitUsd >= 0) "Close Profit" else "Close Loss",
+                        fontSize = 14.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text(
+                        "(${if (token.profitUsd >= 0) "+" else ""}$${formatNumber(token.profitUsd)})",
+                        fontSize = 13.sp
                     )
                 }
             }
