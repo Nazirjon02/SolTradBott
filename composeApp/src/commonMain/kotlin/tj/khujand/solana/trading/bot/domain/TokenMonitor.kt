@@ -129,7 +129,11 @@ class TokenMonitor {
                             // 🔴 КЛЮЧЕВОЕ ИЗМЕНЕНИЕ: проверяем лимит ПЕРЕД добавлением
                             var addedCount = 0
                         for (token in filteredTokens) {
-                            val pairAddress = token.pairAddress ?: continue
+                            val pairAddress = token.pairAddress
+                            if (pairAddress.isNullOrBlank()) {
+                                println("⚠️ Пропуск токена: нет pairAddress (${token.baseToken?.symbol})")
+                                continue
+                            }
                             val tokenKey = token.baseToken?.address ?: pairAddress
 
                             // 1. Проверяем дубликаты
@@ -139,6 +143,7 @@ class TokenMonitor {
 
                             // 2. Не добавляем токен повторно после TP/SL
                             if (closedTokenAddresses.contains(tokenKey)) {
+                                println("⚠️ Пропуск токена ${token.baseToken?.symbol}: уже закрыт ранее")
                                 continue
                             }
 
@@ -170,7 +175,11 @@ class TokenMonitor {
                                     onNewTokenFound(monitoredToken)
                                     addedCount++
                                     println("➕ Добавлен: ${token.baseToken?.symbol ?: "Unknown"} ($${price}) [${_monitoredTokens.size}/${filterSettings.maxTokensToMonitor}]")
+                                } else {
+                                    println("⚠️ Пропуск токена ${token.baseToken?.symbol}: некорректная цена (${token.priceUsd})")
                                 }
+                            } else {
+                                println("⚠️ Пропуск токена ${token.baseToken?.symbol}: уже в мониторинге")
                             }
                         }
 
