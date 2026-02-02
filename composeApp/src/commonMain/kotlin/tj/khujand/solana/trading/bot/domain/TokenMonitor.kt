@@ -26,6 +26,8 @@ data class MonitoredToken(
     var profitUsd: Double = 0.0,          // 👈 ВАЖНО
     var status: TokenStatus = TokenStatus.MONITORING,
     var sessionHighPrice: Double = 0.0,    // максимум цены с момента добавления
+    var entryMarketCap: Double = 0.0,
+    var peakMarketCap: Double = 0.0,
     var lastMarketCap: Double = 0.0,
     var remainingPositionPct: Double = 100.0,
     var exitStage1Done: Boolean = false,
@@ -151,12 +153,15 @@ class TokenMonitor {
                                 // 4. Добавляем токен
                                 val price = parsePrice(token.priceUsd)
                                 if (price > 0) {
+                                    val entryCap = token.marketCap ?: 0.0
                                     val monitoredToken = MonitoredToken(
                                         tokenPair = token,
                                         entryPrice = price,
                                         currentPrice = token.priceUsd.toString(),
                                         ageToken = token.pairCreatedAt.toString(),
                                         sessionHighPrice = price,
+                                        entryMarketCap = entryCap,
+                                        peakMarketCap = entryCap,
                                         lastMarketCap = token.marketCap ?: 0.0,
                                         remainingPositionPct = 100.0
                                     )
@@ -573,6 +578,8 @@ class TokenMonitor {
         var stage2Done = token.exitStage2Done
         var stage3Done = token.exitStage3Done
         var stage4Done = token.exitStage4Done
+        val entryCap = token.entryMarketCap
+        val newPeakMarketCap = if (marketCap > token.peakMarketCap) marketCap else token.peakMarketCap
 
         if (!stage1Done && marketCap >= filterSettings.exitStage1Cap) {
             remainingPct -= filterSettings.exitStage1Pct
@@ -601,11 +608,27 @@ class TokenMonitor {
 
         if (remainingPct < 0) remainingPct = 0.0
 
+        val trailingEnabled = stage2Done || marketCap >= filterSettings.exitStage2Cap
+        val forcedExitByStopLoss = entryCap > 0 && marketCap <= entryCap * 0.70
+        val forcedExitByBreakEven = stage1Done && entryCap > 0 && marketCap < entryCap
+        val forcedExitByTrailing = trailingEnabled && newPeakMarketCap > 0 && marketCap <= newPeakMarketCap * 0.80
+
+        val forcedExit = forcedExitByStopLoss || forcedExitByBreakEven || forcedExitByTrailing
         val closedByStage4 = stage4Done || remainingPct <= 0.0
-        val newStatus = if (closedByStage4) {
-            TokenStatus.STOPPED_TP
-        } else {
-            TokenStatus.MONITORING
+
+        val newStatus = when {
+            forcedExit -> TokenStatus.STOPPED_SL
+            closedByStage4 -> TokenStatus.STOPPED_TP
+            else -> TokenStatus.MONITORING
+        }
+
+        if (forcedExit) {
+            remainingPct = 0.0
+            when {
+                forcedExitByStopLoss -> println("🛑 Forced exit: -30% от входной капы")
+                forcedExitByBreakEven -> println("🛑 Forced exit: Break-even после Stage 1")
+                forcedExitByTrailing -> println("🛑 Forced exit: -20% от локального максимума")
+            }
         }
 
         val updatedToken = token.copy(
@@ -615,6 +638,7 @@ class TokenMonitor {
             profitUsd = profitUsd,
             status = newStatus,
             sessionHighPrice = newSessionHigh,
+            peakMarketCap = newPeakMarketCap,
             lastMarketCap = marketCap,
             remainingPositionPct = remainingPct,
             exitStage1Done = stage1Done,
