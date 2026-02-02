@@ -10,6 +10,7 @@ import kotlinx.serialization.encodeToString
 object AppSettings {
 
     const val KEY_MONITORING_ACTIVE = "monitoring_active"
+    const val KEY_REQUEST_IN_PROGRESS = "request_in_progress"
 
     private var settings: Settings = try {
         Settings()

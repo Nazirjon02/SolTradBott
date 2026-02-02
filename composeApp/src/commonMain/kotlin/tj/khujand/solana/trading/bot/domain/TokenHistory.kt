@@ -21,7 +21,10 @@ data class TokenHistory(
     val status: TokenStatus,
     val symbol: String,
     val entryDate: String,
-    val exitDate: String
+    val exitDate: String,
+    val note: String = "",
+    val isPartialExit: Boolean = false,
+    val partialExitPct: Double = 0.0
 )
 
 /**
@@ -29,6 +32,7 @@ data class TokenHistory(
  */
 object TokenHistoryManager {
     private const val KEY_HISTORY = "token_history_v1"
+    private const val DEFAULT_INVESTMENT_USD = 100.0
     
     /**
      * Сохранить токен в историю
@@ -82,8 +86,8 @@ object TokenHistoryManager {
         val tpTokens = history.filter { it.status == TokenStatus.STOPPED_TP }
         val slTokens = history.filter { it.status == TokenStatus.STOPPED_SL }
         
-        val totalProfit = tpTokens.sumOf { it.profitUsd }
-        val totalLoss = slTokens.sumOf { it.profitUsd }
+        val totalProfit = history.filter { it.profitUsd > 0 }.sumOf { it.profitUsd }
+        val totalLoss = history.filter { it.profitUsd < 0 }.sumOf { it.profitUsd }
         val netProfit = totalProfit + totalLoss // loss отрицательный
         
         return ProfitLossStatistics(
@@ -110,6 +114,43 @@ object TokenHistoryManager {
         val minute = dateTime.minute.toString().padStart(2, '0')
         
         return "$day.$month.$year $hour:$minute"
+    }
+
+    fun savePartialExit(
+        token: MonitoredToken,
+        stageLabel: String,
+        percent: Double,
+        marketCap: Double,
+        exitPrice: Double
+    ) {
+        if (percent <= 0) return
+
+        val now = kotlin.time.Clock.System.now().toEpochMilliseconds()
+        val priceChangePercent =
+            if (token.entryPrice > 0) ((exitPrice - token.entryPrice) / token.entryPrice) * 100 else 0.0
+        val profitUsd = DEFAULT_INVESTMENT_USD * (percent / 100.0) * (priceChangePercent / 100.0)
+
+        val history = TokenHistory(
+            tokenPair = token.tokenPair,
+            entryPrice = token.entryPrice,
+            exitPrice = exitPrice,
+            entryTime = token.foundTime,
+            exitTime = now,
+            priceChangePercent = priceChangePercent,
+            profitUsd = profitUsd,
+            status = TokenStatus.STOPPED_TP,
+            symbol = token.tokenPair.baseToken?.symbol ?: "Unknown",
+            entryDate = formatDate(token.foundTime),
+            exitDate = formatDate(now),
+            note = "$stageLabel • ${percent.toInt()}% @ MC ${marketCap.toInt()}",
+            isPartialExit = true,
+            partialExitPct = percent
+        )
+
+        val existingHistory = loadHistory()
+        val updatedHistory = existingHistory + history
+        tj.khujand.solana.trading.bot.util.AppSettings.putObject(KEY_HISTORY, updatedHistory)
+        println("💾 Частичный выход сохранен: $stageLabel (${percent.toInt()}%)")
     }
 }
 

@@ -319,11 +319,22 @@ private fun HistoryItemCard(item: TokenHistory) {
                             modifier = Modifier.padding(horizontal = 6.dp, vertical = 3.dp)
                         )
                     }
-                    Text(
-                        item.symbol,
-                        fontSize = 18.sp,
-                        fontWeight = FontWeight.Bold
-                    )
+                    Column {
+                        Text(
+                            item.symbol,
+                            fontSize = 18.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                        if (item.isPartialExit && item.note.isNotBlank()) {
+                            Text(
+                                item.note,
+                                fontSize = 11.sp,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
+                    }
                 }
 
                 Text(

@@ -44,7 +44,8 @@ data class TokenPair(
     val pairCreatedAt: Long? = null,
     val marketCap: Double? = null,
     val fdv: Double? = null,
-    val txns: Txns? = null
+    val txns: Txns? = null,
+    val info: TokenInfo? = null
 )
 
 @Serializable
@@ -89,6 +90,24 @@ data class BuySell(
 )
 
 @Serializable
+data class TokenInfo(
+    val websites: List<TokenLink>? = null,
+    val socials: List<TokenSocial>? = null
+)
+
+@Serializable
+data class TokenLink(
+    val label: String? = null,
+    val url: String? = null
+)
+
+@Serializable
+data class TokenSocial(
+    val type: String? = null,
+    val url: String? = null
+)
+
+@Serializable
 data class TokenProfile(
     val chainId: String? = null,
     val tokenAddress: String? = null
@@ -111,7 +130,7 @@ data class FilterSettings(
     val chains: List<String> = listOf("solana"),
     val excludeRugPull: Boolean = true,
     val checkHolders: Boolean = false,
-    val maxTokensToMonitor: Int = 10, // 👈 Новое поле: максимум токенов
+    val maxTokensToMonitor: Int = 6, // 👈 Новое поле: максимум токенов
     
     // Новые поля из конфига
     val liquidityMinUsd: Double = 200.0,
@@ -123,6 +142,25 @@ data class FilterSettings(
     val maxTokensPerTick: Int = 2,
     val minScoreAccept: Int = 10,
     
+    // ✅ Параметры входа (по ТЗ)
+    val entryMaxAgeMinutes: Int = 30,
+    val entryMinMarketCap: Double = 80_000.0,
+    val entryMaxMarketCap: Double = 200_000.0,
+    val entryMinLiquidity: Double = 5_000.0,
+    val entryMinVolume: Double = 150_000.0,
+    val requireSocials: Boolean = true,
+    val requireWebsite: Boolean = true,
+    
+    // ✅ Параметры выхода (по ТЗ)
+    val exitStage1Cap: Double = 200_000.0,
+    val exitStage1Pct: Double = 30.0,
+    val exitStage2Cap: Double = 250_000.0,
+    val exitStage2Pct: Double = 30.0,
+    val exitStage3Cap: Double = 300_000.0,
+    val exitStage3Pct: Double = 20.0,
+    val exitStage4Cap: Double = 350_000.0,
+    val exitStage4Pct: Double = 20.0,
+    
     // Solana RPC настройки
     val rpcUrl: String = "https://api.mainnet-beta.solana.com",
     val rpcTimeoutSeconds: Int = 12,
@@ -130,16 +168,7 @@ data class FilterSettings(
     // Выбор API для поиска токенов
     val useTokenBoostsApi: Boolean = true, // true = token-boosts, false = token-profiles
 
-    // Кулдаун: минуты, в течение которых закрытый по TP/SL токен не добавляется снова в мониторинг
-    val cooldownMinutes: Int = 180,
-
-    // Сколько раз один и тот же токен можно снова добавить в мониторинг после TP/SL. 0 = только один раз (после закрытия больше не добавлять), 1 = один повтор, 2 = два повтора и т.д.
-    val maxReentriesAfterClose: Int = 1,
-
-    // Авто-стоп при резком падении: закрыть как по кнопке Profit (фиксация убытка)
-    val autoStopEnabled: Boolean = true,
-    val autoStopDropPercent: Double = 15.0,   // падение на X% от пика или от входа
-    val autoStopFromPeak: Boolean = true      // true = от максимума с момента добавления, false = от цены входа
+    
 )
 
 // API КЛИЕНТ
@@ -170,7 +199,7 @@ class DexScreenerApi {
     }
 
     private val maxProfileTokens = 25
-    private val minRequestDelayMs = 250L
+    private val minRequestDelayMs = 700L
     private val maxRetries = 3
 
     // ✅ УЛУЧШЕННЫЙ МЕТОД: Получение НОВЫХ токенов Solana (выбор API через настройки)

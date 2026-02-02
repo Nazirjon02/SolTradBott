@@ -97,14 +97,26 @@ object FilterSettingsManager {
             maxAbsPriceChangeH1Pct = 250.0,
             maxTokensPerTick = 2,
             minScoreAccept = 10,
+            // Параметры входа (по ТЗ)
+            entryMaxAgeMinutes = 30,
+            entryMinMarketCap = 80_000.0,
+            entryMaxMarketCap = 200_000.0,
+            entryMinLiquidity = 5_000.0,
+            entryMinVolume = 150_000.0,
+            requireSocials = true,
+            requireWebsite = true,
+            // Параметры выхода (по ТЗ)
+            exitStage1Cap = 200_000.0,
+            exitStage1Pct = 30.0,
+            exitStage2Cap = 250_000.0,
+            exitStage2Pct = 30.0,
+            exitStage3Cap = 300_000.0,
+            exitStage3Pct = 20.0,
+            exitStage4Cap = 350_000.0,
+            exitStage4Pct = 20.0,
             rpcUrl = "https://api.mainnet-beta.solana.com",
             rpcTimeoutSeconds = 12,
-            useTokenBoostsApi = true, // По умолчанию используем token-boosts
-            cooldownMinutes = 180,
-            maxReentriesAfterClose = 1,
-            autoStopEnabled = true,
-            autoStopDropPercent = 15.0,
-            autoStopFromPeak = true
+            useTokenBoostsApi = true // По умолчанию используем token-boosts
         )
     }
 

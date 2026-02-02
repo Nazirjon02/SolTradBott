@@ -7,6 +7,11 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
@@ -50,6 +55,7 @@ fun MainScreen() {
     var monitoredTokens by remember { mutableStateOf(emptyList<MonitoredToken>()) }
     var showFilterSettings by remember { mutableStateOf(false) }
     var showProfitLoss by remember { mutableStateOf(false) }
+    var isRequesting by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
 
     // Обновляем настройки в мониторе при изменении
@@ -67,9 +73,10 @@ fun MainScreen() {
             // Не Android: авто-старт in-app мониторинга если есть токены в кеше
             if (monitoredTokens.isNotEmpty()) {
                 tokenMonitor.startMonitoring(
-                    intervalSeconds = 2,
+                    intervalSeconds = 10,
                     onNewTokenFound = { monitoredTokens = tokenMonitor.monitoredTokens.toList() },
                     onTokenUpdated = { monitoredTokens = tokenMonitor.monitoredTokens.toList() },
+                    onRequestStateChanged = { isRequesting = it },
                     onError = { println("Ошибка: $it") }
                 )
                 isMonitoring = true
@@ -84,6 +91,7 @@ fun MainScreen() {
             delay(2000)
             tokenMonitor.restoreFromCache()
             monitoredTokens = tokenMonitor.monitoredTokens.toList()
+            isRequesting = AppSettings.getBooleanSafe(AppSettings.KEY_REQUEST_IN_PROGRESS, false)
         }
     }
 
@@ -92,22 +100,26 @@ fun MainScreen() {
             if (isMonitoring) {
                 serviceController?.stopMonitoring()
                 isMonitoring = false
+                isRequesting = false
             } else {
                 serviceController?.startMonitoring()
                 isMonitoring = true
+                isRequesting = AppSettings.getBooleanSafe(AppSettings.KEY_REQUEST_IN_PROGRESS, false)
             }
             return
         }
         if (isMonitoring) {
             tokenMonitor.stopMonitoring()
             isMonitoring = false
+            isRequesting = false
         } else {
             tokenMonitor.filterSettings = currentSettings
             scope.launch {
                 tokenMonitor.startMonitoring(
-                    intervalSeconds = 2,
+                    intervalSeconds = 10,
                     onNewTokenFound = { monitoredTokens = tokenMonitor.monitoredTokens.toList() },
                     onTokenUpdated = { monitoredTokens = tokenMonitor.monitoredTokens.toList() },
+                    onRequestStateChanged = { isRequesting = it },
                     onError = { println("Ошибка: $it") }
                 )
                 isMonitoring = true
@@ -137,9 +149,10 @@ fun MainScreen() {
                 scope.launch {
                     tokenMonitor.filterSettings = newSettings
                     tokenMonitor.startMonitoring(
-                        intervalSeconds = 2,
+                        intervalSeconds = 10,
                         onNewTokenFound = { monitoredTokens = tokenMonitor.monitoredTokens.toList() },
                         onTokenUpdated = { monitoredTokens = tokenMonitor.monitoredTokens.toList() },
+                        onRequestStateChanged = { isRequesting = it },
                         onError = { println("Ошибка: $it") }
                     )
                     isMonitoring = true
@@ -191,6 +204,23 @@ fun MainScreen() {
                             fontSize = 20.sp,
                             fontWeight = FontWeight.Bold,
                             color = MaterialTheme.colorScheme.primary
+                        )
+                        val transition = rememberInfiniteTransition()
+                        val dotsAlpha by transition.animateFloat(
+                            initialValue = 0.3f,
+                            targetValue = 1f,
+                            animationSpec = infiniteRepeatable(
+                                animation = tween(durationMillis = 700),
+                                repeatMode = RepeatMode.Reverse
+                            )
+                        )
+                        Text(
+                            if (isRequesting) "Dex Monitoring • request..." else "Dex Monitoring",
+                            fontSize = 12.sp,
+                            color = if (isRequesting)
+                                MaterialTheme.colorScheme.primary.copy(alpha = dotsAlpha)
+                            else
+                                MaterialTheme.colorScheme.onSurfaceVariant
                         )
                         Text(
                             if (isMonitoring) "🟢 Active (auto)"
@@ -327,6 +357,7 @@ fun MainScreen() {
                             Spacer(modifier = Modifier.width(6.dp))
                             Text("Clear", fontSize = 13.sp)
                         }
+
                     }
                 }
             }
@@ -360,9 +391,10 @@ fun MainScreen() {
                             Text("Active filters:", fontSize = 12.sp, fontWeight = FontWeight.Medium)
                         }
                         Text(
-                            "Vol ≥$${formatSimpleNumber(currentSettings.volumeH24MinUsd.toInt())} • " +
-                                    "Liq ≥$${formatSimpleNumber(currentSettings.liquidityMinUsd.toInt())} • " +
-                                    "Age ≤${currentSettings.pairMaxAgeHours}h",
+                            "MC $${formatSimpleNumber(currentSettings.entryMinMarketCap.toInt())}-${formatSimpleNumber(currentSettings.entryMaxMarketCap.toInt())} • " +
+                                    "Liq ≥$${formatSimpleNumber(currentSettings.entryMinLiquidity.toInt())} • " +
+                                    "Vol ≥$${formatSimpleNumber(currentSettings.entryMinVolume.toInt())} • " +
+                                    "Age ≤${currentSettings.entryMaxAgeMinutes}m",
                             fontSize = 11.sp,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -424,3 +456,5 @@ fun MainScreen() {
         }
     }
 }
+
+// request indicator moved to header line

@@ -296,6 +296,17 @@ fun TokenItemCard(
                         fontWeight = FontWeight.Bold,
                         color = MaterialTheme.colorScheme.onSurface
                     )
+                    val stagesDone = listOf(
+                        token.exitStage1Done,
+                        token.exitStage2Done,
+                        token.exitStage3Done,
+                        token.exitStage4Done
+                    ).count { it }
+                    Text(
+                        "Stages: $stagesDone/4",
+                        fontSize = 11.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
                 }
 
                 Column(
@@ -364,7 +375,7 @@ fun TokenItemCard(
                     )
                 }
 
-                // Объем
+                // Market Cap
                 Column(
                     modifier = Modifier.weight(1f),
                     horizontalAlignment = Alignment.CenterHorizontally
@@ -375,19 +386,19 @@ fun TokenItemCard(
                     ) {
                         Icon(
                             Icons.Default.BarChart,
-                            contentDescription = "Volume",
+                            contentDescription = "Market Cap",
                             modifier = Modifier.size(14.dp),
                             tint = MaterialTheme.colorScheme.primary
                         )
                         Text(
-                            "Volume",
+                            "Market Cap",
                             fontSize = 11.sp,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     }
                     Spacer(modifier = Modifier.height(4.dp))
                     Text(
-                        "$${formatLargeNumber(token.tokenPair.volume?.h24 ?: 0.0)}",
+                        "$${formatLargeNumber(token.tokenPair.marketCap ?: 0.0)}",
                         fontSize = 14.sp,
                         fontWeight = FontWeight.Medium,
                         maxLines = 1,
@@ -461,8 +472,10 @@ fun TokenItemCard(
                         modifier = Modifier.size(14.dp),
                         tint = MaterialTheme.colorScheme.onSurfaceVariant
                     )
+                    val createdAt = token.tokenPair.pairCreatedAt
+                        ?: token.ageToken.toLongOrNull()
                     Text(
-                        "Age: ${formatTimeAgo(token.ageToken.toLong())}",
+                        if (createdAt != null) "Age: ${formatTimeAgo(createdAt)}" else "Age: N/A",
                         fontSize = 11.sp,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )

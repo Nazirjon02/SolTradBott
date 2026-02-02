@@ -42,7 +42,10 @@ class TokenMonitorService : Service() {
                     tokenMonitor.filterSettings = FilterSettingsManager.loadSettings()
                     tokenMonitor.restoreFromCache()
                     tokenMonitor.startMonitoring(
-                        intervalSeconds = 2,
+                        intervalSeconds = 10,
+                        onRequestStateChanged = { inProgress ->
+                            AppSettings.putBoolean(AppSettings.KEY_REQUEST_IN_PROGRESS, inProgress)
+                        },
                         onError = { println(it) }
                     )
                 }
@@ -53,6 +56,7 @@ class TokenMonitorService : Service() {
 
     private fun stopMonitoring() {
         AppSettings.putBoolean(AppSettings.KEY_MONITORING_ACTIVE, false)
+        AppSettings.putBoolean(AppSettings.KEY_REQUEST_IN_PROGRESS, false)
         tokenMonitor.stopMonitoring()
         stopForeground(true)
         stopSelf()
@@ -60,6 +64,7 @@ class TokenMonitorService : Service() {
 
     override fun onDestroy() {
         AppSettings.putBoolean(AppSettings.KEY_MONITORING_ACTIVE, false)
+        AppSettings.putBoolean(AppSettings.KEY_REQUEST_IN_PROGRESS, false)
         tokenMonitor.stopMonitoring()
         serviceScope.cancel()
         super.onDestroy()

@@ -32,6 +32,42 @@ fun FilterScreen(
         }
     }
 
+    fun normalizeSettings(settings: FilterSettings): FilterSettings {
+        var entryMin = settings.entryMinMarketCap
+        var entryMax = settings.entryMaxMarketCap
+        if (entryMin > entryMax) {
+            val tmp = entryMin
+            entryMin = entryMax
+            entryMax = tmp
+        }
+
+        val p1 = settings.exitStage1Pct.coerceIn(0.0, 100.0)
+        val p2 = settings.exitStage2Pct.coerceIn(0.0, 100.0)
+        val p3 = settings.exitStage3Pct.coerceIn(0.0, 100.0)
+        val p4 = (100.0 - (p1 + p2 + p3)).coerceIn(0.0, 100.0)
+
+        return settings.copy(
+            entryMinMarketCap = entryMin,
+            entryMaxMarketCap = entryMax,
+            exitStage1Pct = p1,
+            exitStage2Pct = p2,
+            exitStage3Pct = p3,
+            exitStage4Pct = p4
+        )
+    }
+
+    fun applySettings(updated: FilterSettings) {
+        val normalized = normalizeSettings(updated)
+        onSettingsChanged(normalized)
+        saveSettings(normalized)
+    }
+
+    fun isStageCapOrderValid(settings: FilterSettings): Boolean {
+        return settings.exitStage1Cap <= settings.exitStage2Cap &&
+            settings.exitStage2Cap <= settings.exitStage3Cap &&
+            settings.exitStage3Cap <= settings.exitStage4Cap
+    }
+
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -72,7 +108,7 @@ fun FilterScreen(
 
         Spacer(modifier = Modifier.height(16.dp))
 
-        // 1. Минимальный объем 24ч (USD) - ИСПОЛЬЗУЕТСЯ В ФИЛЬТРАЦИИ
+        // ✅ Условия входа (по ТЗ)
         Card(
             modifier = Modifier.fillMaxWidth(),
             colors = CardDefaults.cardColors(
@@ -80,303 +116,244 @@ fun FilterScreen(
             )
         ) {
             Column(modifier = Modifier.padding(16.dp)) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween
-                ) {
-                    Text("💰 Min 24h Volume", fontWeight = FontWeight.Medium)
-                    Text(
-                        "$${currentSettings.volumeH24MinUsd.toInt()}",
-                        fontWeight = FontWeight.Bold,
-                        color = MaterialTheme.colorScheme.primary
-                    )
-                }
-
+                Text("📥 Entry rules", fontWeight = FontWeight.Medium, fontSize = 16.sp)
                 Spacer(modifier = Modifier.height(12.dp))
 
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                    Text("Max age (min)")
+                    Text("${currentSettings.entryMaxAgeMinutes}", fontWeight = FontWeight.Bold)
+                }
                 Slider(
-                    value = currentSettings.volumeH24MinUsd.toFloat(),
-                    onValueChange = { newValue ->
-                        val newSettings = currentSettings.copy(volumeH24MinUsd = newValue.toDouble())
-                        onSettingsChanged(newSettings)
-                        saveSettings(newSettings)
+                    value = currentSettings.entryMaxAgeMinutes.toFloat(),
+                    onValueChange = { v ->
+                        val newSettings = currentSettings.copy(entryMaxAgeMinutes = v.toInt())
+                        applySettings(newSettings)
                     },
-                    valueRange = 100f..10000f,
-                    steps = 99
+                    valueRange = 5f..120f,
+                    steps = 23
                 )
-
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween
-                ) {
-                    Text("100", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    Text("5K", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    Text("10K", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                }
-            }
-        }
-
-        Spacer(modifier = Modifier.height(16.dp))
-
-        // 2. Максимальный возраст пары (часы) - ИСПОЛЬЗУЕТСЯ В ФИЛЬТРАЦИИ
-        Card(
-            modifier = Modifier.fillMaxWidth(),
-            colors = CardDefaults.cardColors(
-                containerColor = MaterialTheme.colorScheme.surfaceVariant
-            )
-        ) {
-            Column(modifier = Modifier.padding(16.dp)) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween
-                ) {
-                    Text("⏰ Max Pair Age", fontWeight = FontWeight.Medium)
-                    Text(
-                        "${currentSettings.pairMaxAgeHours}h",
-                        fontWeight = FontWeight.Bold,
-                        color = MaterialTheme.colorScheme.primary
-                    )
-                }
 
                 Spacer(modifier = Modifier.height(12.dp))
-
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                    Text("Market Cap min")
+                    Text("$${currentSettings.entryMinMarketCap.toInt()}", fontWeight = FontWeight.Bold)
+                }
                 Slider(
-                    value = currentSettings.pairMaxAgeHours.toFloat(),
-                    onValueChange = { newValue ->
-                        val newSettings = currentSettings.copy(pairMaxAgeHours = newValue.toDouble())
-                        onSettingsChanged(newSettings)
-                        saveSettings(newSettings)
+                    value = currentSettings.entryMinMarketCap.toFloat(),
+                    onValueChange = { v ->
+                        val newSettings = currentSettings.copy(entryMinMarketCap = v.toDouble())
+                        applySettings(newSettings)
                     },
-                    valueRange = 0.5f..4f,
-                    steps = 7
+                    valueRange = 50_000f..200_000f,
+                    steps = 30
                 )
-
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween
-                ) {
-                    Text("0.5h", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    Text("2h", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    Text("4h", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                }
-            }
-        }
-
-        Spacer(modifier = Modifier.height(16.dp))
-
-        // 3. Минимальная ликвидность (USD) - ИСПОЛЬЗУЕТСЯ В ФИЛЬТРАЦИИ
-        Card(
-            modifier = Modifier.fillMaxWidth(),
-            colors = CardDefaults.cardColors(
-                containerColor = MaterialTheme.colorScheme.surfaceVariant
-            )
-        ) {
-            Column(modifier = Modifier.padding(16.dp)) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween
-                ) {
-                    Text("💧 Min Liquidity", fontWeight = FontWeight.Medium)
-                    Text(
-                        "$${currentSettings.liquidityMinUsd.toInt()}",
-                        fontWeight = FontWeight.Bold,
-                        color = MaterialTheme.colorScheme.primary
-                    )
-                }
 
                 Spacer(modifier = Modifier.height(12.dp))
-
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                    Text("Market Cap max")
+                    Text("$${currentSettings.entryMaxMarketCap.toInt()}", fontWeight = FontWeight.Bold)
+                }
                 Slider(
-                    value = currentSettings.liquidityMinUsd.toFloat(),
-                    onValueChange = { newValue ->
-                        val newSettings = currentSettings.copy(liquidityMinUsd = newValue.toDouble())
-                        onSettingsChanged(newSettings)
-                        saveSettings(newSettings)
+                    value = currentSettings.entryMaxMarketCap.toFloat(),
+                    onValueChange = { v ->
+                        val newSettings = currentSettings.copy(entryMaxMarketCap = v.toDouble())
+                        applySettings(newSettings)
                     },
-                    valueRange = 100f..5000f,
-                    steps = 49
+                    valueRange = 100_000f..500_000f,
+                    steps = 40
                 )
 
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween
-                ) {
-                    Text("100", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    Text("2.5K", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    Text("5K", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                }
-            }
-        }
-
-        Spacer(modifier = Modifier.height(16.dp))
-
-        // 4. Кулдаун после TP/SL (минуты, в течение которых токен не добавляется снова)
-        Card(
-            modifier = Modifier.fillMaxWidth(),
-            colors = CardDefaults.cardColors(
-                containerColor = MaterialTheme.colorScheme.surfaceVariant
-            )
-        ) {
-            Column(modifier = Modifier.padding(16.dp)) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween
-                ) {
-                    Text("⏳ Cooldown (мин)", fontWeight = FontWeight.Medium)
-                    Text(
-                        "${currentSettings.cooldownMinutes}",
-                        fontWeight = FontWeight.Bold,
-                        color = MaterialTheme.colorScheme.primary
-                    )
-                }
-                Text(
-                    "После TP/SL токен не добавляется в мониторинг повторно",
-                    fontSize = 12.sp,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
                 Spacer(modifier = Modifier.height(12.dp))
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                    Text("Min liquidity")
+                    Text("$${currentSettings.entryMinLiquidity.toInt()}", fontWeight = FontWeight.Bold)
+                }
                 Slider(
-                    value = currentSettings.cooldownMinutes.toFloat(),
-                    onValueChange = { newValue ->
-                        val newSettings = currentSettings.copy(cooldownMinutes = newValue.toInt())
-                        onSettingsChanged(newSettings)
-                        saveSettings(newSettings)
+                    value = currentSettings.entryMinLiquidity.toFloat(),
+                    onValueChange = { v ->
+                        val newSettings = currentSettings.copy(entryMinLiquidity = v.toDouble())
+                        applySettings(newSettings)
                     },
-                    valueRange = 0f..480f,
-                    steps = 47
+                    valueRange = 1000f..20_000f,
+                    steps = 38
                 )
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween
-                ) {
-                    Text("0", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    Text("4h", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    Text("8h", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                }
-            }
-        }
 
-        Spacer(modifier = Modifier.height(16.dp))
-
-        // Макс. повторов: сколько раз один токен можно снова добавить в мониторинг после TP/SL
-        Card(
-            modifier = Modifier.fillMaxWidth(),
-            colors = CardDefaults.cardColors(
-                containerColor = MaterialTheme.colorScheme.surfaceVariant
-            )
-        ) {
-            Column(modifier = Modifier.padding(16.dp)) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween
-                ) {
-                    Text("🔄 Повторов после TP/SL", fontWeight = FontWeight.Medium)
-                    Text(
-                        "${currentSettings.maxReentriesAfterClose}",
-                        fontWeight = FontWeight.Bold,
-                        color = MaterialTheme.colorScheme.primary
-                    )
-                }
-                Text(
-                    "0 = только один раз, 1 = один повтор, 2 = два повтора и т.д.",
-                    fontSize = 12.sp,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
                 Spacer(modifier = Modifier.height(12.dp))
-                Slider(
-                    value = currentSettings.maxReentriesAfterClose.toFloat(),
-                    onValueChange = { newValue ->
-                        val newSettings = currentSettings.copy(maxReentriesAfterClose = newValue.toInt())
-                        onSettingsChanged(newSettings)
-                        saveSettings(newSettings)
-                    },
-                    valueRange = 0f..5f,
-                    steps = 5
-                )
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween
-                ) {
-                    Text("0", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    Text("2-3", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    Text("5", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                    Text("Min volume 24h")
+                    Text("$${currentSettings.entryMinVolume.toInt()}", fontWeight = FontWeight.Bold)
                 }
-            }
-        }
+                Slider(
+                    value = currentSettings.entryMinVolume.toFloat(),
+                    onValueChange = { v ->
+                        val newSettings = currentSettings.copy(entryMinVolume = v.toDouble())
+                        applySettings(newSettings)
+                    },
+                    valueRange = 50_000f..300_000f,
+                    steps = 50
+                )
 
-        Spacer(modifier = Modifier.height(16.dp))
-
-        // Авто-стоп при резком падении цены
-        Card(
-            modifier = Modifier.fillMaxWidth(),
-            colors = CardDefaults.cardColors(
-                containerColor = MaterialTheme.colorScheme.surfaceVariant
-            )
-        ) {
-            Column(modifier = Modifier.padding(16.dp)) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
+                Spacer(modifier = Modifier.height(12.dp))
+                Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                     Switch(
-                        checked = currentSettings.autoStopEnabled,
+                        checked = currentSettings.requireSocials,
                         onCheckedChange = { checked ->
-                            val newSettings = currentSettings.copy(autoStopEnabled = checked)
-                            onSettingsChanged(newSettings)
-                            saveSettings(newSettings)
+                            val newSettings = currentSettings.copy(requireSocials = checked)
+                            applySettings(newSettings)
                         }
                     )
                     Spacer(modifier = Modifier.width(12.dp))
-                    Text("🛑 Авто-стоп при падении", fontWeight = FontWeight.Medium)
+                    Text("Require socials (Telegram/X)")
                 }
-                Text(
-                    "При резком падении цены закрыть как по кнопке Profit (фиксация убытка)",
-                    fontSize = 12.sp,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-                if (currentSettings.autoStopEnabled) {
-                    Spacer(modifier = Modifier.height(12.dp))
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween
-                    ) {
-                        Text("Падение %", fontWeight = FontWeight.Medium)
-                        Text(
-                            "${currentSettings.autoStopDropPercent.toInt()}%",
-                            fontWeight = FontWeight.Bold,
-                            color = MaterialTheme.colorScheme.primary
-                        )
-                    }
-                    Slider(
-                        value = currentSettings.autoStopDropPercent.toFloat(),
-                        onValueChange = { newValue ->
-                            val newSettings = currentSettings.copy(autoStopDropPercent = newValue.toDouble())
-                            onSettingsChanged(newSettings)
-                            saveSettings(newSettings)
-                        },
-                        valueRange = 5f..40f,
-                        steps = 7
+
+                Spacer(modifier = Modifier.height(8.dp))
+                Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                    Switch(
+                        checked = currentSettings.requireWebsite,
+                        onCheckedChange = { checked ->
+                            val newSettings = currentSettings.copy(requireWebsite = checked)
+                            applySettings(newSettings)
+                        }
                     )
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Switch(
-                            checked = currentSettings.autoStopFromPeak,
-                            onCheckedChange = { checked ->
-                                val newSettings = currentSettings.copy(autoStopFromPeak = checked)
-                                onSettingsChanged(newSettings)
-                                saveSettings(newSettings)
-                            }
-                        )
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text(
-                            if (currentSettings.autoStopFromPeak) "От пика (макс. с добавления)" else "От цены входа",
-                            fontSize = 12.sp,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
+                    Spacer(modifier = Modifier.width(12.dp))
+                    Text("Require website")
                 }
+            }
+        }
+
+        Spacer(modifier = Modifier.height(16.dp))
+
+        // ✅ Условия выхода (по ТЗ)
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            colors = CardDefaults.cardColors(
+                containerColor = MaterialTheme.colorScheme.surfaceVariant
+            )
+        ) {
+            Column(modifier = Modifier.padding(16.dp)) {
+                Text("📤 Exit stages", fontWeight = FontWeight.Medium, fontSize = 16.sp)
+                val stageOrderOk = isStageCapOrderValid(currentSettings)
+                if (!stageOrderOk) {
+                    Spacer(modifier = Modifier.height(6.dp))
+                    Text(
+                        "⚠️ Cap значения должны идти по возрастанию (Stage1 ≤ Stage2 ≤ Stage3 ≤ Stage4)",
+                        fontSize = 11.sp,
+                        color = MaterialTheme.colorScheme.error
+                    )
+                }
+                Spacer(modifier = Modifier.height(12.dp))
+
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                    Text("Stage 1 cap")
+                    Text("$${currentSettings.exitStage1Cap.toInt()} • ${currentSettings.exitStage1Pct.toInt()}%", fontWeight = FontWeight.Bold)
+                }
+                Slider(
+                    value = currentSettings.exitStage1Cap.toFloat(),
+                    onValueChange = { v ->
+                        val newSettings = currentSettings.copy(exitStage1Cap = v.toDouble())
+                        applySettings(newSettings)
+                    },
+                    valueRange = 150_000f..300_000f,
+                    steps = 30
+                )
+
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                    Text("Stage 1 %")
+                    Text("${currentSettings.exitStage1Pct.toInt()}%", fontWeight = FontWeight.Bold)
+                }
+                Slider(
+                    value = currentSettings.exitStage1Pct.toFloat(),
+                    onValueChange = { v ->
+                        val newSettings = currentSettings.copy(exitStage1Pct = v.toDouble())
+                        applySettings(newSettings)
+                    },
+                    valueRange = 5f..50f,
+                    steps = 45
+                )
+
+                Spacer(modifier = Modifier.height(12.dp))
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                    Text("Stage 2 cap")
+                    Text("$${currentSettings.exitStage2Cap.toInt()} • ${currentSettings.exitStage2Pct.toInt()}%", fontWeight = FontWeight.Bold)
+                }
+                Slider(
+                    value = currentSettings.exitStage2Cap.toFloat(),
+                    onValueChange = { v ->
+                        val newSettings = currentSettings.copy(exitStage2Cap = v.toDouble())
+                        applySettings(newSettings)
+                    },
+                    valueRange = 200_000f..400_000f,
+                    steps = 40
+                )
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                    Text("Stage 2 %")
+                    Text("${currentSettings.exitStage2Pct.toInt()}%", fontWeight = FontWeight.Bold)
+                }
+                Slider(
+                    value = currentSettings.exitStage2Pct.toFloat(),
+                    onValueChange = { v ->
+                        val newSettings = currentSettings.copy(exitStage2Pct = v.toDouble())
+                        applySettings(newSettings)
+                    },
+                    valueRange = 5f..50f,
+                    steps = 45
+                )
+
+                Spacer(modifier = Modifier.height(12.dp))
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                    Text("Stage 3 cap")
+                    Text("$${currentSettings.exitStage3Cap.toInt()} • ${currentSettings.exitStage3Pct.toInt()}%", fontWeight = FontWeight.Bold)
+                }
+                Slider(
+                    value = currentSettings.exitStage3Cap.toFloat(),
+                    onValueChange = { v ->
+                        val newSettings = currentSettings.copy(exitStage3Cap = v.toDouble())
+                        applySettings(newSettings)
+                    },
+                    valueRange = 250_000f..500_000f,
+                    steps = 50
+                )
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                    Text("Stage 3 %")
+                    Text("${currentSettings.exitStage3Pct.toInt()}%", fontWeight = FontWeight.Bold)
+                }
+                Slider(
+                    value = currentSettings.exitStage3Pct.toFloat(),
+                    onValueChange = { v ->
+                        val newSettings = currentSettings.copy(exitStage3Pct = v.toDouble())
+                        applySettings(newSettings)
+                    },
+                    valueRange = 5f..50f,
+                    steps = 45
+                )
+
+                Spacer(modifier = Modifier.height(12.dp))
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                    Text("Stage 4 cap")
+                    Text("$${currentSettings.exitStage4Cap.toInt()} • ${currentSettings.exitStage4Pct.toInt()}%", fontWeight = FontWeight.Bold)
+                }
+                Slider(
+                    value = currentSettings.exitStage4Cap.toFloat(),
+                    onValueChange = { v ->
+                        val newSettings = currentSettings.copy(exitStage4Cap = v.toDouble())
+                        applySettings(newSettings)
+                    },
+                    valueRange = 300_000f..700_000f,
+                    steps = 80
+                )
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                    Text("Stage 4 %")
+                    Text("${currentSettings.exitStage4Pct.toInt()}%", fontWeight = FontWeight.Bold)
+                }
+                Slider(
+                    value = currentSettings.exitStage4Pct.toFloat(),
+                    onValueChange = { v ->
+                        val newSettings = currentSettings.copy(exitStage4Pct = v.toDouble())
+                        applySettings(newSettings)
+                    },
+                    valueRange = 5f..50f,
+                    steps = 45
+                )
             }
         }
 
@@ -567,34 +544,6 @@ fun FilterScreen(
                         )
                     }
                 }
-
-                Spacer(modifier = Modifier.height(12.dp))
-
-                // Проверка холдеров
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Switch(
-                        checked = currentSettings.checkHolders,
-                        onCheckedChange = { checked ->
-                            val newSettings = currentSettings.copy(checkHolders = checked)
-                            onSettingsChanged(newSettings)
-                            saveSettings(newSettings)
-                        }
-                    )
-
-                    Spacer(modifier = Modifier.width(12.dp))
-
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text("Check holder distribution", fontWeight = FontWeight.Medium)
-                        Text(
-                            "Filter tokens with centralized holders",
-                            fontSize = 12.sp,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
-                }
             }
         }
 
@@ -706,9 +655,9 @@ fun FilterScreen(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween
                 ) {
-                    Text("Min volume 24h:", fontSize = 12.sp)
+                    Text("Entry age:", fontSize = 12.sp)
                     Text(
-                        "$${currentSettings.volumeH24MinUsd.toInt()}",
+                        "${currentSettings.entryMaxAgeMinutes} min",
                         fontSize = 12.sp,
                         fontWeight = FontWeight.Bold
                     )
@@ -718,9 +667,9 @@ fun FilterScreen(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween
                 ) {
-                    Text("Min liquidity:", fontSize = 12.sp)
+                    Text("Entry MC:", fontSize = 12.sp)
                     Text(
-                        "$${currentSettings.liquidityMinUsd.toInt()}",
+                        "$${currentSettings.entryMinMarketCap.toInt()} - $${currentSettings.entryMaxMarketCap.toInt()}",
                         fontSize = 12.sp,
                         fontWeight = FontWeight.Bold
                     )
@@ -730,9 +679,9 @@ fun FilterScreen(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween
                 ) {
-                    Text("Max pair age:", fontSize = 12.sp)
+                    Text("Entry liq/vol:", fontSize = 12.sp)
                     Text(
-                        "${currentSettings.pairMaxAgeHours}h",
+                        "$${currentSettings.entryMinLiquidity.toInt()} / $${currentSettings.entryMinVolume.toInt()}",
                         fontSize = 12.sp,
                         fontWeight = FontWeight.Bold
                     )
@@ -742,37 +691,14 @@ fun FilterScreen(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween
                 ) {
-                    Text("Cooldown after TP/SL:", fontSize = 12.sp)
+                    Text("Socials/website:", fontSize = 12.sp)
                     Text(
-                        "${currentSettings.cooldownMinutes} min",
+                        "${if (currentSettings.requireSocials) "on" else "off"} / ${if (currentSettings.requireWebsite) "on" else "off"}",
                         fontSize = 12.sp,
                         fontWeight = FontWeight.Bold
                     )
                 }
 
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween
-                ) {
-                    Text("Повторов после TP/SL:", fontSize = 12.sp)
-                    Text(
-                        "${currentSettings.maxReentriesAfterClose}",
-                        fontSize = 12.sp,
-                        fontWeight = FontWeight.Bold
-                    )
-                }
-
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween
-                ) {
-                    Text("Авто-стоп при падении:", fontSize = 12.sp)
-                    Text(
-                        if (currentSettings.autoStopEnabled) "${currentSettings.autoStopDropPercent.toInt()}% от ${if (currentSettings.autoStopFromPeak) "пика" else "входа"}" else "выкл",
-                        fontSize = 12.sp,
-                        fontWeight = FontWeight.Bold
-                    )
-                }
             }
         }
 
