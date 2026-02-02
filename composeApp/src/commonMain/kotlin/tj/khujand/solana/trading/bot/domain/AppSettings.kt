@@ -9,6 +9,8 @@ import kotlinx.serialization.encodeToString
  */
 object AppSettings {
 
+    const val KEY_MONITORING_ACTIVE = "monitoring_active"
+
     private var settings: Settings = try {
         Settings()
     } catch (e: Throwable) {

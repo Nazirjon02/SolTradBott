@@ -27,6 +27,7 @@ import kotlinx.coroutines.launch
 import tj.khujand.solana.trading.bot.ServiceController
 import tj.khujand.solana.trading.bot.createServiceController
 import tj.khujand.solana.trading.bot.data.FilterSettingsManager
+import tj.khujand.solana.trading.bot.util.AppSettings
 import tj.khujand.solana.trading.bot.domain.MonitoredToken
 import tj.khujand.solana.trading.bot.domain.TokenMonitor
 import tj.khujand.solana.trading.bot.domain.TokenStatus
@@ -59,26 +60,44 @@ fun MainScreen() {
     LaunchedEffect(Unit) {
         tokenMonitor.restoreFromCache()
         monitoredTokens = tokenMonitor.monitoredTokens.toList()
-        // 🔥 АВТО-СТАРТ если есть токены в кеше
-        if (monitoredTokens.isNotEmpty()) {
-            tokenMonitor.startMonitoring(
-                intervalSeconds = 3,
-                onNewTokenFound = {
-                    monitoredTokens = tokenMonitor.monitoredTokens.toList()
-                },
-                onTokenUpdated = {
-                    monitoredTokens = tokenMonitor.monitoredTokens.toList()
-                },
-                onError = { error ->
-                    println("Ошибка: $error")
-                }
-            )
-            isMonitoring = true
+        // На Android: восстанавливаем флаг "мониторинг активен" (сервис в бекграунде)
+        if (isAndroid()) {
+            isMonitoring = AppSettings.getBooleanSafe(AppSettings.KEY_MONITORING_ACTIVE, false)
+        } else {
+            // Не Android: авто-старт in-app мониторинга если есть токены в кеше
+            if (monitoredTokens.isNotEmpty()) {
+                tokenMonitor.startMonitoring(
+                    intervalSeconds = 2,
+                    onNewTokenFound = { monitoredTokens = tokenMonitor.monitoredTokens.toList() },
+                    onTokenUpdated = { monitoredTokens = tokenMonitor.monitoredTokens.toList() },
+                    onError = { println("Ошибка: $it") }
+                )
+                isMonitoring = true
+            }
         }
+    }
 
+    // На Android при активном мониторинге (сервис) подтягиваем список из кеша
+    LaunchedEffect(isMonitoring, isAndroid()) {
+        if (!isAndroid() || !isMonitoring) return@LaunchedEffect
+        while (true) {
+            delay(2000)
+            tokenMonitor.restoreFromCache()
+            monitoredTokens = tokenMonitor.monitoredTokens.toList()
+        }
     }
 
     fun toggleMonitoring() {
+        if (isAndroid()) {
+            if (isMonitoring) {
+                serviceController?.stopMonitoring()
+                isMonitoring = false
+            } else {
+                serviceController?.startMonitoring()
+                isMonitoring = true
+            }
+            return
+        }
         if (isMonitoring) {
             tokenMonitor.stopMonitoring()
             isMonitoring = false
@@ -86,16 +105,10 @@ fun MainScreen() {
             tokenMonitor.filterSettings = currentSettings
             scope.launch {
                 tokenMonitor.startMonitoring(
-                    intervalSeconds = 3, // ⏱️ 3 секунды для тестирования (в продакшене 600 = 10 минут)
-                    onNewTokenFound = { newToken ->
-                        monitoredTokens = tokenMonitor.monitoredTokens.toList()
-                    },
-                    onTokenUpdated = { updatedToken ->
-                        monitoredTokens = tokenMonitor.monitoredTokens.toList()
-                    },
-                    onError = { error ->
-                        println("Ошибка: $error")
-                    }
+                    intervalSeconds = 2,
+                    onNewTokenFound = { monitoredTokens = tokenMonitor.monitoredTokens.toList() },
+                    onTokenUpdated = { monitoredTokens = tokenMonitor.monitoredTokens.toList() },
+                    onError = { println("Ошибка: $it") }
                 )
                 isMonitoring = true
             }
@@ -103,6 +116,10 @@ fun MainScreen() {
     }
 
     fun clearAllTokens() {
+        if (isAndroid() && isMonitoring) {
+            serviceController?.stopMonitoring()
+            isMonitoring = false
+        }
         tokenMonitor.clearAllTokens()
         monitoredTokens = emptyList()
     }
@@ -112,23 +129,21 @@ fun MainScreen() {
     fun updateSettings(newSettings: FilterSettings) {
         currentSettings = newSettings
         if (isMonitoring) {
-            tokenMonitor.stopMonitoring()
-            isMonitoring = false
-            scope.launch {
-                tokenMonitor.filterSettings = newSettings
-                tokenMonitor.startMonitoring(
-                    intervalSeconds = 3, // ⏱️ 3 секунды для тестирования (в продакшене 600 = 10 минут)
-                    onNewTokenFound = { newToken ->
-                        monitoredTokens = tokenMonitor.monitoredTokens.toList()
-                    },
-                    onTokenUpdated = { updatedToken ->
-                        monitoredTokens = tokenMonitor.monitoredTokens.toList()
-                    },
-                    onError = { error ->
-                        println("Ошибка: $error")
-                    }
-                )
-                isMonitoring = true
+            if (isAndroid()) {
+                serviceController?.stopMonitoring()
+                serviceController?.startMonitoring()
+            } else {
+                tokenMonitor.stopMonitoring()
+                scope.launch {
+                    tokenMonitor.filterSettings = newSettings
+                    tokenMonitor.startMonitoring(
+                        intervalSeconds = 2,
+                        onNewTokenFound = { monitoredTokens = tokenMonitor.monitoredTokens.toList() },
+                        onTokenUpdated = { monitoredTokens = tokenMonitor.monitoredTokens.toList() },
+                        onError = { println("Ошибка: $it") }
+                    )
+                    isMonitoring = true
+                }
             }
         }
     }
@@ -278,16 +293,7 @@ fun MainScreen() {
 
                         // Кнопка старт/стоп
                         Button(
-                            onClick = {
-                                if (isAndroid()) {
-                                    if (isMonitoring) {
-                                        serviceController?.stopMonitoring()
-                                    } else {
-                                        serviceController?.startMonitoring()
-                                    }
-                                }
-                                toggleMonitoring()
-                            },
+                            onClick = { toggleMonitoring() },
                             colors = ButtonDefaults.buttonColors(
                                 containerColor = if (isMonitoring) MaterialTheme.colorScheme.errorContainer
                                 else MaterialTheme.colorScheme.primaryContainer,

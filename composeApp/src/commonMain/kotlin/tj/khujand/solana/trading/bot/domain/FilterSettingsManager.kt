@@ -101,7 +101,10 @@ object FilterSettingsManager {
             rpcTimeoutSeconds = 12,
             useTokenBoostsApi = true, // По умолчанию используем token-boosts
             cooldownMinutes = 180,
-            maxReentriesAfterClose = 1
+            maxReentriesAfterClose = 1,
+            autoStopEnabled = true,
+            autoStopDropPercent = 15.0,
+            autoStopFromPeak = true
         )
     }
 

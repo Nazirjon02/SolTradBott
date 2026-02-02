@@ -7,8 +7,10 @@ import android.os.IBinder
 import androidx.core.app.NotificationCompat
 import kotlinx.coroutines.*
 import tj.khujand.solana.trading.bot.MainActivity
+import tj.khujand.solana.trading.bot.data.FilterSettingsManager
 import tj.khujand.solana.trading.bot.domain.TokenMonitor
 import tj.khujand.solana.trading.bot.R
+import tj.khujand.solana.trading.bot.util.AppSettings
 
 class TokenMonitorService : Service() {
 
@@ -19,35 +21,45 @@ class TokenMonitorService : Service() {
         super.onCreate()
         tokenMonitor = TokenMonitor()
         createNotificationChannel()
+        // Сразу показываем foreground — иначе Android выбросит ForegroundServiceDidNotStartInTimeException
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+            startForeground(NOTIFICATION_ID, buildNotification(), android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC)
+        } else {
+            startForeground(NOTIFICATION_ID, buildNotification())
+        }
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        val action = intent?.action
-
-        when (action) {
-            ACTION_START -> {
-                startForeground(NOTIFICATION_ID, buildNotification())
-                tokenMonitor.restoreFromCache()
-                tokenMonitor.startMonitoring(
-                    intervalSeconds = 3,
-                    onError = { println(it) }
-                )
-            }
+        when (intent?.action) {
             ACTION_STOP -> {
                 stopMonitoring()
+                return START_STICKY
+            }
+            else -> {
+                // ACTION_START или null (перезапуск системой после убийства)
+                AppSettings.putBoolean(AppSettings.KEY_MONITORING_ACTIVE, true)
+                serviceScope.launch {
+                    tokenMonitor.filterSettings = FilterSettingsManager.loadSettings()
+                    tokenMonitor.restoreFromCache()
+                    tokenMonitor.startMonitoring(
+                        intervalSeconds = 2,
+                        onError = { println(it) }
+                    )
+                }
             }
         }
-
         return START_STICKY
     }
 
     private fun stopMonitoring() {
+        AppSettings.putBoolean(AppSettings.KEY_MONITORING_ACTIVE, false)
         tokenMonitor.stopMonitoring()
         stopForeground(true)
         stopSelf()
     }
 
     override fun onDestroy() {
+        AppSettings.putBoolean(AppSettings.KEY_MONITORING_ACTIVE, false)
         tokenMonitor.stopMonitoring()
         serviceScope.cancel()
         super.onDestroy()

@@ -2,7 +2,10 @@ package tj.khujand.solana.trading.bot.domain
 
 import androidx.compose.runtime.mutableStateListOf
 import kotlinx.coroutines.*
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.sync.withPermit
 import kotlinx.serialization.Serializable
 import tj.khujand.solana.trading.bot.network.*
@@ -21,7 +24,8 @@ data class MonitoredToken(
     var currentPrice: String = "0.0",
     var priceChangePercent: Double = 0.0,
     var profitUsd: Double = 0.0,          // 👈 ВАЖНО
-    var status: TokenStatus = TokenStatus.MONITORING
+    var status: TokenStatus = TokenStatus.MONITORING,
+    var sessionHighPrice: Double = 0.0    // максимум цены с момента добавления (для авто-стопа)
 )
 
 @Serializable
@@ -42,6 +46,7 @@ class TokenMonitor {
     private var isMonitoring = false
     private val maxParallelUpdates = 3
     private val updateSemaphore = Semaphore(maxParallelUpdates)
+    private val listMutex = Mutex()
 
     // Список отслеживаемых токенов
     private val _monitoredTokens = mutableStateListOf<MonitoredToken>()
@@ -79,12 +84,22 @@ class TokenMonitor {
         println("   - Минимальный балл для принятия: ${filterSettings.minScoreAccept}")
 
         monitorJob = CoroutineScope(Dispatchers.Default).launch {
+            var cycleCount = 0
             while (isMonitoring) {
                 try {
-                    println("🔄 Цикл мониторинга начат...")
+                    cycleCount++
+                    // Поиск новых токенов — раз в 5 циклов (чтобы цены обновлялись чаще)
+                    val runPhase1 = allowNewTokenDiscovery && (
+                        cycleCount == 1 ||
+                        _monitoredTokens.isEmpty() ||
+                        cycleCount % 5 == 0
+                    )
+                    if (runPhase1) {
+                        println("🔄 Цикл мониторинга (поиск новых + цены)...")
+                    }
 
-                    // ✅ ФАЗА 1: Поиск НОВЫХ токенов (только если разрешено)
-                    if (allowNewTokenDiscovery) {
+                    // ✅ ФАЗА 1: Поиск НОВЫХ токенов (реже, чтобы не тормозить обновление цен)
+                    if (runPhase1 && allowNewTokenDiscovery) {
                         println("📡 Запрос новых токенов...")
                         try {
                             val newTokens = api.getNewTokens(filterSettings)
@@ -133,7 +148,8 @@ class TokenMonitor {
                                         tokenPair = token,
                                         entryPrice = price,
                                         currentPrice = token.priceUsd.toString(),
-                                        ageToken = token.pairCreatedAt.toString()
+                                        ageToken = token.pairCreatedAt.toString(),
+                                        sessionHighPrice = price
                                     )
 
                                     _monitoredTokens.add(monitoredToken)
@@ -147,6 +163,8 @@ class TokenMonitor {
                             if (addedCount > 0) {
                                 println("🎯 Добавлено новых токенов: $addedCount")
                             }
+                        } catch (e: CancellationException) {
+                            throw e
                         } catch (e: Exception) {
                             val errorMsg = e.message ?: "Unknown error"
                             val isNetworkError = errorMsg.contains("Unable to resolve", ignoreCase = true) ||
@@ -161,23 +179,24 @@ class TokenMonitor {
                                 onError("Ошибка поиска токенов: $errorMsg")
                             }
                         }
-                    } else {
-                        // 🔴 Поиск приостановлен - только логируем
+                    } else if (!allowNewTokenDiscovery) {
                         println("⏸️ Поиск новых токенов приостановлен (лимит: ${filterSettings.maxTokensToMonitor})")
                     }
 
-                    // ✅ ФАЗА 2: Обновление цен ВСЕХ токенов (работает всегда)
+                    // ✅ ФАЗА 2: Обновление цен ВСЕХ токенов — каждый цикл (чаще обновление цен)
                     if (_monitoredTokens.isNotEmpty()) {
-                        // 🔴 ИЗМЕНЕНИЕ: запускаем параллельное обновление
+                        if (!runPhase1) println("🔄 Цикл мониторинга (только цены)...")
                         updateMonitoredTokensParallel(onTokenUpdated)
                     }
 
                     refreshDiscoveryFlag()
 
                     // Ожидание перед следующим циклом
-                    println("⏳ Ожидание $intervalSeconds секунд...")
+                    println("⏳ Ожидание $intervalSeconds сек...")
                     delay(intervalSeconds * 1000L)
 
+                } catch (e: CancellationException) {
+                    throw e
                 } catch (e: Exception) {
                     val errorMsg = e.message ?: "Unknown error"
                     val isNetworkError = errorMsg.contains("Unable to resolve", ignoreCase = true) ||
@@ -229,10 +248,12 @@ class TokenMonitor {
                                     println("✅ ${monitoredToken.tokenPair.baseToken?.symbol}: цена обновлена до $${newPrice}")
                                 }
                             }
+                        } catch (e: CancellationException) {
+                            throw e
                         } catch (e: Exception) {
                             println("❌ Ошибка обновления токена ${monitoredToken.tokenPair.baseToken?.symbol}: ${e.message}")
                         } finally {
-                            delay(150)
+                            delay(80)
                         }
                     }
                 }
@@ -537,19 +558,23 @@ class TokenMonitor {
                 // DexScreener API: 300 requests/minute = ~5 requests/second
                 delay(1000) // 1 секунда между запросами
 
+            } catch (e: CancellationException) {
+                throw e
             } catch (e: Exception) {
                 println("❌ Ошибка обновления токена ${monitoredToken.tokenPair.baseToken?.symbol}: ${e.message}")
             }
         }
     }
 
-    // 🔄 Обновление цены токена
-        private fun updateTokenPrice(
-    token: MonitoredToken,
-    newPrice: Double,
-    onUpdate: (MonitoredToken) -> Unit
+    // 🔄 Обновление цены токена (suspend для безопасного доступа к списку при параллельном обновлении)
+    private suspend fun updateTokenPrice(
+        token: MonitoredToken,
+        newPrice: Double,
+        onUpdate: (MonitoredToken) -> Unit
     ) {
         val entry = token.entryPrice
+        val prevHigh = if (token.sessionHighPrice > 0) token.sessionHighPrice else entry
+        val newSessionHigh = maxOf(prevHigh, newPrice)
 
         val priceChangePercent =
             if (entry > 0) ((newPrice - entry) / entry) * 100 else 0.0
@@ -557,40 +582,52 @@ class TokenMonitor {
         val investment = 100.0
         val profitUsd = investment * priceChangePercent / 100
 
-        val newStatus = when {
+        var newStatus = when {
             priceChangePercent >= 30 -> TokenStatus.STOPPED_TP
             priceChangePercent <= -25 -> TokenStatus.STOPPED_SL
             else -> TokenStatus.MONITORING
+        }
+
+        // Авто-стоп при резком падении (если ещё в мониторинге)
+        if (newStatus == TokenStatus.MONITORING && filterSettings.autoStopEnabled && filterSettings.autoStopDropPercent > 0) {
+            val reference = if (filterSettings.autoStopFromPeak) newSessionHigh else entry
+            if (reference > 0 && newPrice <= reference * (1 - filterSettings.autoStopDropPercent / 100.0)) {
+                newStatus = TokenStatus.STOPPED_SL
+                println("🛑 Авто-стоп: ${token.tokenPair.baseToken?.symbol} упал на ${filterSettings.autoStopDropPercent}% от ${if (filterSettings.autoStopFromPeak) "пика" else "входа"} ($$newPrice <= $reference)")
+            }
         }
 
         val updatedToken = token.copy(
             currentPrice = newPrice.toString(),
             priceChangePercent = priceChangePercent,
             profitUsd = profitUsd,
-            status = newStatus
+            status = newStatus,
+            sessionHighPrice = newSessionHigh
         )
 
-        val index = _monitoredTokens.indexOfFirst {
-            it.tokenPair.pairAddress == token.tokenPair.pairAddress
-        }
-
-        if (index != -1) {
-            // 💾 Сохраняем в историю если достигнут TP или SL
-            if (newStatus != TokenStatus.MONITORING) {
-                TokenHistoryManager.saveToHistory(updatedToken)
-                token.tokenPair.pairAddress?.let {
-                    putCooldown(it)
-                    incrementClosedCount(it)
-                }
-                // ✅ Автоматически удаляем из списка мониторинга
-                _monitoredTokens.removeAt(index)
-                println("🗑️ Токен ${token.tokenPair.baseToken?.symbol} удален из мониторинга (${if (newStatus == TokenStatus.STOPPED_TP) "TP HIT" else "SL HIT"})")
-                checkAndResumeDiscovery() // Проверяем, можно ли возобновить поиск
-            } else {
-                _monitoredTokens[index] = updatedToken
+        listMutex.withLock {
+            val index = _monitoredTokens.indexOfFirst {
+                it.tokenPair.pairAddress == token.tokenPair.pairAddress
             }
-            onUpdate(updatedToken)
-            saveTokensToCache()
+
+            if (index != -1) {
+                // 💾 Сохраняем в историю если достигнут TP или SL
+                if (newStatus != TokenStatus.MONITORING) {
+                    TokenHistoryManager.saveToHistory(updatedToken)
+                    token.tokenPair.pairAddress?.let {
+                        putCooldown(it)
+                        incrementClosedCount(it)
+                    }
+                    // ✅ Автоматически удаляем из списка мониторинга
+                    _monitoredTokens.removeAt(index)
+                    println("🗑️ Токен ${token.tokenPair.baseToken?.symbol} удален из мониторинга (${if (newStatus == TokenStatus.STOPPED_TP) "TP HIT" else "SL HIT"})")
+                    checkAndResumeDiscovery() // Проверяем, можно ли возобновить поиск
+                } else {
+                    _monitoredTokens[index] = updatedToken
+                }
+                onUpdate(updatedToken)
+                saveTokensToCache()
+            }
         }
     }
 
@@ -612,7 +649,7 @@ class TokenMonitor {
             _monitoredTokens.clear()
             _monitoredTokens.addAll(cached)
             allowNewTokenDiscovery =
-                _monitoredTokens.size < filterSettings.maxTokensToMonitor
+                monitoringCount() < filterSettings.maxTokensToMonitor
 
             println("♻️ Восстановлено токенов из кеша: ${cached.size}")
         }

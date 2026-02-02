@@ -306,6 +306,82 @@ fun FilterScreen(
 
         Spacer(modifier = Modifier.height(16.dp))
 
+        // Авто-стоп при резком падении цены
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            colors = CardDefaults.cardColors(
+                containerColor = MaterialTheme.colorScheme.surfaceVariant
+            )
+        ) {
+            Column(modifier = Modifier.padding(16.dp)) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Switch(
+                        checked = currentSettings.autoStopEnabled,
+                        onCheckedChange = { checked ->
+                            val newSettings = currentSettings.copy(autoStopEnabled = checked)
+                            onSettingsChanged(newSettings)
+                            saveSettings(newSettings)
+                        }
+                    )
+                    Spacer(modifier = Modifier.width(12.dp))
+                    Text("🛑 Авто-стоп при падении", fontWeight = FontWeight.Medium)
+                }
+                Text(
+                    "При резком падении цены закрыть как по кнопке Profit (фиксация убытка)",
+                    fontSize = 12.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                if (currentSettings.autoStopEnabled) {
+                    Spacer(modifier = Modifier.height(12.dp))
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Text("Падение %", fontWeight = FontWeight.Medium)
+                        Text(
+                            "${currentSettings.autoStopDropPercent.toInt()}%",
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                    }
+                    Slider(
+                        value = currentSettings.autoStopDropPercent.toFloat(),
+                        onValueChange = { newValue ->
+                            val newSettings = currentSettings.copy(autoStopDropPercent = newValue.toDouble())
+                            onSettingsChanged(newSettings)
+                            saveSettings(newSettings)
+                        },
+                        valueRange = 5f..40f,
+                        steps = 7
+                    )
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Switch(
+                            checked = currentSettings.autoStopFromPeak,
+                            onCheckedChange = { checked ->
+                                val newSettings = currentSettings.copy(autoStopFromPeak = checked)
+                                onSettingsChanged(newSettings)
+                                saveSettings(newSettings)
+                            }
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            if (currentSettings.autoStopFromPeak) "От пика (макс. с добавления)" else "От цены входа",
+                            fontSize = 12.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+            }
+        }
+
+        Spacer(modifier = Modifier.height(16.dp))
+
 // 5. Максимальное количество токенов
         Card(
             modifier = Modifier.fillMaxWidth(),
@@ -681,6 +757,18 @@ fun FilterScreen(
                     Text("Повторов после TP/SL:", fontSize = 12.sp)
                     Text(
                         "${currentSettings.maxReentriesAfterClose}",
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Text("Авто-стоп при падении:", fontSize = 12.sp)
+                    Text(
+                        if (currentSettings.autoStopEnabled) "${currentSettings.autoStopDropPercent.toInt()}% от ${if (currentSettings.autoStopFromPeak) "пика" else "входа"}" else "выкл",
                         fontSize = 12.sp,
                         fontWeight = FontWeight.Bold
                     )

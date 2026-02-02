@@ -14,6 +14,7 @@ import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
@@ -107,6 +108,8 @@ class SolanaRpcClient(
                 val base64Data = data[0]
                 return parseSplMintFromBase64(base64Data)
 
+            } catch (e: CancellationException) {
+                throw e
             } catch (e: Exception) {
                 println("❌ Ошибка получения SPL Mint для $mintAddress: ${e.message}")
                 null
@@ -281,6 +284,8 @@ class SolanaRpcClient(
                 val responseText = response.bodyAsText()
                 return json.decodeFromString<RpcResponse>(responseText)
 
+            } catch (e: CancellationException) {
+                throw e
             } catch (e: Exception) {
                 println("⚠️ Ошибка RPC запроса: ${e.message}")
                 attempt++

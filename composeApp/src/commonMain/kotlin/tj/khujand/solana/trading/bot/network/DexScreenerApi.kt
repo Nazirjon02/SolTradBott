@@ -17,6 +17,7 @@ import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.decodeFromJsonElement
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
@@ -133,7 +134,12 @@ data class FilterSettings(
     val cooldownMinutes: Int = 180,
 
     // Сколько раз один и тот же токен можно снова добавить в мониторинг после TP/SL. 0 = только один раз (после закрытия больше не добавлять), 1 = один повтор, 2 = два повтора и т.д.
-    val maxReentriesAfterClose: Int = 1
+    val maxReentriesAfterClose: Int = 1,
+
+    // Авто-стоп при резком падении: закрыть как по кнопке Profit (фиксация убытка)
+    val autoStopEnabled: Boolean = true,
+    val autoStopDropPercent: Double = 15.0,   // падение на X% от пика или от входа
+    val autoStopFromPeak: Boolean = true      // true = от максимума с момента добавления, false = от цены входа
 )
 
 // API КЛИЕНТ
@@ -247,6 +253,8 @@ class DexScreenerApi {
             // Сортируем по времени создания (самые новые первыми)
             return limited.sortedByDescending { it.pairCreatedAt ?: 0L }
 
+        } catch (e: CancellationException) {
+            throw e
         } catch (e: Exception) {
             println("❌ Ошибка получения токенов: ${e.message}")
             e.printStackTrace()
@@ -271,6 +279,8 @@ class DexScreenerApi {
                 println("✅ Информация получена: ${it.baseToken?.symbol}")
             }
 
+        } catch (e: CancellationException) {
+            throw e
         } catch (e: Exception) {
             println("❌ Ошибка получения деталей токена: ${e.message}")
             null
@@ -289,6 +299,8 @@ class DexScreenerApi {
                 println("📈 Цена обновлена: ${it.baseToken?.symbol} -> $${it.priceUsd}")
             }
             updated
+        } catch (e: CancellationException) {
+            throw e
         } catch (e: Exception) {
             println("⚠️ Ошибка обновления цены: ${e.message}")
             null
@@ -356,6 +368,8 @@ class DexScreenerApi {
                     println("📊 Получено пар для '$query': ${filteredByChain.size}")
                     searchTokens.addAll(filteredByChain)
                 }
+            } catch (e: CancellationException) {
+                throw e
             } catch (e: Exception) {
                 println("⚠️ Ошибка при поиске '$query': ${e.message}")
             }
@@ -386,6 +400,8 @@ class DexScreenerApi {
                         val tokenPairs = getTokenPairsForAddress("solana", tokenAddress)
                         delay(minRequestDelayMs) // Задержка для rate limiting
                         tokenPairs
+                    } catch (e: CancellationException) {
+                        throw e
                     } catch (e: Exception) {
                         println("⚠️ Ошибка получения пар для $tokenAddress: ${e.message}")
                         emptyList()
@@ -418,6 +434,8 @@ class DexScreenerApi {
                         val tokenPairs = getTokenPairsForAddress(chainId, tokenAddress)
                         delay(minRequestDelayMs) // Задержка для rate limiting
                         tokenPairs
+                    } catch (e: CancellationException) {
+                        throw e
                     } catch (e: Exception) {
                         println("⚠️ Ошибка получения пар для $chainId/$tokenAddress: ${e.message}")
                         emptyList()
@@ -461,6 +479,8 @@ class DexScreenerApi {
                 }
 
                 return response.body()
+            } catch (e: CancellationException) {
+                throw e
             } catch (e: Exception) {
                 val errorMessage = e.message ?: "Unknown error"
                 val isNetworkError = errorMessage.contains("Unable to resolve", ignoreCase = true) ||
