@@ -33,6 +33,7 @@ import tj.khujand.solana.trading.bot.ServiceController
 import tj.khujand.solana.trading.bot.createServiceController
 import tj.khujand.solana.trading.bot.data.FilterSettingsManager
 import tj.khujand.solana.trading.bot.util.AppSettings
+import tj.khujand.solana.trading.bot.domain.DemoAccountManager
 import tj.khujand.solana.trading.bot.domain.MonitoredToken
 import tj.khujand.solana.trading.bot.domain.TokenMonitor
 import tj.khujand.solana.trading.bot.domain.TokenStatus
@@ -56,7 +57,12 @@ fun MainScreen() {
     var showFilterSettings by remember { mutableStateOf(false) }
     var showProfitLoss by remember { mutableStateOf(false) }
     var isRequesting by remember { mutableStateOf(false) }
+    var demoBalance by remember { mutableStateOf(DemoAccountManager.getBalance()) }
     val scope = rememberCoroutineScope()
+
+    fun refreshDemoBalance() {
+        demoBalance = DemoAccountManager.getBalance()
+    }
 
     // Обновляем настройки в мониторе при изменении
     LaunchedEffect(currentSettings) {
@@ -66,6 +72,7 @@ fun MainScreen() {
     LaunchedEffect(Unit) {
         tokenMonitor.restoreFromCache()
         monitoredTokens = tokenMonitor.monitoredTokens.toList()
+        refreshDemoBalance()
         // На Android: восстанавливаем флаг "мониторинг активен" (сервис в бекграунде)
         if (isAndroid()) {
             isMonitoring = AppSettings.getBooleanSafe(AppSettings.KEY_MONITORING_ACTIVE, false)
@@ -74,8 +81,14 @@ fun MainScreen() {
             if (monitoredTokens.isNotEmpty()) {
                 tokenMonitor.startMonitoring(
                     intervalSeconds = 10,
-                    onNewTokenFound = { monitoredTokens = tokenMonitor.monitoredTokens.toList() },
-                    onTokenUpdated = { monitoredTokens = tokenMonitor.monitoredTokens.toList() },
+                    onNewTokenFound = {
+                        monitoredTokens = tokenMonitor.monitoredTokens.toList()
+                        refreshDemoBalance()
+                    },
+                    onTokenUpdated = {
+                        monitoredTokens = tokenMonitor.monitoredTokens.toList()
+                        refreshDemoBalance()
+                    },
                     onRequestStateChanged = { isRequesting = it },
                     onError = { println("Ошибка: $it") }
                 )
@@ -91,6 +104,7 @@ fun MainScreen() {
             delay(2000)
             tokenMonitor.restoreFromCache()
             monitoredTokens = tokenMonitor.monitoredTokens.toList()
+            refreshDemoBalance()
             isRequesting = AppSettings.getBooleanSafe(AppSettings.KEY_REQUEST_IN_PROGRESS, false)
         }
     }
@@ -117,8 +131,14 @@ fun MainScreen() {
             scope.launch {
                 tokenMonitor.startMonitoring(
                     intervalSeconds = 10,
-                    onNewTokenFound = { monitoredTokens = tokenMonitor.monitoredTokens.toList() },
-                    onTokenUpdated = { monitoredTokens = tokenMonitor.monitoredTokens.toList() },
+                    onNewTokenFound = {
+                        monitoredTokens = tokenMonitor.monitoredTokens.toList()
+                        refreshDemoBalance()
+                    },
+                    onTokenUpdated = {
+                        monitoredTokens = tokenMonitor.monitoredTokens.toList()
+                        refreshDemoBalance()
+                    },
                     onRequestStateChanged = { isRequesting = it },
                     onError = { println("Ошибка: $it") }
                 )
@@ -134,6 +154,7 @@ fun MainScreen() {
         }
         tokenMonitor.clearAllTokens()
         monitoredTokens = emptyList()
+        refreshDemoBalance()
     }
 
 
@@ -150,8 +171,14 @@ fun MainScreen() {
                     tokenMonitor.filterSettings = newSettings
                     tokenMonitor.startMonitoring(
                         intervalSeconds = 10,
-                        onNewTokenFound = { monitoredTokens = tokenMonitor.monitoredTokens.toList() },
-                        onTokenUpdated = { monitoredTokens = tokenMonitor.monitoredTokens.toList() },
+                        onNewTokenFound = {
+                            monitoredTokens = tokenMonitor.monitoredTokens.toList()
+                            refreshDemoBalance()
+                        },
+                        onTokenUpdated = {
+                            monitoredTokens = tokenMonitor.monitoredTokens.toList()
+                            refreshDemoBalance()
+                        },
                         onRequestStateChanged = { isRequesting = it },
                         onError = { println("Ошибка: $it") }
                     )
@@ -171,9 +198,13 @@ fun MainScreen() {
             onSettingsChanged = { newSettings ->
                 currentSettings = newSettings
             },
+            onTestSwap = {
+                tokenMonitor.testSwap()
+            },
             onClose = {
                 showFilterSettings = false
                 updateSettings(currentSettings)
+                refreshDemoBalance()
             }
         )
     } else {
@@ -228,6 +259,12 @@ fun MainScreen() {
                             fontSize = 14.sp,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                             modifier = Modifier.padding(top = 5.dp)
+                        )
+                        Text(
+                            "Demo balance: $${formatDemoBalance(demoBalance)}",
+                            fontSize = 12.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(top = 4.dp)
                         )
                     }
 
@@ -359,6 +396,7 @@ fun MainScreen() {
                         }
 
                     }
+
                 }
             }
 
@@ -416,6 +454,7 @@ fun MainScreen() {
                             onCloseToken = { pairAddress, isProfit ->
                                 tokenMonitor.closeTokenManually(pairAddress, isProfit)
                                 monitoredTokens = tokenMonitor.monitoredTokens.toList()
+                                refreshDemoBalance()
                             }
                         )
                     }
@@ -454,6 +493,18 @@ fun MainScreen() {
                 }
             }
         }
+    }
+}
+
+private fun formatDemoBalance(value: Double): String {
+    val factor = 100.0
+    val rounded = round(value * factor) / factor
+    val parts = rounded.toString().split('.')
+    return if (parts.size == 1) {
+        "$rounded.00"
+    } else {
+        val decimalPart = parts[1].padEnd(2, '0').take(2)
+        "${parts[0]}.$decimalPart"
     }
 }
 

@@ -299,6 +299,103 @@ class SolanaRpcClient(
         return null
     }
 
+    suspend fun getBalanceLamports(publicKey: String): Long? {
+        return semaphore.withPermit {
+            try {
+                val requestJson = """
+                {
+                    "jsonrpc": "2.0",
+                    "id": 1,
+                    "method": "getBalance",
+                    "params": [
+                        "$publicKey",
+                        { "commitment": "confirmed" }
+                    ]
+                }
+                """.trimIndent()
+
+                val response = client.post(rpcUrl) {
+                    contentType(ContentType.Application.Json)
+                    setBody(requestJson)
+                }
+
+                val status = response.status
+                if (status.value == 429 || status.value >= 500) {
+                    println("⏳ RPC getBalance error ${status.value}")
+                    return@withPermit null
+                }
+
+                if (!status.isSuccess()) {
+                    println("⚠️ RPC getBalance HTTP ${status.value}")
+                    return@withPermit null
+                }
+
+                val responseText = response.bodyAsText()
+                val jsonElement = json.parseToJsonElement(responseText)
+                val value = jsonElement.jsonObject["result"]
+                    ?.jsonObject
+                    ?.get("value")
+                    ?.jsonPrimitive
+                    ?.content
+                    ?.toLongOrNull()
+                value
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                println("⚠️ getBalance error: ${e.message}")
+                null
+            }
+        }
+    }
+
+    suspend fun sendTransaction(base64Tx: String): String? {
+        return semaphore.withPermit {
+            try {
+                val requestJson = """
+                {
+                    "jsonrpc": "2.0",
+                    "id": 1,
+                    "method": "sendTransaction",
+                    "params": [
+                        "$base64Tx",
+                        {
+                            "encoding": "base64",
+                            "skipPreflight": false,
+                            "commitment": "confirmed"
+                        }
+                    ]
+                }
+                """.trimIndent()
+
+                val response = client.post(rpcUrl) {
+                    contentType(ContentType.Application.Json)
+                    setBody(requestJson)
+                }
+
+                val status = response.status
+                if (status.value == 429 || status.value >= 500) {
+                    println("⏳ RPC sendTransaction error ${status.value}")
+                    return@withPermit null
+                }
+
+                if (!status.isSuccess()) {
+                    println("⚠️ RPC sendTransaction HTTP ${status.value}")
+                    return@withPermit null
+                }
+
+                val responseText = response.bodyAsText()
+                val jsonElement = json.parseToJsonElement(responseText)
+                val result = jsonElement.jsonObject["result"]?.jsonPrimitive?.content
+                result
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                println("⚠️ sendTransaction error: ${e.message}")
+                null
+            }
+        }
+    }
+
     fun close() {
         client.close()
     }

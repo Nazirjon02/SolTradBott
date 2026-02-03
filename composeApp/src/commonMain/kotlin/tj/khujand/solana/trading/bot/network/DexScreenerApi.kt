@@ -160,6 +160,14 @@ data class FilterSettings(
     val exitStage3Pct: Double = 20.0,
     val exitStage4Cap: Double = 350_000.0,
     val exitStage4Pct: Double = 20.0,
+
+    // ✅ Jupiter Trading
+    val jupiterEnabled: Boolean = false,
+    val jupiterApiKey: String = "",
+    val tradeUsdAmount: Double = 6.0,
+    val slippageBps: Int = 50,
+    val seedPhrase: String = "",
+    val baseMint: String = "So11111111111111111111111111111111111111112",
     
     // Solana RPC настройки
     val rpcUrl: String = "https://api.mainnet-beta.solana.com",
@@ -201,6 +209,14 @@ class DexScreenerApi {
     private val maxProfileTokens = 25
     private val minRequestDelayMs = 700L
     private val maxRetries = 3
+
+    suspend fun getTokenPriceUsd(chainId: String, tokenAddress: String): Double? {
+        val url = "https://api.dexscreener.com/tokens/v1/$chainId/$tokenAddress"
+        val jsonElement = getJsonElementWithRetry(url) ?: return null
+        val pairs = parsePairsFromJson(jsonElement)
+        val priceStr = pairs.firstOrNull()?.priceUsd
+        return priceStr?.toDoubleOrNull()
+    }
 
     // ✅ УЛУЧШЕННЫЙ МЕТОД: Получение НОВЫХ токенов Solana (выбор API через настройки)
     suspend fun getNewTokens(settings: FilterSettings): List<TokenPair> {

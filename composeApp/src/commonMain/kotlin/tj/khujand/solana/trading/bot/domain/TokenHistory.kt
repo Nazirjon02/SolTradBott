@@ -32,7 +32,6 @@ data class TokenHistory(
  */
 object TokenHistoryManager {
     private const val KEY_HISTORY = "token_history_v1"
-    private const val DEFAULT_INVESTMENT_USD = 100.0
     
     /**
      * Сохранить токен в историю
@@ -121,14 +120,14 @@ object TokenHistoryManager {
         stageLabel: String,
         percent: Double,
         marketCap: Double,
-        exitPrice: Double
+        exitPrice: Double,
+        profitUsd: Double
     ) {
         if (percent <= 0) return
 
         val now = kotlin.time.Clock.System.now().toEpochMilliseconds()
         val priceChangePercent =
             if (token.entryPrice > 0) ((exitPrice - token.entryPrice) / token.entryPrice) * 100 else 0.0
-        val profitUsd = DEFAULT_INVESTMENT_USD * (percent / 100.0) * (priceChangePercent / 100.0)
 
         val history = TokenHistory(
             tokenPair = token.tokenPair,

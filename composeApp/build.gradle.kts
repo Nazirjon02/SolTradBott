@@ -36,6 +36,8 @@ kotlin {
             implementation(libs.compose.uiToolingPreview)
             implementation(libs.androidx.activity.compose)
             implementation(libs.ktor.client.okhttp)
+            implementation(libs.eddsa)
+            implementation(libs.kotlin.bip39.jvm)
 
         }
         commonMain.dependencies {
@@ -78,6 +80,8 @@ kotlin {
             implementation(libs.kotlinx.coroutinesSwing)
             implementation(libs.ktor.client.okhttp) // для desktop
             implementation(libs.logback.classic) // Добавьте эту строку
+            implementation(libs.eddsa)
+            implementation(libs.kotlin.bip39.jvm)
 
         }
 

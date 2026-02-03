@@ -8,6 +8,10 @@ import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.sync.withPermit
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.json.jsonPrimitive
+import tj.khujand.solana.trading.bot.crypto.Signer
+import tj.khujand.solana.trading.bot.crypto.createSignerFromSeedPhrase
+import tj.khujand.solana.trading.bot.crypto.signTransactionBase64
 import tj.khujand.solana.trading.bot.network.*
 import tj.khujand.solana.trading.bot.util.AppSettings
 import kotlin.time.Clock
@@ -29,11 +33,16 @@ data class MonitoredToken(
     var entryMarketCap: Double = 0.0,
     var peakMarketCap: Double = 0.0,
     var lastMarketCap: Double = 0.0,
+    var tokenAmountRaw: Long = 0L,
+    var buyTxId: String = "",
+    var buySolLamports: Long = 0L,
+    var realizedProfitUsd: Double = 0.0,
     var remainingPositionPct: Double = 100.0,
     var exitStage1Done: Boolean = false,
     var exitStage2Done: Boolean = false,
     var exitStage3Done: Boolean = false,
-    var exitStage4Done: Boolean = false
+    var exitStage4Done: Boolean = false,
+    var demoBuyApplied: Boolean = false
 )
 
 @Serializable
@@ -50,12 +59,16 @@ class TokenMonitor {
     private var allowNewTokenDiscovery = true  // 🔴 Добавляем флаг
 
     private val api = DexScreenerApi()
+    private val jupiterApi = JupiterApi()
     private var monitorJob: Job? = null
     private var isMonitoring = false
     private val maxParallelUpdates = 2
     private val updateSemaphore = Semaphore(maxParallelUpdates)
     private val listMutex = Mutex()
     private val closedTokenAddresses = mutableSetOf<String>()
+    private var rpcClient: SolanaRpcClient? = null
+    private var cachedSigner: Signer? = null
+    private val usdcMint = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"
 
     // Список отслеживаемых токенов
     private val _monitoredTokens = mutableStateListOf<MonitoredToken>()
@@ -159,6 +172,13 @@ class TokenMonitor {
                                 val price = parsePrice(token.priceUsd)
                                 if (price > 0) {
                                     val entryCap = token.marketCap ?: 0.0
+                                    val buyResult = if (filterSettings.jupiterEnabled) {
+                                        buyTokenIfEnabled(token)
+                                    } else null
+                                    if (filterSettings.jupiterEnabled && buyResult == null) {
+                                        println("⚠️ Покупка через Jupiter не удалась: ${token.baseToken?.symbol}")
+                                        continue
+                                    }
                                     val monitoredToken = MonitoredToken(
                                         tokenPair = token,
                                         entryPrice = price,
@@ -168,8 +188,16 @@ class TokenMonitor {
                                         entryMarketCap = entryCap,
                                         peakMarketCap = entryCap,
                                         lastMarketCap = token.marketCap ?: 0.0,
-                                        remainingPositionPct = 100.0
+                                        tokenAmountRaw = buyResult?.outAmountRaw ?: 0L,
+                                        buyTxId = buyResult?.txId ?: "",
+                                        buySolLamports = buyResult?.inLamports ?: 0L,
+                                        remainingPositionPct = 100.0,
+                                        demoBuyApplied = !filterSettings.jupiterEnabled
                                     )
+
+                                    if (!filterSettings.jupiterEnabled) {
+                                        DemoAccountManager.applyDemoBuy()
+                                    }
 
                                     _monitoredTokens.add(monitoredToken)
                                     onNewTokenFound(monitoredToken)
@@ -431,6 +459,9 @@ class TokenMonitor {
     }
 
     private fun addClosedToken(token: MonitoredToken, skipHistory: Boolean = false) {
+        if (token.demoBuyApplied) {
+            DemoAccountManager.applyProfitLoss(token.profitUsd)
+        }
         if (!skipHistory) {
             TokenHistoryManager.saveToHistory(token)
         }
@@ -486,6 +517,160 @@ class TokenMonitor {
     private fun getPairCreatedAtMs(pairCreatedAt: Long?): Long? {
         if (pairCreatedAt == null || pairCreatedAt <= 0) return null
         return if (pairCreatedAt < 1_000_000_000_000L) pairCreatedAt * 1000 else pairCreatedAt
+    }
+
+    private data class BuyResult(
+        val outAmountRaw: Long,
+        val inLamports: Long,
+        val txId: String
+    )
+
+    private data class SellResult(
+        val outLamports: Long,
+        val profitUsd: Double
+    )
+
+    private fun getSigner(): Signer? {
+        val phrase = filterSettings.seedPhrase.trim()
+        if (phrase.isBlank()) return null
+        val words = phrase.split("\\s+".toRegex()).filter { it.isNotBlank() }
+        if (words.size != 12 && words.size != 24) return null
+        if (cachedSigner == null) {
+            cachedSigner = try {
+                createSignerFromSeedPhrase(phrase)
+            } catch (e: Exception) {
+                println("❌ Signer error: ${e.message}")
+                null
+            }
+        }
+        return cachedSigner
+    }
+
+    private fun getRpcClient(): SolanaRpcClient {
+        val current = rpcClient
+        return if (current == null) {
+            SolanaRpcClient(
+                rpcUrl = filterSettings.rpcUrl,
+                timeoutSeconds = filterSettings.rpcTimeoutSeconds
+            ).also { rpcClient = it }
+        } else current
+    }
+
+    private suspend fun buyTokenIfEnabled(token: TokenPair): BuyResult? {
+        if (!filterSettings.jupiterEnabled) return null
+        val signer = getSigner() ?: run {
+            println("❌ Jupiter buy: seed phrase empty or invalid")
+            return null
+        }
+        val outputMint = token.baseToken?.address ?: return null
+        val solPriceUsd = getSolPriceUsdWithFallback() ?: return null
+        val solAmount = filterSettings.tradeUsdAmount / solPriceUsd
+        val lamports = (solAmount * 1_000_000_000L).toLong().coerceAtLeast(1L)
+        val balance = getRpcClient().getBalanceLamports(signer.publicKeyBase58()) ?: 0L
+        val feeBuffer = 5000L
+        if (balance < lamports + feeBuffer) {
+            println("⚠️ Недостаточно SOL: balance=$balance, need=${lamports + feeBuffer}")
+            return null
+        }
+
+        val quote = jupiterApi.getQuote(
+            inputMint = filterSettings.baseMint,
+            outputMint = outputMint,
+            amount = lamports,
+            slippageBps = filterSettings.slippageBps,
+            apiKey = filterSettings.jupiterApiKey
+        ) ?: return null
+
+        val swap = jupiterApi.getSwap(quote, signer.publicKeyBase58(), filterSettings.jupiterApiKey) ?: return null
+        val unsignedTx = swap.swapTransaction ?: return null
+        val signedTx = signTransactionBase64(unsignedTx, signer) ?: return null
+        val txId = getRpcClient().sendTransaction(signedTx) ?: return null
+
+        val outAmountStr = quote["outAmount"]?.jsonPrimitive?.content
+        val inAmountStr = quote["inAmount"]?.jsonPrimitive?.content
+        val outAmount = outAmountStr?.toLongOrNull() ?: 0L
+        val inAmount = inAmountStr?.toLongOrNull() ?: lamports
+        println("✅ Jupiter buy: in=${inAmount} lamports, out=${outAmount} raw, mint=${outputMint}")
+        return BuyResult(outAmountRaw = outAmount, inLamports = inAmount, txId = txId)
+    }
+
+    private suspend fun sellTokenPercent(
+        token: MonitoredToken,
+        amountBase: Long,
+        percent: Double,
+        marketCap: Double
+    ): SellResult? {
+        if (!filterSettings.jupiterEnabled) return null
+        if (percent <= 0) return null
+        val signer = getSigner() ?: run {
+            println("❌ Jupiter sell: seed phrase empty or invalid")
+            return null
+        }
+        val inputMint = token.tokenPair.baseToken?.address ?: return null
+        val sellAmount = (amountBase * (percent / 100.0)).toLong().coerceAtLeast(1L)
+
+        val quote = jupiterApi.getQuote(
+            inputMint = inputMint,
+            outputMint = filterSettings.baseMint,
+            amount = sellAmount,
+            slippageBps = filterSettings.slippageBps,
+            apiKey = filterSettings.jupiterApiKey
+        ) ?: return null
+
+        val swap = jupiterApi.getSwap(quote, signer.publicKeyBase58(), filterSettings.jupiterApiKey) ?: return null
+        val unsignedTx = swap.swapTransaction ?: return null
+        val signedTx = signTransactionBase64(unsignedTx, signer) ?: return null
+        val txId = getRpcClient().sendTransaction(signedTx) ?: return null
+
+        val outAmountStr = quote["outAmount"]?.jsonPrimitive?.content
+        val outAmount = outAmountStr?.toLongOrNull() ?: 0L
+        val solPrice = getSolPriceUsdWithFallback() ?: 0.0
+        val costLamports = (token.buySolLamports * (percent / 100.0)).toLong()
+        val profitUsd = ((outAmount - costLamports).toDouble() / 1_000_000_000.0) * solPrice
+
+        println("✅ Jupiter sell: in=${sellAmount} raw, out=${outAmount} lamports, tx=$txId (${percent.toInt()}%)")
+        return SellResult(outLamports = outAmount, profitUsd = profitUsd)
+    }
+
+    suspend fun testSwap(): String {
+        if (!filterSettings.jupiterEnabled) return "Jupiter trading is OFF"
+        val signer = getSigner() ?: return "Seed phrase invalid or empty"
+        val solPriceUsd = getSolPriceUsdWithFallback() ?: return "Failed to fetch SOL price"
+        val solAmount = filterSettings.tradeUsdAmount / solPriceUsd
+        val lamports = (solAmount * 1_000_000_000L).toLong().coerceAtLeast(1L)
+        val balance = getRpcClient().getBalanceLamports(signer.publicKeyBase58()) ?: 0L
+        if (balance < lamports + 5000L) return "Insufficient SOL balance"
+
+        val quoteResult = jupiterApi.getQuoteDebug(
+            inputMint = filterSettings.baseMint,
+            outputMint = usdcMint,
+            amount = lamports,
+            slippageBps = filterSettings.slippageBps,
+            apiKey = filterSettings.jupiterApiKey
+        )
+        val quote = quoteResult.quote ?: return "Quote failed: ${quoteResult.error ?: "Unknown error"} (amount=${lamports}, slippageBps=${filterSettings.slippageBps})"
+
+        val swap = jupiterApi.getSwap(quote, signer.publicKeyBase58(), filterSettings.jupiterApiKey) ?: return "Swap build failed"
+        val unsignedTx = swap.swapTransaction ?: return "Swap transaction empty"
+        val signedTx = signTransactionBase64(unsignedTx, signer) ?: return "Sign failed"
+        val txId = getRpcClient().sendTransaction(signedTx) ?: return "Send failed"
+
+        return "Test swap sent: $txId"
+    }
+
+    private suspend fun getSolPriceUsdWithFallback(): Double? {
+        val jupPrice = jupiterApi.getSolPriceUsd(filterSettings.jupiterApiKey)
+        if (jupPrice != null) return jupPrice
+
+        val dexPrice = api.getTokenPriceUsd("solana", filterSettings.baseMint)
+        if (dexPrice != null) {
+            println("⚠️ Jupiter price failed, using DexScreener price")
+            return dexPrice
+        }
+
+        val fallback = 100.0
+        println("⚠️ Jupiter & Dex price failed, using fixed SOL price=$fallback")
+        return fallback
     }
 
     // ⏰ Проверка возраста токена
@@ -578,51 +763,88 @@ class TokenMonitor {
         val priceChangePercent =
             if (entry > 0) ((newPrice - entry) / entry) * 100 else 0.0
 
-        val investment = 100.0
-        val profitUsd = investment * priceChangePercent / 100
+        val investment = DemoAccountManager.DEMO_TRADE_AMOUNT
+        val priceBasedProfitUsd = investment * priceChangePercent / 100
 
         val marketCap = updatedPair.marketCap ?: token.lastMarketCap
         var remainingPct = token.remainingPositionPct
+        var tokenAmountRaw = token.tokenAmountRaw
         var stage1Done = token.exitStage1Done
         var stage2Done = token.exitStage2Done
         var stage3Done = token.exitStage3Done
         var stage4Done = token.exitStage4Done
+        var realizedProfitUsd = token.realizedProfitUsd
         val entryCap = token.entryMarketCap
         val newPeakMarketCap = if (marketCap > token.peakMarketCap) marketCap else token.peakMarketCap
 
         if (!stage1Done && marketCap >= filterSettings.exitStage1Cap) {
-            remainingPct -= filterSettings.exitStage1Pct
-            stage1Done = true
-            println("✅ Этап 1: фиксация ${filterSettings.exitStage1Pct.toInt()}% при Market Cap ${filterSettings.exitStage1Cap.toInt()}")
-            TokenHistoryManager.savePartialExit(token, "Stage 1", filterSettings.exitStage1Pct, marketCap, newPrice)
+            val pct = filterSettings.exitStage1Pct
+            val sellResult = if (filterSettings.jupiterEnabled) {
+                sellTokenPercent(token, tokenAmountRaw, pct, marketCap)
+            } else null
+            if (!filterSettings.jupiterEnabled || sellResult != null) {
+                remainingPct -= pct
+                tokenAmountRaw = (tokenAmountRaw - (tokenAmountRaw * (pct / 100.0)).toLong()).coerceAtLeast(0L)
+                stage1Done = true
+                println("✅ Этап 1: фиксация ${pct.toInt()}% при Market Cap ${filterSettings.exitStage1Cap.toInt()}")
+                val partialProfitUsd = sellResult?.profitUsd ?: (priceBasedProfitUsd * (pct / 100.0))
+                TokenHistoryManager.savePartialExit(token, "Stage 1", pct, marketCap, newPrice, partialProfitUsd)
+                if (sellResult != null) realizedProfitUsd += sellResult.profitUsd
+            }
         }
         if (!stage2Done && marketCap >= filterSettings.exitStage2Cap) {
-            remainingPct -= filterSettings.exitStage2Pct
-            stage2Done = true
-            println("✅ Этап 2: фиксация ${filterSettings.exitStage2Pct.toInt()}% при Market Cap ${filterSettings.exitStage2Cap.toInt()}")
-            TokenHistoryManager.savePartialExit(token, "Stage 2", filterSettings.exitStage2Pct, marketCap, newPrice)
+            val pct = filterSettings.exitStage2Pct
+            val sellResult = if (filterSettings.jupiterEnabled) {
+                sellTokenPercent(token, tokenAmountRaw, pct, marketCap)
+            } else null
+            if (!filterSettings.jupiterEnabled || sellResult != null) {
+                remainingPct -= pct
+                tokenAmountRaw = (tokenAmountRaw - (tokenAmountRaw * (pct / 100.0)).toLong()).coerceAtLeast(0L)
+                stage2Done = true
+                println("✅ Этап 2: фиксация ${pct.toInt()}% при Market Cap ${filterSettings.exitStage2Cap.toInt()}")
+                val partialProfitUsd = sellResult?.profitUsd ?: (priceBasedProfitUsd * (pct / 100.0))
+                TokenHistoryManager.savePartialExit(token, "Stage 2", pct, marketCap, newPrice, partialProfitUsd)
+                if (sellResult != null) realizedProfitUsd += sellResult.profitUsd
+            }
         }
         if (!stage3Done && marketCap >= filterSettings.exitStage3Cap) {
-            remainingPct -= filterSettings.exitStage3Pct
-            stage3Done = true
-            println("✅ Этап 3: фиксация ${filterSettings.exitStage3Pct.toInt()}% при Market Cap ${filterSettings.exitStage3Cap.toInt()}")
-            TokenHistoryManager.savePartialExit(token, "Stage 3", filterSettings.exitStage3Pct, marketCap, newPrice)
+            val pct = filterSettings.exitStage3Pct
+            val sellResult = if (filterSettings.jupiterEnabled) {
+                sellTokenPercent(token, tokenAmountRaw, pct, marketCap)
+            } else null
+            if (!filterSettings.jupiterEnabled || sellResult != null) {
+                remainingPct -= pct
+                tokenAmountRaw = (tokenAmountRaw - (tokenAmountRaw * (pct / 100.0)).toLong()).coerceAtLeast(0L)
+                stage3Done = true
+                println("✅ Этап 3: фиксация ${pct.toInt()}% при Market Cap ${filterSettings.exitStage3Cap.toInt()}")
+                val partialProfitUsd = sellResult?.profitUsd ?: (priceBasedProfitUsd * (pct / 100.0))
+                TokenHistoryManager.savePartialExit(token, "Stage 3", pct, marketCap, newPrice, partialProfitUsd)
+                if (sellResult != null) realizedProfitUsd += sellResult.profitUsd
+            }
         }
         if (!stage4Done && marketCap >= filterSettings.exitStage4Cap) {
-            remainingPct -= filterSettings.exitStage4Pct
-            stage4Done = true
-            println("✅ Этап 4: фиксация ${filterSettings.exitStage4Pct.toInt()}% при Market Cap ${filterSettings.exitStage4Cap.toInt()}")
-            TokenHistoryManager.savePartialExit(token, "Stage 4", filterSettings.exitStage4Pct, marketCap, newPrice)
+            val pct = filterSettings.exitStage4Pct
+            val sellResult = if (filterSettings.jupiterEnabled) {
+                sellTokenPercent(token, tokenAmountRaw, pct, marketCap)
+            } else null
+            if (!filterSettings.jupiterEnabled || sellResult != null) {
+                remainingPct -= pct
+                tokenAmountRaw = (tokenAmountRaw - (tokenAmountRaw * (pct / 100.0)).toLong()).coerceAtLeast(0L)
+                stage4Done = true
+                println("✅ Этап 4: фиксация ${pct.toInt()}% при Market Cap ${filterSettings.exitStage4Cap.toInt()}")
+                val partialProfitUsd = sellResult?.profitUsd ?: (priceBasedProfitUsd * (pct / 100.0))
+                TokenHistoryManager.savePartialExit(token, "Stage 4", pct, marketCap, newPrice, partialProfitUsd)
+                if (sellResult != null) realizedProfitUsd += sellResult.profitUsd
+            }
         }
 
         if (remainingPct < 0) remainingPct = 0.0
 
-        val trailingEnabled = stage2Done || marketCap >= filterSettings.exitStage2Cap
+        val trailingEnabled = stage1Done || marketCap >= filterSettings.exitStage1Cap
         val forcedExitByStopLoss = entryCap > 0 && marketCap <= entryCap * 0.70
-        val forcedExitByBreakEven = stage1Done && entryCap > 0 && marketCap < entryCap
-        val forcedExitByTrailing = trailingEnabled && newPeakMarketCap > 0 && marketCap <= newPeakMarketCap * 0.80
+        val forcedExitByTrailing = trailingEnabled && newPeakMarketCap > 0 && marketCap <= newPeakMarketCap * 0.65
 
-        val forcedExit = forcedExitByStopLoss || forcedExitByBreakEven || forcedExitByTrailing
+        val forcedExit = forcedExitByStopLoss || forcedExitByTrailing
         val closedByStage4 = stage4Done || remainingPct <= 0.0
 
         val newStatus = when {
@@ -632,11 +854,18 @@ class TokenMonitor {
         }
 
         if (forcedExit) {
+            val percentToSell = remainingPct.coerceAtMost(100.0)
+            if (filterSettings.jupiterEnabled && tokenAmountRaw > 0) {
+                val sellResult = sellTokenPercent(token, tokenAmountRaw, percentToSell, marketCap)
+                if (sellResult != null) {
+                    realizedProfitUsd += sellResult.profitUsd
+                    tokenAmountRaw = 0L
+                }
+            }
             remainingPct = 0.0
             when {
                 forcedExitByStopLoss -> println("🛑 Forced exit: -30% от входной капы")
-                forcedExitByBreakEven -> println("🛑 Forced exit: Break-even после Stage 1")
-                forcedExitByTrailing -> println("🛑 Forced exit: -20% от локального максимума")
+                forcedExitByTrailing -> println("🛑 Forced exit: -35% от локального максимума")
             }
         }
 
@@ -644,11 +873,13 @@ class TokenMonitor {
             tokenPair = updatedPair,
             currentPrice = newPrice.toString(),
             priceChangePercent = priceChangePercent,
-            profitUsd = profitUsd,
+            profitUsd = if (filterSettings.jupiterEnabled) realizedProfitUsd else priceBasedProfitUsd,
             status = newStatus,
             sessionHighPrice = newSessionHigh,
             peakMarketCap = newPeakMarketCap,
             lastMarketCap = marketCap,
+            tokenAmountRaw = tokenAmountRaw,
+            realizedProfitUsd = realizedProfitUsd,
             remainingPositionPct = remainingPct,
             exitStage1Done = stage1Done,
             exitStage2Done = stage2Done,
@@ -742,6 +973,8 @@ class TokenMonitor {
     fun close() {
         stopMonitoring()
         api.close()
+        jupiterApi.close()
+        rpcClient?.close()
         println("🔌 Ресурсы закрыты")
     }
 }

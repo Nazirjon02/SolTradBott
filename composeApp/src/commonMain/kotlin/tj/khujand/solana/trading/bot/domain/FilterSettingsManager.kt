@@ -114,6 +114,13 @@ object FilterSettingsManager {
             exitStage3Pct = 20.0,
             exitStage4Cap = 350_000.0,
             exitStage4Pct = 20.0,
+            // Jupiter Trading
+            jupiterEnabled = false,
+            jupiterApiKey = "",
+            tradeUsdAmount = 6.0,
+            slippageBps = 50,
+            seedPhrase = "",
+            baseMint = "So11111111111111111111111111111111111111112",
             rpcUrl = "https://api.mainnet-beta.solana.com",
             rpcTimeoutSeconds = 12,
             useTokenBoostsApi = true // По умолчанию используем token-boosts
