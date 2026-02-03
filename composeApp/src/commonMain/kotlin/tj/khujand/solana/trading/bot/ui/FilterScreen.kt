@@ -154,8 +154,8 @@ fun FilterScreen(
                         val newSettings = currentSettings.copy(entryMinMarketCap = v.toDouble())
                         applySettings(newSettings)
                     },
-                    valueRange = 50_000f..200_000f,
-                    steps = 1499
+                    valueRange = 20_000f..200_000f,
+                    steps = 1799
                 )
 
                 Spacer(modifier = Modifier.height(12.dp))
