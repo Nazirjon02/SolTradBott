@@ -339,11 +339,25 @@ class TokenMonitor {
     }
     
     // ✅ НОВЫЙ МЕТОД: Ручное закрытие токена (фиксация прибыли/убытка)
-    fun closeTokenManually(pairAddress: String, isProfit: Boolean = true) {
+    suspend fun closeTokenManually(pairAddress: String, isProfit: Boolean = true) {
         val index = _monitoredTokens.indexOfFirst { it.tokenPair.pairAddress == pairAddress }
         if (index != -1) {
             val token = _monitoredTokens[index]
             if (token.status == TokenStatus.MONITORING) {
+                if (filterSettings.jupiterEnabled && token.tokenAmountRaw > 0L) {
+                    val percentToSell = token.remainingPositionPct.coerceIn(0.0, 100.0)
+                    val sellResult = sellTokenPercent(
+                        token = token,
+                        amountBase = token.tokenAmountRaw,
+                        percent = percentToSell,
+                        marketCap = token.lastMarketCap
+                    )
+                    if (sellResult == null) {
+                        println("⚠️ Ручное закрытие: продажа через Jupiter не удалась, токен остается в мониторинге")
+                        return
+                    }
+                }
+
                 // Определяем статус на основе текущей прибыли
                 val newStatus = if (isProfit || token.profitUsd >= 0) {
                     TokenStatus.STOPPED_TP
@@ -368,23 +382,53 @@ class TokenMonitor {
     }
 
     // 🔴 ОБНОВИТЬ: метод очистки всех токенов (закрывает все сделки перед удалением)
-    fun clearAllTokens() {
+    suspend fun clearAllTokens(): Int {
         println("🗑️ Очистка всех токенов...")
         
         // 1. Закрываем все активные токены (сохраняем в историю P&L)
         val activeTokens = _monitoredTokens.filter { it.status == TokenStatus.MONITORING }
+        val tokensToKeep = mutableListOf<MonitoredToken>()
         activeTokens.forEach { token ->
-            val isProfit = token.profitUsd >= 0
-            val closedToken = token.copy(
-                status = if (isProfit) TokenStatus.STOPPED_TP else TokenStatus.STOPPED_SL
-            )
-            addClosedToken(closedToken)
-            println("💾 Токен ${token.tokenPair.baseToken?.symbol} закрыт и сохранен в историю")
+            if (filterSettings.jupiterEnabled && token.tokenAmountRaw > 0L) {
+                val percentToSell = token.remainingPositionPct.coerceIn(0.0, 100.0)
+                val sellResult = sellTokenPercent(
+                    token = token,
+                    amountBase = token.tokenAmountRaw,
+                    percent = percentToSell,
+                    marketCap = token.lastMarketCap
+                )
+                if (sellResult == null) {
+                    println("⚠️ Очистка: продажа через Jupiter не удалась, токен остается в мониторинге")
+                    tokensToKeep.add(token)
+                    return@forEach
+                }
+                val realized = token.realizedProfitUsd + sellResult.profitUsd
+                val updatedProfitUsd = realized
+                val closedToken = token.copy(
+                    status = if (updatedProfitUsd >= 0) TokenStatus.STOPPED_TP else TokenStatus.STOPPED_SL,
+                    remainingPositionPct = 0.0,
+                    tokenAmountRaw = 0L,
+                    realizedProfitUsd = realized,
+                    profitUsd = updatedProfitUsd
+                )
+                addClosedToken(closedToken)
+                println("💾 Токен ${token.tokenPair.baseToken?.symbol} закрыт и сохранен в историю")
+            } else {
+                val isProfit = token.profitUsd >= 0
+                val closedToken = token.copy(
+                    status = if (isProfit) TokenStatus.STOPPED_TP else TokenStatus.STOPPED_SL
+                )
+                addClosedToken(closedToken)
+                println("💾 Токен ${token.tokenPair.baseToken?.symbol} закрыт и сохранен в историю")
+            }
         }
         
         // 2. Очищаем список мониторинга
         val tokensCount = _monitoredTokens.size
         _monitoredTokens.clear()
+        if (tokensToKeep.isNotEmpty()) {
+            _monitoredTokens.addAll(tokensToKeep)
+        }
         allowNewTokenDiscovery = true  // 🔴 Сбрасываем флаг
         
         // 3. Очищаем кеш мониторинга
@@ -392,11 +436,15 @@ class TokenMonitor {
         
         println("✅ Очищено:")
         println("   - Токенов в мониторинге: $tokensCount")
-        println("   - Закрыто и сохранено в историю: ${activeTokens.size}")
+        println("   - Закрыто и сохранено в историю: ${activeTokens.size - tokensToKeep.size}")
+        if (tokensToKeep.isNotEmpty()) {
+            println("   - Остались в мониторинге (sell failed): ${tokensToKeep.size}")
+        }
         println("   - Кеш мониторинга")
         println("   ⚠️ История P&L НЕ очищена (используйте Clear в экране P&L)")
         println("   ⚠️ Закрытые токены не будут добавлены снова")
         println("   ⚠️ Настройки фильтров НЕ затронуты")
+        return tokensToKeep.size
     }
 
     // ⏹️ Остановка мониторинга

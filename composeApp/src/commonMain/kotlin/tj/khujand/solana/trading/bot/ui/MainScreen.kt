@@ -58,6 +58,7 @@ fun MainScreen() {
     var showProfitLoss by remember { mutableStateOf(false) }
     var isRequesting by remember { mutableStateOf(false) }
     var demoBalance by remember { mutableStateOf(DemoAccountManager.getBalance()) }
+    var clearFailedCount by remember { mutableStateOf<Int?>(null) }
     val scope = rememberCoroutineScope()
 
     fun refreshDemoBalance() {
@@ -152,9 +153,12 @@ fun MainScreen() {
             serviceController?.stopMonitoring()
             isMonitoring = false
         }
-        tokenMonitor.clearAllTokens()
-        monitoredTokens = emptyList()
-        refreshDemoBalance()
+        scope.launch {
+            val failedCount = tokenMonitor.clearAllTokens()
+            monitoredTokens = tokenMonitor.monitoredTokens.toList()
+            refreshDemoBalance()
+            clearFailedCount = failedCount
+        }
     }
 
 
@@ -452,9 +456,11 @@ fun MainScreen() {
                         TokenItemCard(
                             token = token,
                             onCloseToken = { pairAddress, isProfit ->
-                                tokenMonitor.closeTokenManually(pairAddress, isProfit)
-                                monitoredTokens = tokenMonitor.monitoredTokens.toList()
-                                refreshDemoBalance()
+                                scope.launch {
+                                    tokenMonitor.closeTokenManually(pairAddress, isProfit)
+                                    monitoredTokens = tokenMonitor.monitoredTokens.toList()
+                                    refreshDemoBalance()
+                                }
                             }
                         )
                     }
@@ -489,6 +495,25 @@ fun MainScreen() {
                                 color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
                             )
                         }
+                    }
+
+                    if (clearFailedCount != null) {
+                        val failed = clearFailedCount ?: 0
+                        val message = if (failed == 0) {
+                            "✅ Все токены успешно закрыты"
+                        } else {
+                            "⚠️ Не удалось закрыть: $failed"
+                        }
+                        Text(
+                            message,
+                            fontSize = 12.sp,
+                            color = if (failed == 0) {
+                                MaterialTheme.colorScheme.primary
+                            } else {
+                                MaterialTheme.colorScheme.error
+                            },
+                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)
+                        )
                     }
                 }
             }
