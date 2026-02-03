@@ -155,7 +155,7 @@ fun FilterScreen(
                         applySettings(newSettings)
                     },
                     valueRange = 50_000f..200_000f,
-                    steps = 30
+                    steps = 1499
                 )
 
                 Spacer(modifier = Modifier.height(12.dp))
@@ -170,7 +170,7 @@ fun FilterScreen(
                         applySettings(newSettings)
                     },
                     valueRange = 100_000f..500_000f,
-                    steps = 40
+                    steps = 3999
                 )
 
                 Spacer(modifier = Modifier.height(12.dp))
@@ -184,8 +184,8 @@ fun FilterScreen(
                         val newSettings = currentSettings.copy(entryMinLiquidity = v.toDouble())
                         applySettings(newSettings)
                     },
-                    valueRange = 1000f..20_000f,
-                    steps = 38
+                    valueRange = 100f..20_000f,
+                    steps = 198
                 )
 
                 Spacer(modifier = Modifier.height(12.dp))
@@ -199,8 +199,8 @@ fun FilterScreen(
                         val newSettings = currentSettings.copy(entryMinVolume = v.toDouble())
                         applySettings(newSettings)
                     },
-                    valueRange = 50_000f..300_000f,
-                    steps = 50
+                    valueRange = 100f..250_000f,
+                    steps = 2498
                 )
 
                 Spacer(modifier = Modifier.height(12.dp))
@@ -263,8 +263,8 @@ fun FilterScreen(
                         val newSettings = currentSettings.copy(exitStage1Cap = v.toDouble())
                         applySettings(newSettings)
                     },
-                    valueRange = 150_000f..300_000f,
-                    steps = 30
+                    valueRange = 40_000f..250_000f,
+                    steps = 41
                 )
 
                 Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
@@ -292,8 +292,8 @@ fun FilterScreen(
                         val newSettings = currentSettings.copy(exitStage2Cap = v.toDouble())
                         applySettings(newSettings)
                     },
-                    valueRange = 200_000f..400_000f,
-                    steps = 40
+                    valueRange = 50_000f..350_000f,
+                    steps = 59
                 )
                 Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                     Text("Stage 2 %")
@@ -320,8 +320,8 @@ fun FilterScreen(
                         val newSettings = currentSettings.copy(exitStage3Cap = v.toDouble())
                         applySettings(newSettings)
                     },
-                    valueRange = 250_000f..500_000f,
-                    steps = 50
+                    valueRange = 60_000f..450_000f,
+                    steps = 77
                 )
                 Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                     Text("Stage 3 %")
@@ -348,8 +348,8 @@ fun FilterScreen(
                         val newSettings = currentSettings.copy(exitStage4Cap = v.toDouble())
                         applySettings(newSettings)
                     },
-                    valueRange = 300_000f..700_000f,
-                    steps = 80
+                    valueRange = 70_000f..550_000f,
+                    steps = 95
                 )
                 Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                     Text("Stage 4 %")
@@ -739,83 +739,6 @@ fun FilterScreen(
                             "Filter out potential scams and rug pulls",
                             fontSize = 12.sp,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
-                }
-            }
-        }
-
-        Spacer(modifier = Modifier.height(16.dp))
-
-        // 8. Выбор API для поиска токенов
-        Card(
-            modifier = Modifier.fillMaxWidth(),
-            colors = CardDefaults.cardColors(
-                containerColor = MaterialTheme.colorScheme.surfaceVariant
-            )
-        ) {
-            Column(modifier = Modifier.padding(16.dp)) {
-                Text("🔌 API Source", fontWeight = FontWeight.Medium, fontSize = 16.sp)
-
-                Spacer(modifier = Modifier.height(12.dp))
-
-                // Переключатель между API
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Switch(
-                        checked = currentSettings.useTokenBoostsApi,
-                        onCheckedChange = { checked ->
-                            val newSettings = currentSettings.copy(useTokenBoostsApi = checked)
-                            onSettingsChanged(newSettings)
-                            saveSettings(newSettings)
-                        }
-                    )
-
-                    Spacer(modifier = Modifier.width(12.dp))
-
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text(
-                            if (currentSettings.useTokenBoostsApi) "Token Boosts API" else "Token Profiles API",
-                            fontWeight = FontWeight.Medium
-                        )
-                        Text(
-                            if (currentSettings.useTokenBoostsApi) 
-                                "token-boosts/latest/v1 (рекомендуется)"
-                            else 
-                                "token-profiles/latest/v1 (альтернатива)",
-                            fontSize = 12.sp,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
-                }
-
-                Spacer(modifier = Modifier.height(8.dp))
-
-                // Информация о выбранном API
-                Card(
-                    modifier = Modifier.fillMaxWidth(),
-                    colors = CardDefaults.cardColors(
-                        containerColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.3f)
-                    )
-                ) {
-                    Column(modifier = Modifier.padding(12.dp)) {
-                        Text(
-                            "Текущий API:",
-                            fontSize = 11.sp,
-                            fontWeight = FontWeight.Medium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                        Spacer(modifier = Modifier.height(4.dp))
-                        Text(
-                            if (currentSettings.useTokenBoostsApi)
-                                "https://api.dexscreener.com/token-boosts/latest/v1"
-                            else
-                                "https://api.dexscreener.com/token-profiles/latest/v1",
-                            fontSize = 10.sp,
-                            color = MaterialTheme.colorScheme.primary,
-                            fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace
                         )
                     }
                 }

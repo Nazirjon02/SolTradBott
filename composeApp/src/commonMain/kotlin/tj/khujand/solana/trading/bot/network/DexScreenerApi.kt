@@ -171,12 +171,7 @@ data class FilterSettings(
     
     // Solana RPC настройки
     val rpcUrl: String = "https://api.mainnet-beta.solana.com",
-    val rpcTimeoutSeconds: Int = 12,
-    
-    // Выбор API для поиска токенов
-    val useTokenBoostsApi: Boolean = true, // true = token-boosts, false = token-profiles
-
-    
+    val rpcTimeoutSeconds: Int = 12
 )
 
 // API КЛИЕНТ
@@ -209,6 +204,7 @@ class DexScreenerApi {
     private val maxProfileTokens = 25
     private val minRequestDelayMs = 700L
     private val maxRetries = 3
+    private var useBoostsNext = true
 
     suspend fun getTokenPriceUsd(chainId: String, tokenAddress: String): Double? {
         val url = "https://api.dexscreener.com/tokens/v1/$chainId/$tokenAddress"
@@ -223,8 +219,11 @@ class DexScreenerApi {
         val allTokens = mutableListOf<TokenPair>()
 
         try {
-            // Выбираем API в зависимости от настройки
-            if (settings.useTokenBoostsApi) {
+            val useBoostsNow = useBoostsNext
+            useBoostsNext = !useBoostsNext
+
+            // По очереди: boosts -> profiles -> boosts...
+            if (useBoostsNow) {
                 println("🔍 Поиск новых токенов через token-boosts...")
                 val boostTokens = getLatestTokenBoosts(settings)
                 if (boostTokens.isNotEmpty()) {

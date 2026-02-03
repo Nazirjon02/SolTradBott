@@ -122,8 +122,7 @@ object FilterSettingsManager {
             seedPhrase = "",
             baseMint = "So11111111111111111111111111111111111111112",
             rpcUrl = "https://api.mainnet-beta.solana.com",
-            rpcTimeoutSeconds = 12,
-            useTokenBoostsApi = true // По умолчанию используем token-boosts
+            rpcTimeoutSeconds = 12
         )
     }
 
