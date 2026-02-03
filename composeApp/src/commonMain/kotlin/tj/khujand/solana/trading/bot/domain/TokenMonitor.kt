@@ -841,10 +841,15 @@ class TokenMonitor {
         if (remainingPct < 0) remainingPct = 0.0
 
         val trailingEnabled = stage1Done || marketCap >= filterSettings.exitStage1Cap
-        val forcedExitByStopLoss = entryCap > 0 && marketCap <= entryCap * 0.70
-        val forcedExitByTrailing = trailingEnabled && newPeakMarketCap > 0 && marketCap <= newPeakMarketCap * 0.65
+        val forcedExitByStopLoss =
+            (entryCap > 0 && marketCap <= entryCap * 0.70) || priceChangePercent <= -25.0
+        val forcedExitByTrailing =
+            trailingEnabled && newPeakMarketCap > 0 && marketCap <= newPeakMarketCap * 0.65
+        val forcedExitByStagePullback =
+            (stage1Done || stage2Done || stage3Done || stage4Done) &&
+                newPrice <= prevHigh * 0.75
 
-        val forcedExit = forcedExitByStopLoss || forcedExitByTrailing
+        val forcedExit = forcedExitByStopLoss || forcedExitByTrailing || forcedExitByStagePullback
         val closedByStage4 = stage4Done || remainingPct <= 0.0
 
         val newStatus = when {
@@ -866,6 +871,7 @@ class TokenMonitor {
             when {
                 forcedExitByStopLoss -> println("🛑 Forced exit: -30% от входной капы")
                 forcedExitByTrailing -> println("🛑 Forced exit: -35% от локального максимума")
+                forcedExitByStagePullback -> println("🛑 Forced exit: -25% после Stage")
             }
         }
 
