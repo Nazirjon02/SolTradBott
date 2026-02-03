@@ -55,6 +55,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.delay
+import tj.khujand.solana.trading.bot.domain.DemoAccountManager
 import tj.khujand.solana.trading.bot.domain.MonitoredToken
 import tj.khujand.solana.trading.bot.domain.TokenStatus
 import kotlin.math.pow
@@ -338,6 +339,29 @@ fun TokenItemCard(
             }
 
             Spacer(modifier = Modifier.height(16.dp))
+
+            if (token.demoBuyApplied) {
+                val investment = DemoAccountManager.DEMO_TRADE_AMOUNT
+                val nowValue = investment + token.profitUsd
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        "Buy: $${formatNumber(investment)}",
+                        fontSize = 12.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Text(
+                        "Now: $${formatNumber(nowValue)}",
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Medium,
+                        color = if (nowValue >= investment) Color(0xFF4CAF50) else Color(0xFFF44336)
+                    )
+                }
+                Spacer(modifier = Modifier.height(12.dp))
+            }
 
             // Статистика в 3 колонки
             Row(
