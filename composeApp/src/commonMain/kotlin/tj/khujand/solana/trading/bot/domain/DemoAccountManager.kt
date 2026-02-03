@@ -24,4 +24,9 @@ object DemoAccountManager {
         val current = getBalance()
         AppSettings.putDouble(KEY_DEMO_BALANCE, current + amountUsd)
     }
+
+    fun applyCloseResult(profitUsd: Double) {
+        val current = getBalance()
+        AppSettings.putDouble(KEY_DEMO_BALANCE, current + DEMO_TRADE_AMOUNT + profitUsd)
+    }
 }

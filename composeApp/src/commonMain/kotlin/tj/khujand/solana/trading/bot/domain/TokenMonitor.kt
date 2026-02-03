@@ -460,7 +460,7 @@ class TokenMonitor {
 
     private fun addClosedToken(token: MonitoredToken, skipHistory: Boolean = false) {
         if (token.demoBuyApplied) {
-            DemoAccountManager.applyProfitLoss(token.profitUsd)
+            DemoAccountManager.applyCloseResult(token.profitUsd)
         }
         if (!skipHistory) {
             TokenHistoryManager.saveToHistory(token)
