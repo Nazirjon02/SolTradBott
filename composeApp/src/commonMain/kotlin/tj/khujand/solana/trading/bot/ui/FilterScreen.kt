@@ -193,6 +193,17 @@ fun FilterScreen(
                     Text("Min volume 24h")
                     Text("$${currentSettings.entryMinVolume.toInt()}", fontWeight = FontWeight.Bold)
                 }
+                Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                    Switch(
+                        checked = currentSettings.useVolumeH24,
+                        onCheckedChange = { checked ->
+                            val newSettings = currentSettings.copy(useVolumeH24 = checked)
+                            applySettings(newSettings)
+                        }
+                    )
+                    Spacer(modifier = Modifier.width(12.dp))
+                    Text("Use 24h volume")
+                }
                 Slider(
                     value = currentSettings.entryMinVolume.toFloat(),
                     onValueChange = { v ->
@@ -200,7 +211,35 @@ fun FilterScreen(
                         applySettings(newSettings)
                     },
                     valueRange = 100f..250_000f,
-                    steps = 2498
+                    steps = 2498,
+                    enabled = currentSettings.useVolumeH24
+                )
+
+                Spacer(modifier = Modifier.height(12.dp))
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                    Text("Min volume 5m")
+                    Text("$${currentSettings.entryMinVolumeM5.toInt()}", fontWeight = FontWeight.Bold)
+                }
+                Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                    Switch(
+                        checked = currentSettings.useVolumeM5,
+                        onCheckedChange = { checked ->
+                            val newSettings = currentSettings.copy(useVolumeM5 = checked)
+                            applySettings(newSettings)
+                        }
+                    )
+                    Spacer(modifier = Modifier.width(12.dp))
+                    Text("Use 5m volume")
+                }
+                Slider(
+                    value = currentSettings.entryMinVolumeM5.toFloat(),
+                    onValueChange = { v ->
+                        val newSettings = currentSettings.copy(entryMinVolumeM5 = v.toDouble())
+                        applySettings(newSettings)
+                    },
+                    valueRange = 100f..250_000f,
+                    steps = 2498,
+                    enabled = currentSettings.useVolumeM5
                 )
 
                 Spacer(modifier = Modifier.height(12.dp))

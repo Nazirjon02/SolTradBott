@@ -98,11 +98,14 @@ object FilterSettingsManager {
             maxTokensPerTick = 2,
             minScoreAccept = 10,
             // Параметры входа (по ТЗ)
-            entryMaxAgeMinutes = 30,
-            entryMinMarketCap = 80_000.0,
-            entryMaxMarketCap = 200_000.0,
-            entryMinLiquidity = 5_000.0,
+            entryMaxAgeMinutes = 12,
+            entryMinMarketCap = 40_000.0,
+            entryMaxMarketCap = 400_000.0,
+            entryMinLiquidity = 20_000.0,
             entryMinVolume = 150_000.0,
+            entryMinVolumeM5 = 30_000.0,
+            useVolumeH24 = false,
+            useVolumeM5 = true,
             requireSocials = true,
             requireWebsite = true,
             // Параметры выхода (по ТЗ)

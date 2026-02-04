@@ -148,6 +148,9 @@ data class FilterSettings(
     val entryMaxMarketCap: Double = 200_000.0,
     val entryMinLiquidity: Double = 5_000.0,
     val entryMinVolume: Double = 150_000.0,
+    val entryMinVolumeM5: Double = 30_000.0,
+    val useVolumeH24: Boolean = false,
+    val useVolumeM5: Boolean = true,
     val requireSocials: Boolean = true,
     val requireWebsite: Boolean = true,
     
@@ -275,8 +278,14 @@ class DexScreenerApi {
 
                 if (!ageOk) return@filter false
 
-                // 3. 💰 Проверка объема (должен быть >= volumeH24MinUsd)
-                val volumeOk = (token.volume?.h24 ?: 0.0) >= settings.volumeH24MinUsd
+                // 3. 💰 Проверка объема (24h / 5m по флагам)
+                val volumeH24Ok = if (settings.useVolumeH24) {
+                    (token.volume?.h24 ?: 0.0) >= settings.entryMinVolume
+                } else true
+                val volumeM5Ok = if (settings.useVolumeM5) {
+                    (token.volume?.m5 ?: 0.0) >= settings.entryMinVolumeM5
+                } else true
+                val volumeOk = volumeH24Ok && volumeM5Ok
 
                 // 4. 💧 Проверка ликвидности (должна быть >= liquidityMinUsd)
                 val liquidityOk = (token.liquidity?.usd ?: 0.0) >= settings.liquidityMinUsd

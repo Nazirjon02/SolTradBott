@@ -557,8 +557,11 @@ class TokenMonitor {
         val liquidity = token.liquidity?.usd ?: return false
         if (liquidity < filterSettings.entryMinLiquidity) return false
 
-        val volumeH24 = token.volume?.h24 ?: return false
-        if (volumeH24 < filterSettings.entryMinVolume) return false
+        val volumeH24 = token.volume?.h24 ?: 0.0
+        if (filterSettings.useVolumeH24 && volumeH24 < filterSettings.entryMinVolume) return false
+
+        val volumeM5 = token.volume?.m5 ?: 0.0
+        if (filterSettings.useVolumeM5 && volumeM5 < filterSettings.entryMinVolumeM5) return false
 
         val hasWebsite = token.info?.websites?.any { !it.url.isNullOrBlank() } == true
         val hasSocials = token.info?.socials?.any { !it.url.isNullOrBlank() } == true
