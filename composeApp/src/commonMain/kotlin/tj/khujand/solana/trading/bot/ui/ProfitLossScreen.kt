@@ -113,7 +113,8 @@ fun ProfitLossScreen(
                         Spacer(modifier = Modifier.height(8.dp))
                         Button(
                             onClick = { showHistoryScreen = true },
-                            modifier = Modifier.fillMaxWidth(),
+                            modifier = Modifier.fillMaxWidth()
+                                .padding(bottom = 30.dp),
                             colors = ButtonDefaults.buttonColors(
                                 containerColor = MaterialTheme.colorScheme.secondaryContainer,
                                 contentColor = MaterialTheme.colorScheme.onSecondaryContainer
