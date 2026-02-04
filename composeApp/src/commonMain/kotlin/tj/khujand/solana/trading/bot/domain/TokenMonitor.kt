@@ -1020,12 +1020,16 @@ class TokenMonitor {
         )
 
         if (cached.isNotEmpty()) {
+            val activeOnly = cached.filter { it.status == TokenStatus.MONITORING }
             _monitoredTokens.clear()
-            _monitoredTokens.addAll(cached)
+            _monitoredTokens.addAll(activeOnly)
             allowNewTokenDiscovery =
                 monitoringCount() < filterSettings.maxTokensToMonitor
 
-            println("♻️ Восстановлено токенов из кеша: ${cached.size}")
+            if (activeOnly.size != cached.size) {
+                AppSettings.putObject(CACHE_KEY_TOKENS, activeOnly)
+            }
+            println("♻️ Восстановлено токенов из кеша: ${activeOnly.size}")
         }
     }
 
