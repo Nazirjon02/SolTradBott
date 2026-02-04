@@ -24,7 +24,11 @@ data class TokenHistory(
     val exitDate: String,
     val note: String = "",
     val isPartialExit: Boolean = false,
-    val partialExitPct: Double = 0.0
+    val partialExitPct: Double = 0.0,
+    val isRealTrade: Boolean = false,
+    val isSwapSuccess: Boolean = true,
+    val investedUsd: Double = 0.0,
+    val exitAmountUsd: Double = 0.0
 )
 
 /**
@@ -38,6 +42,10 @@ object TokenHistoryManager {
      */
     fun saveToHistory(token: MonitoredToken) {
         if (token.status == TokenStatus.MONITORING) return // Сохраняем только завершенные
+        val isRealTrade = !token.demoBuyApplied
+        val isSwapSuccess = if (isRealTrade) token.buyTxId.isNotBlank() else true
+        val investedUsd = token.investedUsd
+        val exitAmountUsd = investedUsd + token.profitUsd
         
         val history = TokenHistory(
             tokenPair = token.tokenPair,
@@ -50,7 +58,11 @@ object TokenHistoryManager {
             status = token.status,
             symbol = token.tokenPair.baseToken?.symbol ?: "Unknown",
             entryDate = formatDate(token.foundTime),
-            exitDate = formatDate(kotlin.time.Clock.System.now().toEpochMilliseconds())
+            exitDate = formatDate(kotlin.time.Clock.System.now().toEpochMilliseconds()),
+            isRealTrade = isRealTrade,
+            isSwapSuccess = isSwapSuccess,
+            investedUsd = investedUsd,
+            exitAmountUsd = exitAmountUsd
         )
         
         val existingHistory = loadHistory()
@@ -88,6 +100,24 @@ object TokenHistoryManager {
         val totalProfit = history.filter { it.profitUsd > 0 }.sumOf { it.profitUsd }
         val totalLoss = history.filter { it.profitUsd < 0 }.sumOf { it.profitUsd }
         val netProfit = totalProfit + totalLoss // loss отрицательный
+        val totalInvested = history.filter { !it.isPartialExit }.sumOf { it.investedUsd }
+        val totalReturn = history.filter { !it.isPartialExit }.sumOf { it.exitAmountUsd }
+        val returnPct = if (totalInvested > 0) (netProfit / totalInvested) * 100.0 else 0.0
+
+        val demoHistory = history.filter { !it.isRealTrade }
+        val realHistory = history.filter { it.isRealTrade }
+
+        val demoNet = demoHistory.sumOf { it.profitUsd }
+        val demoInvested = demoHistory.filter { !it.isPartialExit }.sumOf { it.investedUsd }
+        val demoReturn = demoHistory.filter { !it.isPartialExit }.sumOf { it.exitAmountUsd }
+        val demoReturnPct = if (demoInvested > 0) (demoNet / demoInvested) * 100.0 else 0.0
+
+        val realNet = realHistory.sumOf { it.profitUsd }
+        val realInvested = realHistory.filter { !it.isPartialExit }.sumOf { it.investedUsd }
+        val realReturn = realHistory.filter { !it.isPartialExit }.sumOf { it.exitAmountUsd }
+        val realReturnPct = if (realInvested > 0) (realNet / realInvested) * 100.0 else 0.0
+        val realTrades = realHistory.count { !it.isPartialExit }
+        val realSuccessCount = realHistory.count { !it.isPartialExit && it.isSwapSuccess }
         
         return ProfitLossStatistics(
             totalTrades = history.size,
@@ -96,7 +126,20 @@ object TokenHistoryManager {
             totalProfit = totalProfit,
             totalLoss = totalLoss,
             netProfit = netProfit,
-            winRate = if (history.isNotEmpty()) (tpTokens.size.toDouble() / history.size) * 100 else 0.0
+            winRate = if (history.isNotEmpty()) (tpTokens.size.toDouble() / history.size) * 100 else 0.0,
+            totalInvested = totalInvested,
+            totalReturn = totalReturn,
+            returnPct = returnPct,
+            demoNetProfit = demoNet,
+            demoInvested = demoInvested,
+            demoReturn = demoReturn,
+            demoReturnPct = demoReturnPct,
+            realNetProfit = realNet,
+            realInvested = realInvested,
+            realReturn = realReturn,
+            realReturnPct = realReturnPct,
+            realTrades = realTrades,
+            realSuccessCount = realSuccessCount
         )
     }
     
@@ -121,13 +164,17 @@ object TokenHistoryManager {
         percent: Double,
         marketCap: Double,
         exitPrice: Double,
-        profitUsd: Double
+        profitUsd: Double,
+        isRealTrade: Boolean = false,
+        isSwapSuccess: Boolean = true
     ) {
         if (percent <= 0) return
 
         val now = kotlin.time.Clock.System.now().toEpochMilliseconds()
         val priceChangePercent =
             if (token.entryPrice > 0) ((exitPrice - token.entryPrice) / token.entryPrice) * 100 else 0.0
+        val investedUsd = token.investedUsd * (percent / 100.0)
+        val exitAmountUsd = investedUsd + profitUsd
 
         val history = TokenHistory(
             tokenPair = token.tokenPair,
@@ -143,7 +190,11 @@ object TokenHistoryManager {
             exitDate = formatDate(now),
             note = "$stageLabel • ${percent.toInt()}% @ MC ${marketCap.toInt()}",
             isPartialExit = true,
-            partialExitPct = percent
+            partialExitPct = percent,
+            isRealTrade = isRealTrade,
+            isSwapSuccess = isSwapSuccess,
+            investedUsd = investedUsd,
+            exitAmountUsd = exitAmountUsd
         )
 
         val existingHistory = loadHistory()
@@ -163,5 +214,18 @@ data class ProfitLossStatistics(
     val totalProfit: Double,
     val totalLoss: Double,
     val netProfit: Double,
-    val winRate: Double
+    val winRate: Double,
+    val totalInvested: Double,
+    val totalReturn: Double,
+    val returnPct: Double,
+    val demoNetProfit: Double,
+    val demoInvested: Double,
+    val demoReturn: Double,
+    val demoReturnPct: Double,
+    val realNetProfit: Double,
+    val realInvested: Double,
+    val realReturn: Double,
+    val realReturnPct: Double,
+    val realTrades: Int,
+    val realSuccessCount: Int
 )

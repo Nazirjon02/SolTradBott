@@ -33,6 +33,7 @@ data class MonitoredToken(
     var entryMarketCap: Double = 0.0,
     var peakMarketCap: Double = 0.0,
     var lastMarketCap: Double = 0.0,
+    var investedUsd: Double = DemoAccountManager.DEMO_TRADE_AMOUNT,
     var tokenAmountRaw: Long = 0L,
     var buyTxId: String = "",
     var buySolLamports: Long = 0L,
@@ -188,6 +189,11 @@ class TokenMonitor {
                                         entryMarketCap = entryCap,
                                         peakMarketCap = entryCap,
                                         lastMarketCap = token.marketCap ?: 0.0,
+                                        investedUsd = if (filterSettings.jupiterEnabled) {
+                                            filterSettings.tradeUsdAmount
+                                        } else {
+                                            DemoAccountManager.DEMO_TRADE_AMOUNT
+                                        },
                                         tokenAmountRaw = buyResult?.outAmountRaw ?: 0L,
                                         buyTxId = buyResult?.txId ?: "",
                                         buySolLamports = buyResult?.inLamports ?: 0L,
@@ -836,7 +842,16 @@ class TokenMonitor {
                 stage1Done = true
                 println("✅ Этап 1: фиксация ${pct.toInt()}% при Market Cap ${filterSettings.exitStage1Cap.toInt()}")
                 val partialProfitUsd = sellResult?.profitUsd ?: (priceBasedProfitUsd * (pct / 100.0))
-                TokenHistoryManager.savePartialExit(token, "Stage 1", pct, marketCap, newPrice, partialProfitUsd)
+                TokenHistoryManager.savePartialExit(
+                    token,
+                    "Stage 1",
+                    pct,
+                    marketCap,
+                    newPrice,
+                    partialProfitUsd,
+                    isRealTrade = !token.demoBuyApplied,
+                    isSwapSuccess = !filterSettings.jupiterEnabled || sellResult != null
+                )
                 if (sellResult != null) realizedProfitUsd += sellResult.profitUsd
             }
         }
@@ -851,7 +866,16 @@ class TokenMonitor {
                 stage2Done = true
                 println("✅ Этап 2: фиксация ${pct.toInt()}% при Market Cap ${filterSettings.exitStage2Cap.toInt()}")
                 val partialProfitUsd = sellResult?.profitUsd ?: (priceBasedProfitUsd * (pct / 100.0))
-                TokenHistoryManager.savePartialExit(token, "Stage 2", pct, marketCap, newPrice, partialProfitUsd)
+                TokenHistoryManager.savePartialExit(
+                    token,
+                    "Stage 2",
+                    pct,
+                    marketCap,
+                    newPrice,
+                    partialProfitUsd,
+                    isRealTrade = !token.demoBuyApplied,
+                    isSwapSuccess = !filterSettings.jupiterEnabled || sellResult != null
+                )
                 if (sellResult != null) realizedProfitUsd += sellResult.profitUsd
             }
         }
@@ -866,7 +890,16 @@ class TokenMonitor {
                 stage3Done = true
                 println("✅ Этап 3: фиксация ${pct.toInt()}% при Market Cap ${filterSettings.exitStage3Cap.toInt()}")
                 val partialProfitUsd = sellResult?.profitUsd ?: (priceBasedProfitUsd * (pct / 100.0))
-                TokenHistoryManager.savePartialExit(token, "Stage 3", pct, marketCap, newPrice, partialProfitUsd)
+                TokenHistoryManager.savePartialExit(
+                    token,
+                    "Stage 3",
+                    pct,
+                    marketCap,
+                    newPrice,
+                    partialProfitUsd,
+                    isRealTrade = !token.demoBuyApplied,
+                    isSwapSuccess = !filterSettings.jupiterEnabled || sellResult != null
+                )
                 if (sellResult != null) realizedProfitUsd += sellResult.profitUsd
             }
         }
@@ -881,7 +914,16 @@ class TokenMonitor {
                 stage4Done = true
                 println("✅ Этап 4: фиксация ${pct.toInt()}% при Market Cap ${filterSettings.exitStage4Cap.toInt()}")
                 val partialProfitUsd = sellResult?.profitUsd ?: (priceBasedProfitUsd * (pct / 100.0))
-                TokenHistoryManager.savePartialExit(token, "Stage 4", pct, marketCap, newPrice, partialProfitUsd)
+                TokenHistoryManager.savePartialExit(
+                    token,
+                    "Stage 4",
+                    pct,
+                    marketCap,
+                    newPrice,
+                    partialProfitUsd,
+                    isRealTrade = !token.demoBuyApplied,
+                    isSwapSuccess = !filterSettings.jupiterEnabled || sellResult != null
+                )
                 if (sellResult != null) realizedProfitUsd += sellResult.profitUsd
             }
         }
@@ -901,7 +943,7 @@ class TokenMonitor {
         val closedByStage4 = stage4Done || remainingPct <= 0.0
 
         val newStatus = when {
-            forcedExit -> TokenStatus.STOPPED_SL
+            forcedExit -> if (priceBasedProfitUsd >= 0) TokenStatus.STOPPED_TP else TokenStatus.STOPPED_SL
             closedByStage4 -> TokenStatus.STOPPED_TP
             else -> TokenStatus.MONITORING
         }
