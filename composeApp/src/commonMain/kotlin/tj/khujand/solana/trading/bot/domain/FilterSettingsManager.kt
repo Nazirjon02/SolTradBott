@@ -109,6 +109,9 @@ object FilterSettingsManager {
             requireSocials = true,
             requireWebsite = true,
             // Параметры выхода (по ТЗ)
+            exitStrategy = "stages",
+            aggressiveTakeProfitPct = 100.0,
+            aggressiveSellPct = 50.0,
             exitStage1Cap = 200_000.0,
             exitStage1Pct = 30.0,
             exitStage2Cap = 250_000.0,

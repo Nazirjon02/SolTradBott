@@ -834,7 +834,35 @@ class TokenMonitor {
         val entryCap = token.entryMarketCap
         val newPeakMarketCap = if (marketCap > token.peakMarketCap) marketCap else token.peakMarketCap
 
-        if (!stage1Done && marketCap >= filterSettings.exitStage1Cap) {
+        val isAggressive = filterSettings.exitStrategy == "aggressive"
+
+        // Aggressive: один раз продать X% при достижении +Y% по цене, остальное — только trailing
+        if (isAggressive && !stage1Done && priceChangePercent >= filterSettings.aggressiveTakeProfitPct) {
+            val pct = filterSettings.aggressiveSellPct.coerceIn(1.0, 99.0)
+            val sellResult = if (filterSettings.jupiterEnabled) {
+                sellTokenPercent(token, tokenAmountRaw, pct, marketCap)
+            } else null
+            if (!filterSettings.jupiterEnabled || sellResult != null) {
+                remainingPct -= pct
+                tokenAmountRaw = (tokenAmountRaw - (tokenAmountRaw * (pct / 100.0)).toLong()).coerceAtLeast(0L)
+                stage1Done = true
+                println("✅ Aggressive: фиксация ${pct.toInt()}% при +${priceChangePercent.toInt()}%")
+                val partialProfitUsd = sellResult?.profitUsd ?: (priceBasedProfitUsd * (pct / 100.0))
+                TokenHistoryManager.savePartialExit(
+                    token,
+                    "Aggressive",
+                    pct,
+                    marketCap,
+                    newPrice,
+                    partialProfitUsd,
+                    isRealTrade = !token.demoBuyApplied,
+                    isSwapSuccess = !filterSettings.jupiterEnabled || sellResult != null
+                )
+                if (sellResult != null) realizedProfitUsd += sellResult.profitUsd
+            }
+        }
+
+        if (!isAggressive && !stage1Done && marketCap >= filterSettings.exitStage1Cap) {
             val pct = filterSettings.exitStage1Pct
             val sellResult = if (filterSettings.jupiterEnabled) {
                 sellTokenPercent(token, tokenAmountRaw, pct, marketCap)
@@ -858,7 +886,7 @@ class TokenMonitor {
                 if (sellResult != null) realizedProfitUsd += sellResult.profitUsd
             }
         }
-        if (!stage2Done && marketCap >= filterSettings.exitStage2Cap) {
+        if (!isAggressive && !stage2Done && marketCap >= filterSettings.exitStage2Cap) {
             val pct = filterSettings.exitStage2Pct
             val sellResult = if (filterSettings.jupiterEnabled) {
                 sellTokenPercent(token, tokenAmountRaw, pct, marketCap)
@@ -882,7 +910,7 @@ class TokenMonitor {
                 if (sellResult != null) realizedProfitUsd += sellResult.profitUsd
             }
         }
-        if (!stage3Done && marketCap >= filterSettings.exitStage3Cap) {
+        if (!isAggressive && !stage3Done && marketCap >= filterSettings.exitStage3Cap) {
             val pct = filterSettings.exitStage3Pct
             val sellResult = if (filterSettings.jupiterEnabled) {
                 sellTokenPercent(token, tokenAmountRaw, pct, marketCap)
@@ -906,7 +934,7 @@ class TokenMonitor {
                 if (sellResult != null) realizedProfitUsd += sellResult.profitUsd
             }
         }
-        if (!stage4Done && marketCap >= filterSettings.exitStage4Cap) {
+        if (!isAggressive && !stage4Done && marketCap >= filterSettings.exitStage4Cap) {
             val pct = filterSettings.exitStage4Pct
             val sellResult = if (filterSettings.jupiterEnabled) {
                 sellTokenPercent(token, tokenAmountRaw, pct, marketCap)
@@ -933,14 +961,14 @@ class TokenMonitor {
 
         if (remainingPct < 0) remainingPct = 0.0
 
-        val trailingEnabled = stage1Done || marketCap >= filterSettings.exitStage1Cap
+        val trailingEnabled = if (isAggressive) stage1Done else (stage1Done || marketCap >= filterSettings.exitStage1Cap)
         val forcedExitByStopLoss =
             (entryCap > 0 && marketCap <= entryCap * 0.70) || priceChangePercent <= -25.0
         val forcedExitByTrailing =
             trailingEnabled && newPeakMarketCap > 0 && marketCap <= newPeakMarketCap * 0.65
         val forcedExitByStagePullback =
             (stage1Done || stage2Done || stage3Done || stage4Done) &&
-                newPrice <= prevHigh * 0.75
+                newPrice <= prevHigh * 0.65
 
         val forcedExit = forcedExitByStopLoss || forcedExitByTrailing || forcedExitByStagePullback
         val closedByStage4 = stage4Done || remainingPct <= 0.0
@@ -964,7 +992,7 @@ class TokenMonitor {
             when {
                 forcedExitByStopLoss -> println("🛑 Forced exit: -30% от входной капы")
                 forcedExitByTrailing -> println("🛑 Forced exit: -35% от локального максимума")
-                forcedExitByStagePullback -> println("🛑 Forced exit: -25% после Stage")
+                forcedExitByStagePullback -> println("🛑 Forced exit: -35% после Stage")
             }
         }
 

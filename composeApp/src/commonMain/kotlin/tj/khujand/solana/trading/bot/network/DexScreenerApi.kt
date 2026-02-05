@@ -155,6 +155,9 @@ data class FilterSettings(
     val requireWebsite: Boolean = true,
     
     // ✅ Параметры выхода (по ТЗ)
+    val exitStrategy: String = "stages",           // "stages" | "aggressive"
+    val aggressiveTakeProfitPct: Double = 100.0,   // при +100% продать aggressiveSellPct%
+    val aggressiveSellPct: Double = 50.0,          // продать 50%, остальное trailing
     val exitStage1Cap: Double = 200_000.0,
     val exitStage1Pct: Double = 30.0,
     val exitStage2Cap: Double = 250_000.0,

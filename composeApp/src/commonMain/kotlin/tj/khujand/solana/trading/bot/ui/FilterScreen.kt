@@ -280,20 +280,64 @@ fun FilterScreen(
             )
         ) {
             Column(modifier = Modifier.padding(16.dp)) {
-                Text("📤 Exit stages", fontWeight = FontWeight.Medium, fontSize = 16.sp)
-                val stageOrderOk = isStageCapOrderValid(currentSettings)
-                if (!stageOrderOk) {
-                    Spacer(modifier = Modifier.height(6.dp))
-                    Text(
-                        "⚠️ Cap значения должны идти по возрастанию (Stage1 ≤ Stage2 ≤ Stage3 ≤ Stage4)",
-                        fontSize = 11.sp,
-                        color = MaterialTheme.colorScheme.error
+                Text("📤 Exit strategy", fontWeight = FontWeight.Medium, fontSize = 16.sp)
+                Spacer(modifier = Modifier.height(8.dp))
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    FilterChip(
+                        selected = currentSettings.exitStrategy == "stages",
+                        onClick = { applySettings(currentSettings.copy(exitStrategy = "stages")) },
+                        label = { Text("Stages (4 caps)") }
+                    )
+                    FilterChip(
+                        selected = currentSettings.exitStrategy == "aggressive",
+                        onClick = { applySettings(currentSettings.copy(exitStrategy = "aggressive")) },
+                        label = { Text("Aggressive") }
                     )
                 }
                 Spacer(modifier = Modifier.height(12.dp))
 
-                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                    Text("Stage 1 cap")
+                if (currentSettings.exitStrategy == "aggressive") {
+                    Text("Sell % at +profit%, rest trailing", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                        Text("Take profit at %")
+                        Text("+${currentSettings.aggressiveTakeProfitPct.toInt()}%", fontWeight = FontWeight.Bold)
+                    }
+                    Slider(
+                        value = currentSettings.aggressiveTakeProfitPct.toFloat(),
+                        onValueChange = { v ->
+                            applySettings(currentSettings.copy(aggressiveTakeProfitPct = v.toDouble().coerceIn(50.0, 300.0)))
+                        },
+                        valueRange = 50f..300f,
+                        steps = 24
+                    )
+                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                        Text("Sell %")
+                        Text("${currentSettings.aggressiveSellPct.toInt()}%", fontWeight = FontWeight.Bold)
+                    }
+                    Slider(
+                        value = currentSettings.aggressiveSellPct.toFloat(),
+                        onValueChange = { v ->
+                            applySettings(currentSettings.copy(aggressiveSellPct = v.toDouble().coerceIn(10.0, 90.0)))
+                        },
+                        valueRange = 10f..90f,
+                        steps = 8
+                    )
+                } else {
+                    Text("📤 Exit stages", fontWeight = FontWeight.Medium, fontSize = 14.sp)
+                    val stageOrderOk = isStageCapOrderValid(currentSettings)
+                    if (!stageOrderOk) {
+                        Spacer(modifier = Modifier.height(6.dp))
+                        Text(
+                            "⚠️ Cap значения должны идти по возрастанию (Stage1 ≤ Stage2 ≤ Stage3 ≤ Stage4)",
+                            fontSize = 11.sp,
+                            color = MaterialTheme.colorScheme.error
+                        )
+                    }
+                    Spacer(modifier = Modifier.height(12.dp))
+
+                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                        Text("Stage 1 cap")
                     Text("$${currentSettings.exitStage1Cap.toInt()} • ${currentSettings.exitStage1Pct.toInt()}%", fontWeight = FontWeight.Bold)
                 }
                 Slider(
@@ -403,6 +447,7 @@ fun FilterScreen(
                     valueRange = 5f..50f,
                     steps = 45
                 )
+                }
             }
         }
 
