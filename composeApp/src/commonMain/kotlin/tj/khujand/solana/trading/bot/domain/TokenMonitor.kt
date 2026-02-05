@@ -568,6 +568,20 @@ class TokenMonitor {
         if (filterSettings.requireWebsite && !hasWebsite) return false
         if (filterSettings.requireSocials && !hasSocials) return false
 
+        // Buys/Sells ratio M5 > min (например > 1.8)
+        val buysM5 = token.txns?.m5?.buys ?: 0
+        val sellsM5 = token.txns?.m5?.sells ?: 0
+        val ratioOk = when {
+            sellsM5 == 0 -> buysM5 > 0
+            else -> (buysM5.toDouble() / sellsM5) >= filterSettings.minBuysToSellsRatioM5
+        }
+        if (!ratioOk) return false
+
+        // Price ↑ за 5 мин (если порог > 0 и API отдаёт m5 — требуем рост >= min; иначе проверку не делаем)
+        if (filterSettings.minPriceChangeM5Pct > 0) {
+            token.priceChange?.m5?.let { if (it < filterSettings.minPriceChangeM5Pct) return false }
+        }
+
         return true
     }
 
@@ -838,7 +852,7 @@ class TokenMonitor {
 
         // Aggressive: один раз продать X% при достижении +Y% по цене, остальное — только trailing
         if (isAggressive && !stage1Done && priceChangePercent >= filterSettings.aggressiveTakeProfitPct) {
-            val pct = filterSettings.aggressiveSellPct.coerceIn(1.0, 99.0)
+            val pct = filterSettings.aggressiveSellPct.coerceIn(1.0, 100.0)
             val sellResult = if (filterSettings.jupiterEnabled) {
                 sellTokenPercent(token, tokenAmountRaw, pct, marketCap)
             } else null

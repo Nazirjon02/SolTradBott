@@ -45,7 +45,15 @@ data class TokenPair(
     val marketCap: Double? = null,
     val fdv: Double? = null,
     val txns: Txns? = null,
+    val priceChange: PriceChange? = null,
     val info: TokenInfo? = null
+)
+
+@Serializable
+data class PriceChange(
+    val m5: Double? = null,
+    val h1: Double? = null,
+    val h24: Double? = null
 )
 
 @Serializable
@@ -139,6 +147,8 @@ data class FilterSettings(
     val buysH1Min: Int = 1,
     val maxSellsToBuysRatioH1: Double = 1.2,
     val maxAbsPriceChangeH1Pct: Double = 250.0,
+    val minBuysToSellsRatioM5: Double = 1.8,   // Buys/Sells > 1.8 за 5 мин
+    val minPriceChangeM5Pct: Double = 150.0,   // Price ↑ > 150% за 5 мин (0 = выкл)
     val maxTokensPerTick: Int = 2,
     val minScoreAccept: Int = 10,
     
@@ -298,7 +308,20 @@ class DexScreenerApi {
                     !isPotentialScam(token)
                 } else true
 
-                volumeOk && liquidityOk && notScam
+                // 6. 📈 Buys/Sells ratio M5 > min (например > 1.8)
+                val buysM5 = token.txns?.m5?.buys ?: 0
+                val sellsM5 = token.txns?.m5?.sells ?: 0
+                val ratioOk = when {
+                    sellsM5 == 0 -> buysM5 > 0
+                    else -> (buysM5.toDouble() / sellsM5) >= settings.minBuysToSellsRatioM5
+                }
+
+                // 7. 📈 Price ↑ за 5 мин (порог > 0: требуем priceChange.m5 >= min; если m5 нет в API — пропускаем)
+                val pricePumpOk = if (settings.minPriceChangeM5Pct > 0) {
+                    token.priceChange?.m5?.let { it >= settings.minPriceChangeM5Pct } ?: true
+                } else true
+
+                volumeOk && liquidityOk && notScam && ratioOk && pricePumpOk
             }
 
             println("✅ После фильтрации (только НОВЫЕ): ${filtered.size}")

@@ -149,13 +149,14 @@ fun FilterScreen(
                     Text("$${currentSettings.entryMinMarketCap.toInt()}", fontWeight = FontWeight.Bold)
                 }
                 Slider(
-                    value = currentSettings.entryMinMarketCap.toFloat(),
+                    value = currentSettings.entryMinMarketCap.toFloat().coerceIn(500f, 200_000f),
                     onValueChange = { v ->
-                        val newSettings = currentSettings.copy(entryMinMarketCap = v.toDouble())
+                        val rounded = ((v / 500f).roundToInt() * 500).toDouble()
+                        val newSettings = currentSettings.copy(entryMinMarketCap = rounded.coerceIn(500.0, 200_000.0))
                         applySettings(newSettings)
                     },
-                    valueRange = 20_000f..200_000f,
-                    steps = 1799
+                    valueRange = 500f..200_000f,
+                    steps = 399
                 )
 
                 Spacer(modifier = Modifier.height(12.dp))
@@ -267,6 +268,36 @@ fun FilterScreen(
                     Spacer(modifier = Modifier.width(12.dp))
                     Text("Require website")
                 }
+
+                Spacer(modifier = Modifier.height(12.dp))
+                Text("Buys/Sells ratio (5m) > X — только при давлении покупок", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                    Text("Min Buys/Sells ratio M5")
+                    Text("${(currentSettings.minBuysToSellsRatioM5 * 10).roundToInt() / 10.0}", fontWeight = FontWeight.Bold)
+                }
+                Slider(
+                    value = currentSettings.minBuysToSellsRatioM5.toFloat(),
+                    onValueChange = { v ->
+                        applySettings(currentSettings.copy(minBuysToSellsRatioM5 = v.toDouble().coerceIn(0.5, 5.0)))
+                    },
+                    valueRange = 0.5f..5f,
+                    steps = 44
+                )
+
+                Spacer(modifier = Modifier.height(8.dp))
+                Text("Price ↑ за 5 мин (0 = выкл)", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                    Text("Min price change 5m %")
+                    Text("+${currentSettings.minPriceChangeM5Pct.toInt()}%", fontWeight = FontWeight.Bold)
+                }
+                Slider(
+                    value = currentSettings.minPriceChangeM5Pct.toFloat().coerceIn(0f, 500f),
+                    onValueChange = { v ->
+                        applySettings(currentSettings.copy(minPriceChangeM5Pct = v.toDouble().coerceIn(0.0, 500.0)))
+                    },
+                    valueRange = 0f..500f,
+                    steps = 49
+                )
             }
         }
 
@@ -318,10 +349,10 @@ fun FilterScreen(
                     Slider(
                         value = currentSettings.aggressiveSellPct.toFloat(),
                         onValueChange = { v ->
-                            applySettings(currentSettings.copy(aggressiveSellPct = v.toDouble().coerceIn(10.0, 90.0)))
+                            applySettings(currentSettings.copy(aggressiveSellPct = v.toDouble().coerceIn(10.0, 100.0)))
                         },
-                        valueRange = 10f..90f,
-                        steps = 8
+valueRange = 10f..100f,
+                    steps = 9
                     )
                 } else {
                     Text("📤 Exit stages", fontWeight = FontWeight.Medium, fontSize = 14.sp)

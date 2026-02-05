@@ -95,6 +95,8 @@ object FilterSettingsManager {
             buysH1Min = 1,
             maxSellsToBuysRatioH1 = 1.2,
             maxAbsPriceChangeH1Pct = 250.0,
+            minBuysToSellsRatioM5 = 1.8,
+            minPriceChangeM5Pct = 150.0,
             maxTokensPerTick = 2,
             minScoreAccept = 10,
             // Параметры входа (по ТЗ)
