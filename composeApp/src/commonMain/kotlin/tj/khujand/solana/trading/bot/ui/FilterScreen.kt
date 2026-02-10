@@ -270,34 +270,58 @@ fun FilterScreen(
                 }
 
                 Spacer(modifier = Modifier.height(12.dp))
-                Text("Buys/Sells ratio (5m) > X — только при давлении покупок", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                    Text("Min Buys/Sells ratio M5")
-                    Text("${(currentSettings.minBuysToSellsRatioM5 * 10).roundToInt() / 10.0}", fontWeight = FontWeight.Bold)
+                Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                    Switch(
+                        checked = currentSettings.useMinBuysToSellsRatioM5,
+                        onCheckedChange = { checked ->
+                            applySettings(currentSettings.copy(useMinBuysToSellsRatioM5 = checked))
+                        }
+                    )
+                    Spacer(modifier = Modifier.width(12.dp))
+                    Text("Buys/Sells ratio (5m) > X")
                 }
-                Slider(
-                    value = currentSettings.minBuysToSellsRatioM5.toFloat(),
-                    onValueChange = { v ->
-                        applySettings(currentSettings.copy(minBuysToSellsRatioM5 = v.toDouble().coerceIn(0.5, 5.0)))
-                    },
-                    valueRange = 0.5f..5f,
-                    steps = 44
-                )
+                if (currentSettings.useMinBuysToSellsRatioM5) {
+                    Text("Только при давлении покупок", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                        Text("Min Buys/Sells ratio M5")
+                        Text("${(currentSettings.minBuysToSellsRatioM5 * 10).roundToInt() / 10.0}", fontWeight = FontWeight.Bold)
+                    }
+                    Slider(
+                        value = currentSettings.minBuysToSellsRatioM5.toFloat(),
+                        onValueChange = { v ->
+                            applySettings(currentSettings.copy(minBuysToSellsRatioM5 = v.toDouble().coerceIn(0.5, 5.0)))
+                        },
+                        valueRange = 0.5f..5f,
+                        steps = 44
+                    )
+                }
 
                 Spacer(modifier = Modifier.height(8.dp))
-                Text("Price ↑ за 5 мин (0 = выкл)", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                    Switch(
+                        checked = currentSettings.useMinPriceChangeM5Pct,
+                        onCheckedChange = { checked ->
+                            applySettings(currentSettings.copy(useMinPriceChangeM5Pct = checked))
+                        }
+                    )
+                    Spacer(modifier = Modifier.width(12.dp))
                     Text("Min price change 5m %")
-                    Text("+${currentSettings.minPriceChangeM5Pct.toInt()}%", fontWeight = FontWeight.Bold)
                 }
-                Slider(
-                    value = currentSettings.minPriceChangeM5Pct.toFloat().coerceIn(0f, 500f),
-                    onValueChange = { v ->
-                        applySettings(currentSettings.copy(minPriceChangeM5Pct = v.toDouble().coerceIn(0.0, 500.0)))
-                    },
-                    valueRange = 0f..500f,
-                    steps = 49
-                )
+                if (currentSettings.useMinPriceChangeM5Pct) {
+                    Text("Price ↑ за 5 мин (если API отдаёт m5)", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                        Text("Min %")
+                        Text("+${currentSettings.minPriceChangeM5Pct.toInt()}%", fontWeight = FontWeight.Bold)
+                    }
+                    Slider(
+                        value = currentSettings.minPriceChangeM5Pct.toFloat().coerceIn(0f, 500f),
+                        onValueChange = { v ->
+                            applySettings(currentSettings.copy(minPriceChangeM5Pct = v.toDouble().coerceIn(0.0, 500.0)))
+                        },
+                        valueRange = 0f..500f,
+                        steps = 49
+                    )
+                }
             }
         }
 

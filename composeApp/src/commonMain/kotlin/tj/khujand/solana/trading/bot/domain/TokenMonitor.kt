@@ -568,17 +568,19 @@ class TokenMonitor {
         if (filterSettings.requireWebsite && !hasWebsite) return false
         if (filterSettings.requireSocials && !hasSocials) return false
 
-        // Buys/Sells ratio M5 > min (например > 1.8)
-        val buysM5 = token.txns?.m5?.buys ?: 0
-        val sellsM5 = token.txns?.m5?.sells ?: 0
-        val ratioOk = when {
-            sellsM5 == 0 -> buysM5 > 0
-            else -> (buysM5.toDouble() / sellsM5) >= filterSettings.minBuysToSellsRatioM5
+        // Buys/Sells ratio M5 > min (если фильтр включён)
+        if (filterSettings.useMinBuysToSellsRatioM5) {
+            val buysM5 = token.txns?.m5?.buys ?: 0
+            val sellsM5 = token.txns?.m5?.sells ?: 0
+            val ratioOk = when {
+                sellsM5 == 0 -> buysM5 > 0
+                else -> (buysM5.toDouble() / sellsM5) >= filterSettings.minBuysToSellsRatioM5
+            }
+            if (!ratioOk) return false
         }
-        if (!ratioOk) return false
 
-        // Price ↑ за 5 мин (если порог > 0 и API отдаёт m5 — требуем рост >= min; иначе проверку не делаем)
-        if (filterSettings.minPriceChangeM5Pct > 0) {
+        // Price ↑ за 5 мин (если фильтр включён; при отсутствии m5 в API — не отсекаем)
+        if (filterSettings.useMinPriceChangeM5Pct) {
             token.priceChange?.m5?.let { if (it < filterSettings.minPriceChangeM5Pct) return false }
         }
 

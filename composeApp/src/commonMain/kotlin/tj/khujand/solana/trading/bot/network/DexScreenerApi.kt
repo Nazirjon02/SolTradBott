@@ -147,8 +147,10 @@ data class FilterSettings(
     val buysH1Min: Int = 1,
     val maxSellsToBuysRatioH1: Double = 1.2,
     val maxAbsPriceChangeH1Pct: Double = 250.0,
+    val useMinBuysToSellsRatioM5: Boolean = true,  // выкл = не проверять Buys/Sells ratio
     val minBuysToSellsRatioM5: Double = 1.8,   // Buys/Sells > 1.8 за 5 мин
-    val minPriceChangeM5Pct: Double = 150.0,   // Price ↑ > 150% за 5 мин (0 = выкл)
+    val useMinPriceChangeM5Pct: Boolean = true,  // выкл = не проверять рост цены за 5м
+    val minPriceChangeM5Pct: Double = 150.0,   // Price ↑ > 150% за 5 мин
     val maxTokensPerTick: Int = 2,
     val minScoreAccept: Int = 10,
     
@@ -308,18 +310,17 @@ class DexScreenerApi {
                     !isPotentialScam(token)
                 } else true
 
-                // 6. 📈 Buys/Sells ratio M5 > min (например > 1.8)
+                // 6. 📈 Buys/Sells ratio M5 > min (если фильтр включён)
                 val buysM5 = token.txns?.m5?.buys ?: 0
                 val sellsM5 = token.txns?.m5?.sells ?: 0
-                val ratioOk = when {
+                val ratioOk = if (!settings.useMinBuysToSellsRatioM5) true else when {
                     sellsM5 == 0 -> buysM5 > 0
                     else -> (buysM5.toDouble() / sellsM5) >= settings.minBuysToSellsRatioM5
                 }
 
-                // 7. 📈 Price ↑ за 5 мин (порог > 0: требуем priceChange.m5 >= min; если m5 нет в API — пропускаем)
-                val pricePumpOk = if (settings.minPriceChangeM5Pct > 0) {
-                    token.priceChange?.m5?.let { it >= settings.minPriceChangeM5Pct } ?: true
-                } else true
+                // 7. 📈 Price ↑ за 5 мин (если фильтр включён; если m5 нет в API — пропускаем)
+                val pricePumpOk = if (!settings.useMinPriceChangeM5Pct) true
+                else token.priceChange?.m5?.let { it >= settings.minPriceChangeM5Pct } ?: true
 
                 volumeOk && liquidityOk && notScam && ratioOk && pricePumpOk
             }
