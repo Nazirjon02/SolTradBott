@@ -474,7 +474,12 @@ class TokenMonitor {
                     TokenStatus.STOPPED_SL
                 }
                 
-                val updatedToken = token.copy(status = newStatus)
+                // ⭐ Обнуляем позицию полностью при закрытии
+                val updatedToken = token.copy(
+                    status = newStatus,
+                    remainingPositionPct = 0.0,
+                    tokenAmountRaw = 0L
+                )
                 
                 // Сохраняем в историю и помечаем токен как закрытый (без повторного добавления)
                 addClosedToken(updatedToken)
