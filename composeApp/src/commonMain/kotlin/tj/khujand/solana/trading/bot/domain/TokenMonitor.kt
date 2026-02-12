@@ -18,46 +18,65 @@ import kotlin.time.Clock
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 
-// Создаем недостающие модели прямо здесь
+// ════════════════════════════════════════════════════════════════════════════════
+// ТОКЕН В МОНИТОРИНГЕ (активная позиция)
+// ════════════════════════════════════════════════════════════════════════════════
 @Serializable
 data class MonitoredToken(
-    val tokenPair: TokenPair,
-    val foundTime: Long = Clock.System.now().toEpochMilliseconds(),
-    val ageToken: String = "0.0",
-    val entryPrice: Double = 0.0,
-    var currentPrice: String = "0.0",
-    var priceChangePercent: Double = 0.0,
-    var profitUsd: Double = 0.0,          // 👈 ВАЖНО
-    var status: TokenStatus = TokenStatus.MONITORING,
-    var sessionHighPrice: Double = 0.0,    // максимум цены с момента добавления
-    var entryMarketCap: Double = 0.0,
-    var peakMarketCap: Double = 0.0,
-    var lastMarketCap: Double = 0.0,
-    var investedUsd: Double = DemoAccountManager.DEMO_TRADE_AMOUNT,
-    var tokenAmountRaw: Long = 0L,
-    var buyTxId: String = "",
-    var buySolLamports: Long = 0L,
-    var realizedProfitUsd: Double = 0.0,
-    var remainingPositionPct: Double = 100.0,
-    var exitStage1Done: Boolean = false,
-    var exitStage2Done: Boolean = false,
-    var exitStage3Done: Boolean = false,
-    var exitStage4Done: Boolean = false,
-    var demoBuyApplied: Boolean = false
+    // ──── ОСНОВНАЯ ИНФОРМАЦИЯ ────
+    val tokenPair: TokenPair,                      // Пара с DexScreener (адрес, цена, капа, ликвидность)
+    val foundTime: Long = Clock.System.now().toEpochMilliseconds(),  // Время обнаружения токена
+    val ageToken: String = "0.0",                  // Возраст токена (для отображения)
+    
+    // ──── ВХОД В ПОЗИЦИЮ ────
+    val entryPrice: Double = 0.0,                  // ⭐ Цена входа (USD)
+    var currentPrice: String = "0.0",              // Текущая цена (обновляется каждый тик)
+    var priceChangePercent: Double = 0.0,          // ⭐ Изменение цены в % от входа
+    var profitUsd: Double = 0.0,                   // ⭐ Текущая прибыль/убыток USD (может быть отриц.)
+    var status: TokenStatus = TokenStatus.MONITORING,  // Статус: MONITORING / STOPPED_TP / STOPPED_SL
+    
+    // ──── ОТСЛЕЖИВАНИЕ МАКСИМУМОВ (для trailing) ────
+    var sessionHighPrice: Double = 0.0,            // ⭐ Максимальная цена с момента входа (для trailing по цене)
+    var entryMarketCap: Double = 0.0,              // Market Cap на момент входа
+    var peakMarketCap: Double = 0.0,               // ⭐ Максимальная Market Cap (для trailing по капе)
+    var lastMarketCap: Double = 0.0,               // Последняя известная Market Cap
+    
+    // ──── ИНВЕСТИЦИИ И КОЛИЧЕСТВО ────
+    var investedUsd: Double = DemoAccountManager.DEMO_TRADE_AMOUNT,  // Инвестировано USD (demo=$100, real=настройка)
+    var tokenAmountRaw: Long = 0L,                 // ⭐ Количество токенов (raw, без decimals) - для реальных свапов
+    var buyTxId: String = "",                      // ID транзакции покупки (если Jupiter)
+    var buySolLamports: Long = 0L,                 // Сколько SOL потрачено на покупку (lamports)
+    
+    // ──── ЧАСТИЧНЫЕ ПРОДАЖИ (Stages / Aggressive) ────
+    var realizedProfitUsd: Double = 0.0,           // ⭐ Реализованная прибыль USD (сумма всех частичных выходов)
+    var remainingPositionPct: Double = 100.0,      // ⭐ Оставшаяся позиция в % (100% → 70% → 40% → и т.д.)
+    var exitStage1Done: Boolean = false,           // Флаг: Stage 1 выполнен
+    var exitStage2Done: Boolean = false,           // Флаг: Stage 2 выполнен
+    var exitStage3Done: Boolean = false,           // Флаг: Stage 3 выполнен
+    var exitStage4Done: Boolean = false,           // Флаг: Stage 4 выполнен (или Aggressive фиксация)
+    
+    // ──── ДЕМО vs РЕАЛЬНЫЕ СДЕЛКИ ────
+    var demoBuyApplied: Boolean = false            // ⭐ true = демо-покупка (виртуальная), false = реальная через Jupiter
 )
 
+// ════════════════════════════════════════════════════════════════════════════════
+// СТАТУС ТОКЕНА
+// ════════════════════════════════════════════════════════════════════════════════
 @Serializable
 enum class TokenStatus {
-    MONITORING,    // В мониторинге
-    STOPPED_TP,    // Остановлен по тейк-профиту (+30%)
-    STOPPED_SL     // Остановлен по стоп-лоссу (-25%)
+    MONITORING,    // ⭐ В активном мониторинге (позиция открыта)
+    STOPPED_TP,    // ⭐ Закрыт по тейк-профиту (завершён успешно)
+    STOPPED_SL     // ⭐ Закрыт по стоп-лоссу (убыток или защитный выход)
 }
 
+// ════════════════════════════════════════════════════════════════════════════════
+// МОНИТОР ТОКЕНОВ - центральный класс для управления позициями
+// ════════════════════════════════════════════════════════════════════════════════
 class TokenMonitor {
     private  val CACHE_KEY_TOKENS = "cached_monitored_tokens"
     private val CLOSED_TOKENS_KEY = "closed_tokens_v1"
 
-    private var allowNewTokenDiscovery = true  // 🔴 Добавляем флаг
+    private var allowNewTokenDiscovery = true  // ⭐ Флаг: разрешён ли поиск новых токенов
 
     private val api = DexScreenerApi()
     private val jupiterApi = JupiterApi()
@@ -82,13 +101,21 @@ class TokenMonitor {
         restoreClosedTokens()
     }
 
-    // 🔄 Запуск автоматического мониторинга
+    // ════════════════════════════════════════════════════════════════════════════════
+    // 🔄 ЗАПУСК АВТОМАТИЧЕСКОГО МОНИТОРИНГА
+    // ════════════════════════════════════════════════════════════════════════════════
+    // Цикл мониторинга выполняется каждые N секунд (по умолчанию 30 сек):
+    // 1. Поиск новых токенов через DexScreener (если есть свободные слоты)
+    // 2. Обновление цен для всех активных позиций
+    // 3. Проверка условий выхода (Stage/Aggressive/StopLoss/Trailing)
+    // 4. Автоматические покупки/продажи (если Jupiter включён)
+    // ════════════════════════════════════════════════════════════════════════════════
     fun startMonitoring(
-        intervalSeconds: Int = 30,
-        onNewTokenFound: (MonitoredToken) -> Unit = {},
-        onTokenUpdated: (MonitoredToken) -> Unit = {},
-        onRequestStateChanged: (Boolean) -> Unit = {},
-        onError: (String) -> Unit = {}
+        intervalSeconds: Int = 30,                 // ⭐ Интервал обновления в секундах (30 сек по умолчанию)
+        onNewTokenFound: (MonitoredToken) -> Unit = {},   // Callback: новый токен найден и добавлен
+        onTokenUpdated: (MonitoredToken) -> Unit = {},    // Callback: токен обновлён (цена/прибыль изменились)
+        onRequestStateChanged: (Boolean) -> Unit = {},    // Callback: статус запроса к API (true=загрузка)
+        onError: (String) -> Unit = {}             // Callback: произошла ошибка
     ) {
         if (isMonitoring) {
             println("⚠️ Мониторинг уже запущен")
@@ -822,37 +849,50 @@ class TokenMonitor {
         }
     }
 
-    // 🔄 Обновление цены токена (suspend для безопасного доступа к списку при параллельном обновлении)
+    // ════════════════════════════════════════════════════════════════════════════════
+    // 🔄 ОБНОВЛЕНИЕ ЦЕНЫ И ПРОВЕРКА УСЛОВИЙ ВЫХОДА
+    // ════════════════════════════════════════════════════════════════════════════════
+    // Вызывается каждый тик для каждого активного токена:
+    // 1. Обновляет текущую цену и считает прибыль
+    // 2. Проверяет условия частичных продаж (Stage 1-4 или Aggressive)
+    // 3. Проверяет условия принудительного выхода (Stop Loss, Trailing, Pullback)
+    // 4. Если Jupiter включён — выполняет реальные свапы
+    // ════════════════════════════════════════════════════════════════════════════════
     private suspend fun updateTokenPrice(
         token: MonitoredToken,
         updatedPair: TokenPair,
         newPrice: Double,
         onUpdate: (MonitoredToken) -> Unit
     ) {
+        // ──── РАСЧЁТ ПРИБЫЛИ ────
         val entry = token.entryPrice
         val prevHigh = if (token.sessionHighPrice > 0) token.sessionHighPrice else entry
         val newSessionHigh = maxOf(prevHigh, newPrice)
 
         val priceChangePercent =
-            if (entry > 0) ((newPrice - entry) / entry) * 100 else 0.0
+            if (entry > 0) ((newPrice - entry) / entry) * 100 else 0.0  // ⭐ Прибыль в % от входа
 
         val investment = DemoAccountManager.DEMO_TRADE_AMOUNT
-        val priceBasedProfitUsd = investment * priceChangePercent / 100
+        val priceBasedProfitUsd = investment * priceChangePercent / 100  // ⭐ Прибыль в USD (для демо)
 
+        // ──── ОБНОВЛЕНИЕ СОСТОЯНИЯ ────
         val marketCap = updatedPair.marketCap ?: token.lastMarketCap
-        var remainingPct = token.remainingPositionPct
+        var remainingPct = token.remainingPositionPct  // ⭐ Оставшаяся позиция в %
         var tokenAmountRaw = token.tokenAmountRaw
         var stage1Done = token.exitStage1Done
         var stage2Done = token.exitStage2Done
         var stage3Done = token.exitStage3Done
         var stage4Done = token.exitStage4Done
-        var realizedProfitUsd = token.realizedProfitUsd
+        var realizedProfitUsd = token.realizedProfitUsd  // ⭐ Реализованная прибыль (сумма частичных выходов)
         val entryCap = token.entryMarketCap
         val newPeakMarketCap = if (marketCap > token.peakMarketCap) marketCap else token.peakMarketCap
 
         val isAggressive = filterSettings.exitStrategy == "aggressive"
 
-        // Aggressive: один раз продать X% при достижении +Y% по цене, остальное — только trailing
+        // ════════════════════════════════════════════════════════════════════════════════
+        // 🔥 AGGRESSIVE MODE: одна фиксация по % прибыли, остальное trailing
+        // ════════════════════════════════════════════════════════════════════════════════
+        // Срабатывает ОДИН РАЗ при достижении заданного % прибыли по цене
         if (isAggressive && !stage1Done && priceChangePercent >= filterSettings.aggressiveTakeProfitPct) {
             val pct = filterSettings.aggressiveSellPct.coerceIn(1.0, 100.0)
             val sellResult = if (filterSettings.jupiterEnabled) {
@@ -977,11 +1017,27 @@ class TokenMonitor {
 
         if (remainingPct < 0) remainingPct = 0.0
 
+        // ════════════════════════════════════════════════════════════════════════════════
+        // 🛡️ ЗАЩИТНЫЕ МЕХАНИЗМЫ (Stop Loss, Trailing Stop, Pullback)
+        // ════════════════════════════════════════════════════════════════════════════════
+        // Эти условия проверяются ВСЕГДА и закрывают остаток позиции принудительно
+        
+        // ⭐ Trailing включается:
+        // - В Aggressive: только ПОСЛЕ первой фиксации (stage1Done)
+        // - В Stages: после Stage 1 ИЛИ при достижении Stage 1 Cap
         val trailingEnabled = if (isAggressive) stage1Done else (stage1Done || marketCap >= filterSettings.exitStage1Cap)
+        
+        // ⭐ 1. STOP LOSS: -30% от входной капы ИЛИ -25% по цене
         val forcedExitByStopLoss =
             (entryCap > 0 && marketCap <= entryCap * 0.70) || priceChangePercent <= -25.0
+        
+        // ⭐ 2. TRAILING STOP: -35% от локального максимума Market Cap
+        // Срабатывает только если trailing включён (после Stage 1 / Aggressive)
         val forcedExitByTrailing =
             trailingEnabled && newPeakMarketCap > 0 && marketCap <= newPeakMarketCap * 0.65
+        
+        // ⭐ 3. STAGE PULLBACK: -35% от пика цены после частичной фиксации
+        // Если цена упала на 35% от максимума ПОСЛЕ любого Stage
         val forcedExitByStagePullback =
             (stage1Done || stage2Done || stage3Done || stage4Done) &&
                 newPrice <= prevHigh * 0.65
@@ -989,12 +1045,14 @@ class TokenMonitor {
         val forcedExit = forcedExitByStopLoss || forcedExitByTrailing || forcedExitByStagePullback
         val closedByStage4 = stage4Done || remainingPct <= 0.0
 
+        // ──── ОПРЕДЕЛЕНИЕ СТАТУСА ────
         val newStatus = when {
             forcedExit -> if (priceBasedProfitUsd >= 0) TokenStatus.STOPPED_TP else TokenStatus.STOPPED_SL
             closedByStage4 -> TokenStatus.STOPPED_TP
             else -> TokenStatus.MONITORING
         }
 
+        // ──── ПРИНУДИТЕЛЬНЫЙ ВЫХОД (продажа остатка) ────
         if (forcedExit) {
             val percentToSell = remainingPct.coerceAtMost(100.0)
             if (filterSettings.jupiterEnabled && tokenAmountRaw > 0) {

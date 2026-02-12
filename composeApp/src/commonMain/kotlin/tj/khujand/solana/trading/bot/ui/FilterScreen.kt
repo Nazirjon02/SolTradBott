@@ -361,10 +361,10 @@ fun FilterScreen(
                     Slider(
                         value = currentSettings.aggressiveTakeProfitPct.toFloat(),
                         onValueChange = { v ->
-                            applySettings(currentSettings.copy(aggressiveTakeProfitPct = v.toDouble().coerceIn(50.0, 300.0)))
+                            applySettings(currentSettings.copy(aggressiveTakeProfitPct = v.toDouble().coerceIn(20.0, 300.0)))
                         },
-                        valueRange = 50f..300f,
-                        steps = 24
+                        valueRange = 20f..300f,
+                        steps = 27
                     )
                     Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                         Text("Sell %")

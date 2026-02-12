@@ -128,69 +128,107 @@ data class TokenBoost(
     val createdAt: Long? = null
 )
 
-// НАСТРОЙКИ ФИЛЬТРОВ
+// ════════════════════════════════════════════════════════════════════════════════
+// НАСТРОЙКИ ФИЛЬТРОВ И ТОРГОВЛИ
+// ════════════════════════════════════════════════════════════════════════════════
 @OptIn(kotlinx.serialization.ExperimentalSerializationApi::class)
 @Serializable
 data class FilterSettings(
-    val minVolumeUSD: Double = 5000.0,
-    val maxAgeHours: Int = 24,
-    val minLiquidityUSD: Double = 10000.0,
-    val chains: List<String> = listOf("solana"),
-    val excludeRugPull: Boolean = true,
-    val checkHolders: Boolean = false,
-    val maxTokensToMonitor: Int = 6, // 👈 Новое поле: максимум токенов
+    // ─────────────────────────────────────────────────────────────────────────────
+    // ОБЩИЕ НАСТРОЙКИ
+    // ─────────────────────────────────────────────────────────────────────────────
+    val minVolumeUSD: Double = 5000.0,              // Минимальный объём USD (старая настройка, не используется)
+    val maxAgeHours: Int = 24,                      // Максимальный возраст токена в часах (старая настройка)
+    val minLiquidityUSD: Double = 10000.0,          // Минимальная ликвидность USD (старая настройка)
+    val chains: List<String> = listOf("solana"),   // Список блокчейнов для мониторинга (только Solana)
+    val excludeRugPull: Boolean = true,             // Исключать потенциальные скам-токены
+    val checkHolders: Boolean = false,              // Проверять количество холдеров (не используется)
+    val maxTokensToMonitor: Int = 6,                // ⭐ ВАЖНО: максимум токенов в мониторинге одновременно
     
-    // Новые поля из конфига
-    val liquidityMinUsd: Double = 200.0,
-    val volumeH24MinUsd: Double = 1000.0,
-    val pairMaxAgeHours: Double = 1.0,
-    val buysH1Min: Int = 1,
-    val maxSellsToBuysRatioH1: Double = 1.2,
-    val maxAbsPriceChangeH1Pct: Double = 250.0,
-    val useMinBuysToSellsRatioM5: Boolean = true,  // выкл = не проверять Buys/Sells ratio
-    val minBuysToSellsRatioM5: Double = 1.8,   // Buys/Sells > 1.8 за 5 мин
-    val useMinPriceChangeM5Pct: Boolean = true,  // выкл = не проверять рост цены за 5м
-    val minPriceChangeM5Pct: Double = 150.0,   // Price ↑ > 150% за 5 мин
-    val maxTokensPerTick: Int = 2,
-    val minScoreAccept: Int = 10,
+    // ─────────────────────────────────────────────────────────────────────────────
+    // ФИЛЬТРЫ ДЛЯ ПЕРВИЧНОГО ОТБОРА (в DexScreener API)
+    // ─────────────────────────────────────────────────────────────────────────────
+    val liquidityMinUsd: Double = 200.0,            // Мин. ликвидность для первичного отбора
+    val volumeH24MinUsd: Double = 1000.0,           // Мин. объём 24ч для первичного отбора
+    val pairMaxAgeHours: Double = 1.0,              // Макс. возраст пары в часах (для поиска НОВЫХ токенов)
+    val buysH1Min: Int = 1,                         // Мин. количество покупок за 1 час (для скоринга)
+    val maxSellsToBuysRatioH1: Double = 1.2,        // Макс. соотношение продаж/покупок за 1ч (штраф в скоринге)
+    val maxAbsPriceChangeH1Pct: Double = 250.0,     // Макс. изменение цены за 1ч в % (не используется активно)
+    val maxTokensPerTick: Int = 2,                  // ⭐ Макс. токенов для добавления за один цикл поиска
+    val minScoreAccept: Int = 10,                   // ⭐ Мин. очков скоринга для допуска токена (0-100)
     
-    // ✅ Параметры входа (по ТЗ)
-    val entryMaxAgeMinutes: Int = 30,
-    val entryMinMarketCap: Double = 80_000.0,
-    val entryMaxMarketCap: Double = 200_000.0,
-    val entryMinLiquidity: Double = 5_000.0,
-    val entryMinVolume: Double = 150_000.0,
-    val entryMinVolumeM5: Double = 30_000.0,
-    val useVolumeH24: Boolean = false,
-    val useVolumeM5: Boolean = true,
-    val requireSocials: Boolean = true,
-    val requireWebsite: Boolean = true,
+    // 📈 ФИЛЬТР: Buys/Sells ratio за 5 минут (давление покупок)
+    val useMinBuysToSellsRatioM5: Boolean = true,   // ⭐ Включить/выключить проверку Buys/Sells ratio
+    val minBuysToSellsRatioM5: Double = 1.8,        // ⭐ Мин. соотношение buys/sells за 5 мин (1.8 = на 80% больше покупок)
     
-    // ✅ Параметры выхода (по ТЗ)
-    val exitStrategy: String = "stages",           // "stages" | "aggressive"
-    val aggressiveTakeProfitPct: Double = 100.0,   // при +100% продать aggressiveSellPct%
-    val aggressiveSellPct: Double = 50.0,          // продать 50%, остальное trailing
-    val exitStage1Cap: Double = 200_000.0,
-    val exitStage1Pct: Double = 30.0,
-    val exitStage2Cap: Double = 250_000.0,
-    val exitStage2Pct: Double = 30.0,
-    val exitStage3Cap: Double = 300_000.0,
-    val exitStage3Pct: Double = 20.0,
-    val exitStage4Cap: Double = 350_000.0,
-    val exitStage4Pct: Double = 20.0,
+    // 📈 ФИЛЬТР: Рост цены за 5 минут (памп-детектор)
+    val useMinPriceChangeM5Pct: Boolean = true,     // ⭐ Включить/выключить проверку роста цены за 5м
+    val minPriceChangeM5Pct: Double = 150.0,        // ⭐ Мин. рост цены за 5 мин в % (150 = +150% за 5 минут)
+    
+    // ─────────────────────────────────────────────────────────────────────────────
+    // УСЛОВИЯ ВХОДА (Entry Criteria) - проверяются перед покупкой
+    // ─────────────────────────────────────────────────────────────────────────────
+    val entryMaxAgeMinutes: Int = 30,               // ⭐ Макс. возраст токена в минутах (для входа в позицию)
+    val entryMinMarketCap: Double = 80_000.0,       // ⭐ Мин. Market Cap USD ($500-$200K, шаг $500)
+    val entryMaxMarketCap: Double = 200_000.0,      // ⭐ Макс. Market Cap USD (диапазон входа)
+    val entryMinLiquidity: Double = 5_000.0,        // ⭐ Мин. ликвидность USD (защита от низколиквидных токенов)
+    val entryMinVolume: Double = 150_000.0,         // ⭐ Мин. объём торгов 24ч USD (если useVolumeH24 = true)
+    val entryMinVolumeM5: Double = 30_000.0,        // ⭐ Мин. объём торгов 5 мин USD (если useVolumeM5 = true)
+    val useVolumeH24: Boolean = false,              // Использовать проверку объёма 24ч (обычно false)
+    val useVolumeM5: Boolean = true,                // ⭐ Использовать проверку объёма 5 мин (обычно true для новых токенов)
+    val requireSocials: Boolean = true,             // ⭐ Требовать наличие соцсетей (Telegram/X)
+    val requireWebsite: Boolean = true,             // ⭐ Требовать наличие сайта
+    
+    // ─────────────────────────────────────────────────────────────────────────────
+    // СТРАТЕГИИ ВЫХОДА (Exit Strategy)
+    // ─────────────────────────────────────────────────────────────────────────────
+    val exitStrategy: String = "stages",            // ⭐ ВЫБОР СТРАТЕГИИ: "stages" или "aggressive"
+    
+    // 🔥 AGGRESSIVE MODE (один тейк-профит + trailing)
+    val aggressiveTakeProfitPct: Double = 100.0,    // ⭐ При какой прибыли % делать фиксацию (20-300%, default 100%)
+    val aggressiveSellPct: Double = 50.0,           // ⭐ Сколько % позиции продать (10-100%, default 50%; остальное trailing)
+    
+    // 📊 STAGES MODE (4 этапа по Market Cap)
+    // Stage 1: первая фиксация
+    val exitStage1Cap: Double = 200_000.0,          // ⭐ При достижении Market Cap $200K
+    val exitStage1Pct: Double = 30.0,               // ⭐ Продать 30% позиции
+    
+    // Stage 2: вторая фиксация
+    val exitStage2Cap: Double = 250_000.0,          // ⭐ При достижении Market Cap $250K
+    val exitStage2Pct: Double = 30.0,               // ⭐ Продать ещё 30% (всего 60%)
+    
+    // Stage 3: третья фиксация
+    val exitStage3Cap: Double = 300_000.0,          // ⭐ При достижении Market Cap $300K
+    val exitStage3Pct: Double = 20.0,               // ⭐ Продать ещё 20% (всего 80%)
+    
+    // Stage 4: последняя фиксация
+    val exitStage4Cap: Double = 350_000.0,          // ⭐ При достижении Market Cap $350K
+    val exitStage4Pct: Double = 20.0,               // ⭐ Продать оставшиеся 20% (всего 100%)
 
-    // ✅ Jupiter Trading
-    val jupiterEnabled: Boolean = false,
-    val jupiterApiKey: String = "",
-    val tradeUsdAmount: Double = 6.0,
-    val slippageBps: Int = 50,
-    val seedPhrase: String = "",
-    val baseMint: String = "So11111111111111111111111111111111111111112",
+    // ─────────────────────────────────────────────────────────────────────────────
+    // ЗАЩИТНЫЕ МЕХАНИЗМЫ (автоматические, жёстко закодированы в TokenMonitor)
+    // ─────────────────────────────────────────────────────────────────────────────
+    // Stop Loss: -30% от входной Market Cap ИЛИ -25% по цене → принудительный выход
+    // Trailing Stop: -35% от локального максимума Market Cap → выход (после Stage 1 / Aggressive)
+    // Stage Pullback: -35% от пика цены после частичной фиксации → выход
     
-    // Solana RPC настройки
-    val rpcUrl: String = "https://api.mainnet-beta.solana.com",
-    val rpcTimeoutSeconds: Int = 12
+    // ─────────────────────────────────────────────────────────────────────────────
+    // JUPITER TRADING (реальные свапы через Jupiter Aggregator)
+    // ─────────────────────────────────────────────────────────────────────────────
+    val jupiterEnabled: Boolean = false,            // ⭐ ВАЖНО: false = DEMO (виртуальные сделки), true = РЕАЛЬНЫЕ свапы
+    val jupiterApiKey: String = "",                 // Jupiter API ключ (опционально, для rate limits)
+    val tradeUsdAmount: Double = 6.0,               // ⭐ Сумма USD на одну реальную покупку (если Jupiter включён)
+    val slippageBps: Int = 50,                      // ⭐ Slippage в basis points (50 = 0.5%, 100 = 1%)
+    val seedPhrase: String = "",                    // ⭐ SEED PHRASE (12/24 слова) для автоподписи транзакций
+    val baseMint: String = "So11111111111111111111111111111111111111112",  // SOL mint адрес (базовая валюта для свапов)
+    
+    // ─────────────────────────────────────────────────────────────────────────────
+    // SOLANA RPC (подключение к блокчейну)
+    // ─────────────────────────────────────────────────────────────────────────────
+    val rpcUrl: String = "https://api.mainnet-beta.solana.com",  // ⭐ Solana RPC URL (можно заменить на Helius/QuickNode)
+    val rpcTimeoutSeconds: Int = 12                 // Таймаут RPC запросов в секундах
 )
+// ════════════════════════════════════════════════════════════════════════════════
 
 // API КЛИЕНТ
 class DexScreenerApi {
