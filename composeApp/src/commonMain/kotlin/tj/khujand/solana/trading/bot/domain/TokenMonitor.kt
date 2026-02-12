@@ -990,7 +990,8 @@ class TokenMonitor {
                     isRealTrade = !token.demoBuyApplied,
                     isSwapSuccess = !filterSettings.jupiterEnabled || sellResult != null
                 )
-                if (sellResult != null) realizedProfitUsd += sellResult.profitUsd
+                // ⭐ Обновляем realizedProfitUsd для демо И Jupiter режимов
+                realizedProfitUsd += partialProfitUsd
             }
         }
 
@@ -1015,7 +1016,8 @@ class TokenMonitor {
                     isRealTrade = !token.demoBuyApplied,
                     isSwapSuccess = !filterSettings.jupiterEnabled || sellResult != null
                 )
-                if (sellResult != null) realizedProfitUsd += sellResult.profitUsd
+                // ⭐ Обновляем realizedProfitUsd для демо И Jupiter режимов
+                realizedProfitUsd += partialProfitUsd
             }
         }
         if (!isAggressive && !stage2Done && marketCap >= filterSettings.exitStage2Cap) {
@@ -1039,7 +1041,8 @@ class TokenMonitor {
                     isRealTrade = !token.demoBuyApplied,
                     isSwapSuccess = !filterSettings.jupiterEnabled || sellResult != null
                 )
-                if (sellResult != null) realizedProfitUsd += sellResult.profitUsd
+                // ⭐ Обновляем realizedProfitUsd для демо И Jupiter режимов
+                realizedProfitUsd += partialProfitUsd
             }
         }
         if (!isAggressive && !stage3Done && marketCap >= filterSettings.exitStage3Cap) {
@@ -1063,7 +1066,8 @@ class TokenMonitor {
                     isRealTrade = !token.demoBuyApplied,
                     isSwapSuccess = !filterSettings.jupiterEnabled || sellResult != null
                 )
-                if (sellResult != null) realizedProfitUsd += sellResult.profitUsd
+                // ⭐ Обновляем realizedProfitUsd для демо И Jupiter режимов
+                realizedProfitUsd += partialProfitUsd
             }
         }
         if (!isAggressive && !stage4Done && marketCap >= filterSettings.exitStage4Cap) {
@@ -1087,7 +1091,8 @@ class TokenMonitor {
                     isRealTrade = !token.demoBuyApplied,
                     isSwapSuccess = !filterSettings.jupiterEnabled || sellResult != null
                 )
-                if (sellResult != null) realizedProfitUsd += sellResult.profitUsd
+                // ⭐ Обновляем realizedProfitUsd для демо И Jupiter режимов
+                realizedProfitUsd += partialProfitUsd
             }
         }
 
@@ -1121,9 +1126,18 @@ class TokenMonitor {
         val forcedExit = forcedExitByStopLoss || forcedExitByTrailing || forcedExitByStagePullback
         val closedByStage4 = stage4Done || remainingPct <= 0.0
 
+        // ──── ВЫЧИСЛЯЕМ ФИНАЛЬНЫЙ ПРОФИТ ────
+        val finalProfitUsd = if (filterSettings.jupiterEnabled) {
+            realizedProfitUsd  // ⭐ Jupiter: только реализованная прибыль от продаж
+        } else {
+            // ⭐ Demo: реализованная прибыль + текущая от остатка позиции
+            val remainingProfit = investment * priceChangePercent / 100 * (remainingPct / 100.0)
+            realizedProfitUsd + remainingProfit
+        }
+
         // ──── ОПРЕДЕЛЕНИЕ СТАТУСА ────
         val newStatus = when {
-            forcedExit -> if (priceBasedProfitUsd >= 0) TokenStatus.STOPPED_TP else TokenStatus.STOPPED_SL
+            forcedExit -> if (finalProfitUsd >= 0) TokenStatus.STOPPED_TP else TokenStatus.STOPPED_SL
             closedByStage4 -> TokenStatus.STOPPED_TP
             else -> TokenStatus.MONITORING
         }
@@ -1150,7 +1164,7 @@ class TokenMonitor {
             tokenPair = updatedPair,
             currentPrice = newPrice.toString(),
             priceChangePercent = priceChangePercent,
-            profitUsd = if (filterSettings.jupiterEnabled) realizedProfitUsd else priceBasedProfitUsd,
+            profitUsd = finalProfitUsd,
             status = newStatus,
             sessionHighPrice = newSessionHigh,
             peakMarketCap = newPeakMarketCap,

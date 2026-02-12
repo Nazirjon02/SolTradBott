@@ -2,6 +2,8 @@ package tj.khujand.solana.trading.bot.ui
 
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
@@ -756,22 +758,84 @@ valueRange = 10f..100f,
                     )
                     
                     Spacer(modifier = Modifier.height(12.dp))
-                    OutlinedTextField(
-                        value = currentSettings.aiModel,
-                        onValueChange = { value ->
-                            applySettings(currentSettings.copy(aiModel = value.trim()))
-                        },
-                        label = { Text("Model") },
-                        placeholder = { 
-                            Text(when (currentSettings.aiProvider) {
-                                "groq" -> "llama-3.1-8b-instant (fast) / llama-3.3-70b-versatile (quality)"
-                                "claude" -> "claude-3-5-sonnet-20241022"
-                                "openai" -> "gpt-4o-mini"
-                                else -> ""
-                            })
-                        },
+                    
+                    // ── AI MODEL SELECTOR ──
+                    var showModelDialog by remember { mutableStateOf(false) }
+                    
+                    OutlinedButton(
+                        onClick = { showModelDialog = true },
                         modifier = Modifier.fillMaxWidth()
-                    )
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text("AI Model", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            Spacer(modifier = Modifier.height(2.dp))
+                            Text(
+                                currentSettings.aiModel.ifEmpty { "Select model..." },
+                                fontSize = 14.sp,
+                                fontWeight = FontWeight.Medium
+                            )
+                        }
+                        Icon(Icons.Default.KeyboardArrowDown, contentDescription = null)
+                    }
+                    
+                    // ── MODEL SELECTION DIALOG ──
+                    if (showModelDialog) {
+                        val models = when (currentSettings.aiProvider) {
+                            "groq" -> listOf(
+                                "llama-3.1-8b-instant" to "⚡ Llama 3.1 8B (fast, cheap)",
+                                "llama-3.3-70b-versatile" to "🧠 Llama 3.3 70B (quality)",
+                                "openai/gpt-oss-120b" to "🚀 GPT-OSS 120B (powerful)",
+                                "openai/gpt-oss-20b" to "⚡ GPT-OSS 20B (very fast)"
+                            )
+                            "claude" -> listOf(
+                                "claude-3-5-sonnet-20241022" to "🧠 Claude 3.5 Sonnet (best)",
+                                "claude-3-5-haiku-20241022" to "⚡ Claude 3.5 Haiku (fast)",
+                                "claude-3-opus-20240229" to "🎯 Claude 3 Opus (legacy)"
+                            )
+                            "openai" -> listOf(
+                                "gpt-4o-mini" to "⚡ GPT-4o Mini (cheap)",
+                                "gpt-4o" to "🧠 GPT-4o (powerful)",
+                                "gpt-4-turbo" to "🚀 GPT-4 Turbo (fast)"
+                            )
+                            else -> emptyList()
+                        }
+                        
+                        AlertDialog(
+                            onDismissRequest = { showModelDialog = false },
+                            title = { Text("Select AI Model") },
+                            text = {
+                                LazyColumn {
+                                    items(models) { (modelId, modelName) ->
+                                        Row(
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .clickable {
+                                                    applySettings(currentSettings.copy(aiModel = modelId))
+                                                    showModelDialog = false
+                                                }
+                                                .padding(vertical = 12.dp, horizontal = 8.dp),
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            RadioButton(
+                                                selected = currentSettings.aiModel == modelId,
+                                                onClick = {
+                                                    applySettings(currentSettings.copy(aiModel = modelId))
+                                                    showModelDialog = false
+                                                }
+                                            )
+                                            Spacer(modifier = Modifier.width(8.dp))
+                                            Text(modelName, fontSize = 14.sp)
+                                        }
+                                    }
+                                }
+                            },
+                            confirmButton = {
+                                TextButton(onClick = { showModelDialog = false }) {
+                                    Text("Cancel")
+                                }
+                            }
+                        )
+                    }
                     
                     Spacer(modifier = Modifier.height(12.dp))
                     Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
