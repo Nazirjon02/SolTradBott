@@ -17,6 +17,7 @@ import tj.khujand.solana.trading.bot.util.AppSettings
 import kotlin.time.Clock
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
+import tj.khujand.solana.trading.bot.ui.formatNumber
 
 // ════════════════════════════════════════════════════════════════════════════════
 // ТОКЕН В МОНИТОРИНГЕ (активная позиция)
@@ -80,6 +81,7 @@ class TokenMonitor {
 
     private val api = DexScreenerApi()
     private val jupiterApi = JupiterApi()
+    private var aiAnalyzer: AiAnalyzer? = null  // ⭐ AI-анализатор (создаётся при необходимости)
     private var monitorJob: Job? = null
     private var isMonitoring = false
     private val maxParallelUpdates = 2
@@ -95,7 +97,17 @@ class TokenMonitor {
     val monitoredTokens: List<MonitoredToken> get() = _monitoredTokens
 
     // Настройки по умолчанию
-    var filterSettings = FilterSettings()
+    var filterSettings = FilterSettings() 
+        set(value) {
+            field = value
+            // Пересоздаём AI analyzer при изменении настроек
+            if (value.useAiAnalysis && value.aiApiKey.isNotBlank()) {
+                aiAnalyzer = AiAnalyzer(value)
+            } else {
+                aiAnalyzer?.close()
+                aiAnalyzer = null
+            }
+        }
 
     init {
         restoreClosedTokens()
@@ -196,7 +208,71 @@ class TokenMonitor {
                                     break  // 🛑 Прерываем добавление новых
                                 }
 
-                                // 4. Добавляем токен
+                                // 4. 🤖 AI-АНАЛИЗ ТОКЕНА (если включён)
+                                if (filterSettings.useAiAnalysis && aiAnalyzer != null) {
+                                    try {
+                                        val ageMs = token.pairCreatedAt?.let { 
+                                            Clock.System.now().toEpochMilliseconds() - if (it < 1_000_000_000_000L) it * 1000 else it
+                                        } ?: 0L
+                                        val ageMinutes = (ageMs / (1000.0 * 60.0)).toLong()
+                                        
+                                        println("🤖 AI-анализ токена ${token.baseToken?.symbol}...")
+                                        val aiResult = aiAnalyzer!!.analyzeToken(token, ageMinutes)
+                                        
+                                        if (aiResult != null) {
+                                            println("═══════════════════════════════════════════════════════════")
+                                            println("🤖 AI ANALYSIS RESULT: ${token.baseToken?.symbol}")
+                                            println("═══════════════════════════════════════════════════════════")
+                                            println("📊 SCORE: ${aiResult.score}/100")
+                                            println("🚨 RUG_RISK: ${aiResult.rugRisk}")
+                                            println("📈 MOMENTUM_PHASE: ${aiResult.momentumPhase}")
+                                            println("🎯 ENTRY_SIGNAL: ${aiResult.entrySignal}")
+                                            println("🎲 CONFIDENCE: ${formatNumber(aiResult.confidence)}")
+                                            println("❌ RED_FLAGS: ${aiResult.redFlags}")
+                                            println("✅ GREEN_FLAGS: ${aiResult.greenFlags}")
+                                            println("💡 REASON: ${aiResult.reason}")
+                                            println("⏰ OPTIMAL_ENTRY: ${aiResult.optimalEntryCap}")
+                                            println("🎯 PREDICTED_PEAK: ${aiResult.predictedPeakCap}")
+                                            println("═══════════════════════════════════════════════════════════")
+                                            println("📜 RAW AI RESPONSE:")
+                                            println(aiResult.rawResponse)
+                                            println("═══════════════════════════════════════════════════════════")
+                                            
+                                            // Проверка фильтров AI
+                                            val rugRiskOk = when (aiResult.rugRisk) {
+                                                "LOW" -> true
+                                                "MEDIUM" -> filterSettings.maxAiRugRisk != "LOW"
+                                                "HIGH" -> filterSettings.maxAiRugRisk == "HIGH"
+                                                "CRITICAL" -> false
+                                                else -> true
+                                            }
+                                            
+                                            val scoreOk = aiResult.score >= filterSettings.minAiScore
+                                            val signalOk = aiResult.entrySignal !in listOf("AVOID", "STRONG_AVOID")
+                                            
+                                            if (!rugRiskOk) {
+                                                println("❌ AI: отклонён по RUG_RISK (${aiResult.rugRisk} > ${filterSettings.maxAiRugRisk})")
+                                                continue
+                                            }
+                                            if (!scoreOk) {
+                                                println("❌ AI: отклонён по SCORE (${aiResult.score} < ${filterSettings.minAiScore})")
+                                                continue
+                                            }
+                                            if (!signalOk) {
+                                                println("❌ AI: отклонён по SIGNAL (${aiResult.entrySignal})")
+                                                continue
+                                            }
+                                            
+                                            println("✅ AI: токен прошёл анализ!")
+                                        } else {
+                                            println("⚠️ AI: анализ не удался, пропускаем AI-фильтр")
+                                        }
+                                    } catch (e: Exception) {
+                                        println("⚠️ AI анализ ошибка: ${e.message}, пропускаем AI-фильтр")
+                                    }
+                                }
+
+                                // 5. Добавляем токен
                                 val price = parsePrice(token.priceUsd)
                                 if (price > 0) {
                                     val entryCap = token.marketCap ?: 0.0

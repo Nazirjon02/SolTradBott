@@ -226,7 +226,18 @@ data class FilterSettings(
     // SOLANA RPC (подключение к блокчейну)
     // ─────────────────────────────────────────────────────────────────────────────
     val rpcUrl: String = "https://api.mainnet-beta.solana.com",  // ⭐ Solana RPC URL (можно заменить на Helius/QuickNode)
-    val rpcTimeoutSeconds: Int = 12                 // Таймаут RPC запросов в секундах
+    val rpcTimeoutSeconds: Int = 12,                // Таймаут RPC запросов в секундах
+    
+    // ─────────────────────────────────────────────────────────────────────────────
+    // 🤖 AI ANALYSIS (умный анализ токенов перед входом)
+    // ─────────────────────────────────────────────────────────────────────────────
+    val useAiAnalysis: Boolean = false,             // ⭐ Включить AI-анализ токенов
+    val aiProvider: String = "groq",                // ⭐ Провайдер AI: "groq" (бесплатный!), "claude", "openai"
+    val aiApiKey: String = "",                      // ⭐ API ключ (groq.com, anthropic.com, openai.com)
+    val aiModel: String = "llama-3.1-8b-instant",   // ⭐ Модель: llama-3.1-8b-instant / llama-3.3-70b-versatile (Groq) / claude-3-5-sonnet / gpt-4o-mini
+    val minAiScore: Int = 60,                       // ⭐ Мин. AI score для входа (0-100)
+    val maxAiRugRisk: String = "MEDIUM",            // ⭐ Макс. допустимый rug risk: LOW/MEDIUM/HIGH
+    val aiTimeoutSeconds: Int = 15                  // Таймаут AI запроса в секундах
 )
 // ════════════════════════════════════════════════════════════════════════════════
 

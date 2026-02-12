@@ -132,7 +132,15 @@ object FilterSettingsManager {
             seedPhrase = "",
             baseMint = "So11111111111111111111111111111111111111112",
             rpcUrl = "https://api.mainnet-beta.solana.com",
-            rpcTimeoutSeconds = 12
+            rpcTimeoutSeconds = 12,
+            // AI Analysis
+            useAiAnalysis = false,
+            aiProvider = "groq",
+            aiApiKey = "",
+            aiModel = "llama-3.1-8b-instant", // ⚡ Актуальная модель Groq 2026
+            minAiScore = 60,
+            maxAiRugRisk = "MEDIUM",
+            aiTimeoutSeconds = 15
         )
     }
 

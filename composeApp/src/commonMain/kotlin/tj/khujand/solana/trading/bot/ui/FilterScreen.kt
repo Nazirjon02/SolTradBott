@@ -243,83 +243,94 @@ fun FilterScreen(
                     enabled = currentSettings.useVolumeM5
                 )
 
-                Spacer(modifier = Modifier.height(12.dp))
-                Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                    Switch(
-                        checked = currentSettings.requireSocials,
-                        onCheckedChange = { checked ->
-                            val newSettings = currentSettings.copy(requireSocials = checked)
-                            applySettings(newSettings)
-                        }
-                    )
-                    Spacer(modifier = Modifier.width(12.dp))
-                    Text("Require socials (Telegram/X)")
-                }
-
-                Spacer(modifier = Modifier.height(8.dp))
-                Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                    Switch(
-                        checked = currentSettings.requireWebsite,
-                        onCheckedChange = { checked ->
-                            val newSettings = currentSettings.copy(requireWebsite = checked)
-                            applySettings(newSettings)
-                        }
-                    )
-                    Spacer(modifier = Modifier.width(12.dp))
-                    Text("Require website")
-                }
-
-                Spacer(modifier = Modifier.height(12.dp))
-                Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                    Switch(
-                        checked = currentSettings.useMinBuysToSellsRatioM5,
-                        onCheckedChange = { checked ->
-                            applySettings(currentSettings.copy(useMinBuysToSellsRatioM5 = checked))
-                        }
-                    )
-                    Spacer(modifier = Modifier.width(12.dp))
-                    Text("Buys/Sells ratio (5m) > X")
-                }
-                if (currentSettings.useMinBuysToSellsRatioM5) {
-                    Text("Только при давлении покупок", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                        Text("Min Buys/Sells ratio M5")
-                        Text("${(currentSettings.minBuysToSellsRatioM5 * 10).roundToInt() / 10.0}", fontWeight = FontWeight.Bold)
+                // ──── Эти фильтры скрываются если AI включён (AI проверит лучше) ────
+                if (!currentSettings.useAiAnalysis) {
+                    Spacer(modifier = Modifier.height(12.dp))
+                    Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                        Switch(
+                            checked = currentSettings.requireSocials,
+                            onCheckedChange = { checked ->
+                                val newSettings = currentSettings.copy(requireSocials = checked)
+                                applySettings(newSettings)
+                            }
+                        )
+                        Spacer(modifier = Modifier.width(12.dp))
+                        Text("Require socials (Telegram/X)")
                     }
-                    Slider(
-                        value = currentSettings.minBuysToSellsRatioM5.toFloat(),
-                        onValueChange = { v ->
-                            applySettings(currentSettings.copy(minBuysToSellsRatioM5 = v.toDouble().coerceIn(0.5, 5.0)))
-                        },
-                        valueRange = 0.5f..5f,
-                        steps = 44
-                    )
-                }
 
-                Spacer(modifier = Modifier.height(8.dp))
-                Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                    Switch(
-                        checked = currentSettings.useMinPriceChangeM5Pct,
-                        onCheckedChange = { checked ->
-                            applySettings(currentSettings.copy(useMinPriceChangeM5Pct = checked))
-                        }
-                    )
-                    Spacer(modifier = Modifier.width(12.dp))
-                    Text("Min price change 5m %")
-                }
-                if (currentSettings.useMinPriceChangeM5Pct) {
-                    Text("Price ↑ за 5 мин (если API отдаёт m5)", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                        Text("Min %")
-                        Text("+${currentSettings.minPriceChangeM5Pct.toInt()}%", fontWeight = FontWeight.Bold)
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                        Switch(
+                            checked = currentSettings.requireWebsite,
+                            onCheckedChange = { checked ->
+                                val newSettings = currentSettings.copy(requireWebsite = checked)
+                                applySettings(newSettings)
+                            }
+                        )
+                        Spacer(modifier = Modifier.width(12.dp))
+                        Text("Require website")
                     }
-                    Slider(
-                        value = currentSettings.minPriceChangeM5Pct.toFloat().coerceIn(0f, 500f),
-                        onValueChange = { v ->
-                            applySettings(currentSettings.copy(minPriceChangeM5Pct = v.toDouble().coerceIn(0.0, 500.0)))
-                        },
-                        valueRange = 0f..500f,
-                        steps = 49
+
+                    Spacer(modifier = Modifier.height(12.dp))
+                    Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                        Switch(
+                            checked = currentSettings.useMinBuysToSellsRatioM5,
+                            onCheckedChange = { checked ->
+                                applySettings(currentSettings.copy(useMinBuysToSellsRatioM5 = checked))
+                            }
+                        )
+                        Spacer(modifier = Modifier.width(12.dp))
+                        Text("Buys/Sells ratio (5m) > X")
+                    }
+                    if (currentSettings.useMinBuysToSellsRatioM5) {
+                        Text("Только при давлении покупок", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                            Text("Min Buys/Sells ratio M5")
+                            Text("${(currentSettings.minBuysToSellsRatioM5 * 10).roundToInt() / 10.0}", fontWeight = FontWeight.Bold)
+                        }
+                        Slider(
+                            value = currentSettings.minBuysToSellsRatioM5.toFloat(),
+                            onValueChange = { v ->
+                                applySettings(currentSettings.copy(minBuysToSellsRatioM5 = v.toDouble().coerceIn(0.5, 5.0)))
+                            },
+                            valueRange = 0.5f..5f,
+                            steps = 44
+                        )
+                    }
+
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                        Switch(
+                            checked = currentSettings.useMinPriceChangeM5Pct,
+                            onCheckedChange = { checked ->
+                                applySettings(currentSettings.copy(useMinPriceChangeM5Pct = checked))
+                            }
+                        )
+                        Spacer(modifier = Modifier.width(12.dp))
+                        Text("Min price change 5m %")
+                    }
+                    if (currentSettings.useMinPriceChangeM5Pct) {
+                        Text("Price ↑ за 5 мин (если API отдаёт m5)", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                            Text("Min %")
+                            Text("+${currentSettings.minPriceChangeM5Pct.toInt()}%", fontWeight = FontWeight.Bold)
+                        }
+                        Slider(
+                            value = currentSettings.minPriceChangeM5Pct.toFloat().coerceIn(0f, 500f),
+                            onValueChange = { v ->
+                                applySettings(currentSettings.copy(minPriceChangeM5Pct = v.toDouble().coerceIn(0.0, 500.0)))
+                            },
+                            valueRange = 0f..500f,
+                            steps = 49
+                        )
+                    }
+                } else {
+                    // Если AI включён - показываем краткую подсказку
+                    Spacer(modifier = Modifier.height(12.dp))
+                    Text(
+                        "🤖 AI проверяет: socials, website, buy/sell pressure, momentum",
+                        fontSize = 11.sp,
+                        color = MaterialTheme.colorScheme.primary
                     )
                 }
             }
@@ -632,7 +643,7 @@ valueRange = 10f..100f,
                     steps = 19
                 )
 
-                Spacer(modifier = Modifier.height(12.dp))
+                Spacer(modifier = Modifier.height(16.dp))
                 Button(
                     onClick = {
                         scope.launch {
@@ -651,6 +662,151 @@ valueRange = 10f..100f,
                         fontSize = 11.sp,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
+                }
+            }
+        }
+
+        Spacer(modifier = Modifier.height(16.dp))
+
+        // ✅ AI Analysis
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            colors = CardDefaults.cardColors(
+                containerColor = MaterialTheme.colorScheme.surfaceVariant
+            )
+        ) {
+            Column(modifier = Modifier.padding(16.dp)) {
+                Text("🤖 AI Analysis", fontWeight = FontWeight.Medium, fontSize = 16.sp)
+                Spacer(modifier = Modifier.height(8.dp))
+                Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                    Switch(
+                        checked = currentSettings.useAiAnalysis,
+                        onCheckedChange = { checked ->
+                            applySettings(currentSettings.copy(useAiAnalysis = checked))
+                        }
+                    )
+                    Spacer(modifier = Modifier.width(12.dp))
+                    Text("Use AI for token analysis")
+                }
+                
+                if (currentSettings.useAiAnalysis) {
+                    Spacer(modifier = Modifier.height(12.dp))
+                    Text(
+                        "AI анализирует токены на rug pull, momentum phase и optimal entry",
+                        fontSize = 11.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    
+                    Spacer(modifier = Modifier.height(12.dp))
+                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        FilterChip(
+                            selected = currentSettings.aiProvider == "groq",
+                            onClick = { 
+                                applySettings(currentSettings.copy(
+                                    aiProvider = "groq",
+                                    aiModel = "llama-3.1-8b-instant" // ⚡ FAST & FREE (560 t/s, $0.05/1M)
+                                ))
+                            },
+                            label = { Text("Groq") }
+                        )
+                        FilterChip(
+                            selected = currentSettings.aiProvider == "claude",
+                            onClick = { 
+                                applySettings(currentSettings.copy(
+                                    aiProvider = "claude",
+                                    aiModel = "claude-3-5-sonnet-20241022"
+                                ))
+                            },
+                            label = { Text("Claude") }
+                        )
+                        FilterChip(
+                            selected = currentSettings.aiProvider == "openai",
+                            onClick = { 
+                                applySettings(currentSettings.copy(
+                                    aiProvider = "openai",
+                                    aiModel = "gpt-4o-mini"
+                                ))
+                            },
+                            label = { Text("OpenAI") }
+                        )
+                    }
+                    
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text(
+                        when (currentSettings.aiProvider) {
+                            "groq" -> "⚡ ОЧЕНЬ ДЁШЕВО! $0.05/1M tokens (560 t/s) • console.groq.com/keys"
+                            "claude" -> "💰 $3-15/1M tokens • console.anthropic.com"
+                            "openai" -> "💰 $0.15-5/1M tokens • platform.openai.com"
+                            else -> ""
+                        },
+                        fontSize = 10.sp,
+                        color = if (currentSettings.aiProvider == "groq") 
+                            MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    
+                    Spacer(modifier = Modifier.height(12.dp))
+                    OutlinedTextField(
+                        value = currentSettings.aiApiKey,
+                        onValueChange = { value ->
+                            applySettings(currentSettings.copy(aiApiKey = value.trim()))
+                        },
+                        label = { Text("${currentSettings.aiProvider.uppercase()} API key") },
+                        modifier = Modifier.fillMaxWidth(),
+                        visualTransformation = PasswordVisualTransformation()
+                    )
+                    
+                    Spacer(modifier = Modifier.height(12.dp))
+                    OutlinedTextField(
+                        value = currentSettings.aiModel,
+                        onValueChange = { value ->
+                            applySettings(currentSettings.copy(aiModel = value.trim()))
+                        },
+                        label = { Text("Model") },
+                        placeholder = { 
+                            Text(when (currentSettings.aiProvider) {
+                                "groq" -> "llama-3.1-8b-instant (fast) / llama-3.3-70b-versatile (quality)"
+                                "claude" -> "claude-3-5-sonnet-20241022"
+                                "openai" -> "gpt-4o-mini"
+                                else -> ""
+                            })
+                        },
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    
+                    Spacer(modifier = Modifier.height(12.dp))
+                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                        Text("Min AI Score")
+                        Text("${currentSettings.minAiScore}", fontWeight = FontWeight.Bold)
+                    }
+                    Slider(
+                        value = currentSettings.minAiScore.toFloat(),
+                        onValueChange = { v ->
+                            applySettings(currentSettings.copy(minAiScore = v.toInt()))
+                        },
+                        valueRange = 0f..100f,
+                        steps = 19
+                    )
+                    
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text("Max Rug Risk", fontSize = 14.sp)
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        FilterChip(
+                            selected = currentSettings.maxAiRugRisk == "LOW",
+                            onClick = { applySettings(currentSettings.copy(maxAiRugRisk = "LOW")) },
+                            label = { Text("LOW") }
+                        )
+                        FilterChip(
+                            selected = currentSettings.maxAiRugRisk == "MEDIUM",
+                            onClick = { applySettings(currentSettings.copy(maxAiRugRisk = "MEDIUM")) },
+                            label = { Text("MEDIUM") }
+                        )
+                        FilterChip(
+                            selected = currentSettings.maxAiRugRisk == "HIGH",
+                            onClick = { applySettings(currentSettings.copy(maxAiRugRisk = "HIGH")) },
+                            label = { Text("HIGH") }
+                        )
+                    }
                 }
             }
         }
