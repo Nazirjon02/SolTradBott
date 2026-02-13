@@ -22,6 +22,7 @@ import tj.khujand.solana.trading.bot.crypto.createSignerFromSeedPhrase
 import tj.khujand.solana.trading.bot.data.FilterSettingsManager
 import tj.khujand.solana.trading.bot.domain.DemoAccountManager
 import tj.khujand.solana.trading.bot.network.FilterSettings
+import tj.khujand.solana.trading.bot.util.formatDemoBalance
 
 @Composable
 fun FilterScreen(
@@ -1223,17 +1224,5 @@ valueRange = 10f..100f,
                 }
             }
         )
-    }
-}
-
-private fun formatDemoBalance(value: Double): String {
-    val factor = 100.0
-    val rounded = kotlin.math.round(value * factor) / factor
-    val parts = rounded.toString().split('.')
-    return if (parts.size == 1) {
-        "$rounded.00"
-    } else {
-        val decimalPart = parts[1].padEnd(2, '0').take(2)
-        "${parts[0]}.$decimalPart"
     }
 }

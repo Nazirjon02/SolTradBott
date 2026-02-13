@@ -39,8 +39,9 @@ import tj.khujand.solana.trading.bot.domain.TokenMonitor
 import tj.khujand.solana.trading.bot.domain.TokenStatus
 import tj.khujand.solana.trading.bot.isAndroid
 import tj.khujand.solana.trading.bot.network.FilterSettings
+import tj.khujand.solana.trading.bot.util.formatDemoBalance
+import tj.khujand.solana.trading.bot.util.formatSimpleNumber
 import kotlin.math.pow
-import kotlin.math.round
 import kotlin.time.Clock
 
 @Composable
@@ -518,18 +519,6 @@ fun MainScreen() {
                 }
             }
         }
-    }
-}
-
-private fun formatDemoBalance(value: Double): String {
-    val factor = 100.0
-    val rounded = round(value * factor) / factor
-    val parts = rounded.toString().split('.')
-    return if (parts.size == 1) {
-        "$rounded.00"
-    } else {
-        val decimalPart = parts[1].padEnd(2, '0').take(2)
-        "${parts[0]}.$decimalPart"
     }
 }
 

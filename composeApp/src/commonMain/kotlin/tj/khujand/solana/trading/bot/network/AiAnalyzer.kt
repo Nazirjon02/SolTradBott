@@ -12,6 +12,8 @@ import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.jsonPrimitive
+import tj.khujand.solana.trading.bot.util.formatNumber
+import tj.khujand.solana.trading.bot.util.formatNumberWithCommas
 
 // ════════════════════════════════════════════════════════════════════════════════
 // AI ANALYZER - анализ токенов через Claude/GPT перед входом
@@ -120,9 +122,9 @@ Address: ${pair.baseToken?.address ?: "Unknown"}
 ═══════════════════════════════════════
 
 💰 FINANCIALS:
-- Market Cap: ${'$'}${String.format("%,.0f", pair.marketCap ?: 0.0)}
-- Liquidity (USD): ${'$'}${String.format("%,.0f", pair.liquidity?.usd ?: 0.0)}
-- LP/MC Ratio: ${String.format("%.2f", lpRatio)}% ${when {
+- Market Cap: ${'$'}${formatNumberWithCommas(pair.marketCap ?: 0.0, 0)}
+- Liquidity (USD): ${'$'}${formatNumberWithCommas(pair.liquidity?.usd ?: 0.0, 0)}
+- LP/MC Ratio: ${formatNumber(lpRatio, 2)}% ${when {
             lpRatio < 3 -> "⚠️ CRITICAL - Very low liquidity"
             lpRatio < 5 -> "⚠️ WARNING - Low liquidity"
             lpRatio in 5.0..15.0 -> "✅ HEALTHY"
@@ -130,15 +132,15 @@ Address: ${pair.baseToken?.address ?: "Unknown"}
         }}
 
 📈 VOLUME ANALYSIS:
-- Last 5 minutes: ${'$'}${String.format("%,.0f", pair.volume?.m5 ?: 0.0)}
-- Last 1 hour: ${'$'}${String.format("%,.0f", pair.volume?.h1 ?: 0.0)}
-- Last 24 hours: ${'$'}${String.format("%,.0f", pair.volume?.h24 ?: 0.0)}
-- Volume/Liquidity Ratio: ${String.format("%.2f", volumeToLiqRatio)}x ${if (volumeToLiqRatio > 10) "⚠️ SUSPICIOUS - Possible wash trading" else ""}
+- Last 5 minutes: ${'$'}${formatNumber(pair.volume?.m5 ?: 0.0)}
+- Last 1 hour: ${'$'}${formatNumberWithCommas(pair.volume?.h1 ?: 0.0, 0)}
+- Last 24 hours: ${'$'}${formatNumberWithCommas(pair.volume?.h24 ?: 0.0, 0)}
+- Volume/Liquidity Ratio: ${formatNumber(volumeToLiqRatio, 2)}x ${if (volumeToLiqRatio > 10) "⚠️ SUSPICIOUS - Possible wash trading" else ""}
 
 🔄 TRADING ACTIVITY (Last 5 min):
 - Total Buys: $buysM5
 - Total Sells: $sellsM5
-- Buy/Sell Ratio: ${String.format("%.2f", buySellRatio)} ${when {
+- Buy/Sell Ratio: ${formatNumber(buySellRatio, 2)} ${when {
             buySellRatio > 3 -> "🚀 STRONG buy pressure"
             buySellRatio > 1.5 -> "✅ Good buy pressure"
             buySellRatio < 0.7 -> "⚠️ Selling pressure"

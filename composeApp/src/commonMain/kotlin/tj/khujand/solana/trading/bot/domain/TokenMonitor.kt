@@ -17,7 +17,7 @@ import tj.khujand.solana.trading.bot.util.AppSettings
 import kotlin.time.Clock
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
-import tj.khujand.solana.trading.bot.ui.formatNumber
+import tj.khujand.solana.trading.bot.util.formatNumber
 
 // ════════════════════════════════════════════════════════════════════════════════
 // ТОКЕН В МОНИТОРИНГЕ (активная позиция)
@@ -1239,11 +1239,11 @@ class TokenMonitor {
         when {
             token.priceChangePercent >= 30 -> {
                 token.status = TokenStatus.STOPPED_TP
-                println("🎯 ТЕЙК-ПРОФИТ: ${token.tokenPair.baseToken?.symbol} +${token.priceChangePercent.format(2)}%")
+                println("🎯 ТЕЙК-ПРОФИТ: ${token.tokenPair.baseToken?.symbol} +${formatNumber(token.priceChangePercent, 2)}%")
             }
             token.priceChangePercent <= -25 -> {
                 token.status = TokenStatus.STOPPED_SL
-                println("💥 СТОП-ЛОСС: ${token.tokenPair.baseToken?.symbol} ${token.priceChangePercent.format(2)}%")
+                println("💥 СТОП-ЛОСС: ${token.tokenPair.baseToken?.symbol} ${formatNumber(token.priceChangePercent, 2)}%")
             }
         }
     }
@@ -1259,11 +1259,6 @@ class TokenMonitor {
     }
 
 
-
-    // Вспомогательная функция для форматирования чисел
-    private fun Double.format(decimals: Int): String {
-        return decimals.toString()
-    }
 
     private fun abs(value: Double): Double {
         return if (value < 0) -value else value

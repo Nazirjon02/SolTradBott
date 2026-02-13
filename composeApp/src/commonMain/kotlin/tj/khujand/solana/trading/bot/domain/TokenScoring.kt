@@ -2,6 +2,7 @@ package tj.khujand.solana.trading.bot.domain
 
 import tj.khujand.solana.trading.bot.network.SplMintInfo
 import tj.khujand.solana.trading.bot.network.TokenPair
+import tj.khujand.solana.trading.bot.util.formatLargeNumber
 
 /**
  * Результат подсчета очков токена
@@ -61,19 +62,19 @@ object TokenScoring {
         when {
             liquidity >= 50000 -> {
                 score += 15
-                reasons.add("Высокая ликвидность (${formatNumber(liquidity)})")
+                reasons.add("Высокая ликвидность (${formatLargeNumber(liquidity)})")
             }
             liquidity >= 20000 -> {
                 score += 10
-                reasons.add("Хорошая ликвидность (${formatNumber(liquidity)})")
+                reasons.add("Хорошая ликвидность (${formatLargeNumber(liquidity)})")
             }
             liquidity >= 10000 -> {
                 score += 5
-                reasons.add("Удовлетворительная ликвидность (${formatNumber(liquidity)})")
+                reasons.add("Удовлетворительная ликвидность (${formatLargeNumber(liquidity)})")
             }
             liquidity < settings.liquidityMinUsd -> {
                 score -= 20
-                reasons.add("Низкая ликвидность (${formatNumber(liquidity)})")
+                reasons.add("Низкая ликвидность (${formatLargeNumber(liquidity)})")
             }
         }
         
@@ -82,19 +83,19 @@ object TokenScoring {
         when {
             volumeH24 >= 100000 -> {
                 score += 15
-                reasons.add("Высокий объем 24ч (${formatNumber(volumeH24)})")
+                reasons.add("Высокий объем 24ч (${formatLargeNumber(volumeH24)})")
             }
             volumeH24 >= 50000 -> {
                 score += 10
-                reasons.add("Хороший объем 24ч (${formatNumber(volumeH24)})")
+                reasons.add("Хороший объем 24ч (${formatLargeNumber(volumeH24)})")
             }
             volumeH24 >= 10000 -> {
                 score += 5
-                reasons.add("Удовлетворительный объем 24ч (${formatNumber(volumeH24)})")
+                reasons.add("Удовлетворительный объем 24ч (${formatLargeNumber(volumeH24)})")
             }
             volumeH24 < settings.volumeH24MinUsd -> {
                 score -= 15
-                reasons.add("Низкий объем 24ч (${formatNumber(volumeH24)})")
+                reasons.add("Низкий объем 24ч (${formatLargeNumber(volumeH24)})")
             }
         }
         
@@ -162,30 +163,4 @@ object TokenScoring {
         )
     }
     
-    private fun formatNumber(value: Double): String {
-        return when {
-            value >= 1_000_000 -> {
-                val millions = value / 1_000_000
-                "${roundTo2Decimals(millions)}M"
-            }
-            value >= 1_000 -> {
-                val thousands = value / 1_000
-                "${roundTo2Decimals(thousands)}K"
-            }
-            else -> roundTo2Decimals(value)
-        }
-    }
-    
-    private fun roundTo2Decimals(value: Double): String {
-        // Округляем до 2 знаков после запятой
-        val rounded = kotlin.math.round(value * 100) / 100.0
-        val str = rounded.toString()
-        
-        // Убираем лишние нули после запятой
-        return if (str.contains('.')) {
-            str.trimEnd('0').trimEnd('.')
-        } else {
-            str
-        }
-    }
 }

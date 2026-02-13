@@ -58,8 +58,9 @@ import kotlinx.coroutines.delay
 import tj.khujand.solana.trading.bot.domain.DemoAccountManager
 import tj.khujand.solana.trading.bot.domain.MonitoredToken
 import tj.khujand.solana.trading.bot.domain.TokenStatus
-import kotlin.math.pow
-import kotlin.math.round
+import tj.khujand.solana.trading.bot.util.formatLargeNumber
+import tj.khujand.solana.trading.bot.util.formatNumber
+import tj.khujand.solana.trading.bot.util.formatSimpleNumber
 import kotlin.time.Clock
 
 
@@ -292,7 +293,7 @@ fun TokenItemCard(
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                     Text(
-                        "$${token.currentPrice}",
+                        "$${formatPrice(token.currentPrice.toDoubleOrNull() ?: 0.0)}",
                         fontSize = 14.sp,
                         fontWeight = FontWeight.Bold,
                         color = MaterialTheme.colorScheme.onSurface
@@ -570,7 +571,6 @@ private fun formatAddress(address: String?): String {
 
 private fun formatPrice(price: Double): String {
     if (price <= 0) return "0"
-
     val decimals = when {
         price >= 1000 -> 2
         price >= 1 -> 4
@@ -578,14 +578,7 @@ private fun formatPrice(price: Double): String {
         price >= 0.000001 -> 8
         else -> 10
     }
-
-    return price.roundToDecimals(decimals).removeTrailingZeros()
-}
-
-private fun Double.roundToDecimals(decimals: Int): String {
-    val factor = 10.0.pow(decimals)
-    val rounded = round(this * factor) / factor
-    return rounded.toString()
+    return formatNumber(price, decimals)
 }
 
 
@@ -628,82 +621,4 @@ private fun formatAge(timestamp: Long): String {
 }
 
 
-/**
- * Простое форматирование чисел
- */
-fun formatSimpleNumber(number: Int): String {
-    return when {
-        number >= 1_000_000 -> "${number / 1_000_000}M"
-        number >= 1_000 -> "${number / 1_000}K"
-        else -> number.toString()
-    }
-}
 
-
-private fun Double.roundToDecimalss(decimals: Int): Double {
-    val factor = 10.0.pow(decimals)
-    return round(this * factor) / factor
-}
-
-private fun Double.toCleanString(): String {
-    return this.toString().removeTrailingZeros()
-}
-
-private fun String.removeTrailingZeros(): String {
-    return trimEnd('0').trimEnd('.')
-}
-
-/* ---------- format percent ---------- */
-
-private fun formatPercent(percent: Double): String {
-    if (percent.isNaN() || percent.isInfinite()) return "0"
-    return percent
-        .roundToDecimalss(2)
-        .toCleanString()
-}
-
-/* ---------- format large numbers ---------- */
-
-private fun formatLargeNumber(value: Double): String {
-    if (value.isNaN() || value.isInfinite()) return "0"
-
-    return when {
-        value >= 1_000_000_000 ->
-            (value / 1_000_000_000)
-                .roundToDecimalss(2)
-                .toCleanString() + "B"
-
-        value >= 1_000_000 ->
-            (value / 1_000_000)
-                .roundToDecimalss(2)
-                .toCleanString() + "M"
-
-        value >= 1_000 ->
-            (value / 1_000)
-                .roundToDecimalss(2)
-                .toCleanString() + "K"
-
-        value >= 1 ->
-            value.roundToDecimalss(0).toCleanString()
-
-        else ->
-            value.roundToDecimalss(4).toCleanString()
-    }
-}
-
-/* ---------- format regular numbers ---------- */
-
-fun formatNumber(number: Double): String {
-    if (number.isNaN() || number.isInfinite()) return "0"
-
-    return when {
-        number >= 1000 ->
-            number.roundToDecimalss(0).toCleanString()
-
-        number >= 1 ->
-            number.roundToDecimalss(2).toCleanString()
-
-        else ->
-            number.roundToDecimalss(4).toCleanString()
-    }
-}
