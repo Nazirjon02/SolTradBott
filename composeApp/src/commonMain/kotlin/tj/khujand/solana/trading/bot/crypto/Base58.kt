@@ -30,7 +30,7 @@ fun encodeBase58(input: ByteArray): String {
     while (zeros-- > 0) {
         encoded[--outputStart] = ALPHABET[0]
     }
-    return String(encoded, outputStart, encoded.size - outputStart)
+    return encoded.concatToString(outputStart, outputStart + (encoded.size - outputStart))
 }
 
 fun decodeBase58(input: String): ByteArray {
