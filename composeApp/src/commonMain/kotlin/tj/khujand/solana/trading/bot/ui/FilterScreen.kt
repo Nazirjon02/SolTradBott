@@ -19,9 +19,11 @@ import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.launch
 import kotlin.math.roundToInt
 import tj.khujand.solana.trading.bot.crypto.createSignerFromSeedPhrase
+import tj.khujand.solana.trading.bot.bot.telegram.TelegramBotSettings
 import tj.khujand.solana.trading.bot.data.FilterSettingsManager
 import tj.khujand.solana.trading.bot.domain.DemoAccountManager
 import tj.khujand.solana.trading.bot.network.FilterSettings
+import tj.khujand.solana.trading.bot.util.AppSettings
 import tj.khujand.solana.trading.bot.util.formatDemoBalance
 
 @Composable
@@ -36,6 +38,19 @@ fun FilterScreen(
     var testSwapStatus by remember { mutableStateOf("") }
     var showResetDemoDialog by remember { mutableStateOf(false) }
     var demoBalance by remember { mutableStateOf(DemoAccountManager.getBalance()) }
+    var telegramBotEnabled by remember {
+        mutableStateOf(AppSettings.getBooleanSafe(TelegramBotSettings.KEY_ENABLED, false))
+    }
+    var telegramBotToken by remember {
+        mutableStateOf(AppSettings.getStringSafe(TelegramBotSettings.KEY_TOKEN, ""))
+    }
+    var telegramAdminChatId by remember {
+        mutableStateOf(AppSettings.getStringSafe(TelegramBotSettings.KEY_ADMIN_CHAT_ID, ""))
+    }
+    var telegramAdminUserId by remember {
+        mutableStateOf(AppSettings.getStringSafe(TelegramBotSettings.KEY_ADMIN_USER_ID, ""))
+    }
+    var showTelegramToken by remember { mutableStateOf(false) }
 
     // Функция для сохранения настроек
     fun saveSettings(settings: FilterSettings) {
@@ -67,6 +82,13 @@ fun FilterScreen(
             exitStage4Pct = p4,
             tradeUsdAmount = settings.tradeUsdAmount.roundToInt().toDouble()
         )
+    }
+
+    fun saveTelegramSettings() {
+        AppSettings.putBoolean(TelegramBotSettings.KEY_ENABLED, telegramBotEnabled)
+        AppSettings.putString(TelegramBotSettings.KEY_TOKEN, telegramBotToken.trim())
+        AppSettings.putString(TelegramBotSettings.KEY_ADMIN_CHAT_ID, telegramAdminChatId.trim())
+        AppSettings.putString(TelegramBotSettings.KEY_ADMIN_USER_ID, telegramAdminUserId.trim())
     }
 
     fun applySettings(updated: FilterSettings) {
@@ -878,6 +900,80 @@ valueRange = 10f..100f,
 
         Spacer(modifier = Modifier.height(16.dp))
 
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            colors = CardDefaults.cardColors(
+                containerColor = MaterialTheme.colorScheme.surfaceVariant
+            )
+        ) {
+            Column(modifier = Modifier.padding(16.dp)) {
+                Text("🤖 Telegram Bot", fontWeight = FontWeight.Medium, fontSize = 16.sp)
+                Spacer(modifier = Modifier.height(8.dp))
+                Text(
+                    "Настройки для standalone/JVM и Android service mode",
+                    fontSize = 11.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Spacer(modifier = Modifier.height(12.dp))
+                Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                    Switch(
+                        checked = telegramBotEnabled,
+                        onCheckedChange = { checked ->
+                            telegramBotEnabled = checked
+                            saveTelegramSettings()
+                        }
+                    )
+                    Spacer(modifier = Modifier.width(12.dp))
+                    Text(if (telegramBotEnabled) "Telegram bot ON" else "Telegram bot OFF")
+                }
+                Spacer(modifier = Modifier.height(12.dp))
+                OutlinedTextField(
+                    value = telegramBotToken,
+                    onValueChange = { value ->
+                        telegramBotToken = value
+                        saveTelegramSettings()
+                    },
+                    label = { Text("Bot token") },
+                    modifier = Modifier.fillMaxWidth(),
+                    visualTransformation = if (showTelegramToken) {
+                        androidx.compose.ui.text.input.VisualTransformation.None
+                    } else {
+                        PasswordVisualTransformation()
+                    },
+                    trailingIcon = {
+                        IconButton(onClick = { showTelegramToken = !showTelegramToken }) {
+                            Icon(
+                                if (showTelegramToken) Icons.Default.VisibilityOff else Icons.Default.Visibility,
+                                contentDescription = null
+                            )
+                        }
+                    }
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+                OutlinedTextField(
+                    value = telegramAdminChatId,
+                    onValueChange = { value ->
+                        telegramAdminChatId = value
+                        saveTelegramSettings()
+                    },
+                    label = { Text("Admin chat id") },
+                    modifier = Modifier.fillMaxWidth()
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+                OutlinedTextField(
+                    value = telegramAdminUserId,
+                    onValueChange = { value ->
+                        telegramAdminUserId = value
+                        saveTelegramSettings()
+                    },
+                    label = { Text("Admin user id (optional)") },
+                    modifier = Modifier.fillMaxWidth()
+                )
+            }
+        }
+
+        Spacer(modifier = Modifier.height(16.dp))
+
         // ✅ Demo account
         Card(
             modifier = Modifier.fillMaxWidth(),
@@ -1187,7 +1283,10 @@ valueRange = 10f..100f,
 
         // Кнопка закрытия
         Button(
-            onClick = onClose,
+            onClick = {
+                saveTelegramSettings()
+                onClose()
+            },
             modifier = Modifier.fillMaxWidth(),
             colors = ButtonDefaults.buttonColors(
                 containerColor = MaterialTheme.colorScheme.primary

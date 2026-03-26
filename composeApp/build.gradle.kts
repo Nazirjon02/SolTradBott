@@ -133,3 +133,20 @@ compose.desktop {
     }
 }
 
+tasks.register<JavaExec>("runTelegramBot") {
+    group = "application"
+    description = "Run Telegram bot JVM entrypoint"
+    dependsOn("jvmMainClasses")
+
+    val runTask = tasks.named<JavaExec>("run")
+    classpath = runTask.get().classpath
+    mainClass.set("tj.khujand.solana.trading.bot.TelegramBotMainKt")
+
+    doFirst {
+        val token = System.getenv("TELEGRAM_BOT_TOKEN")
+        if (token.isNullOrBlank()) {
+            throw GradleException("TELEGRAM_BOT_TOKEN is required")
+        }
+    }
+}
+

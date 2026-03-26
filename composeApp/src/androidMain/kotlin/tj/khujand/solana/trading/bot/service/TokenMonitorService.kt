@@ -6,6 +6,8 @@ import android.os.Build
 import android.os.IBinder
 import androidx.core.app.NotificationCompat
 import kotlinx.coroutines.*
+import tj.khujand.solana.trading.bot.bot.telegram.TelegramBotRunner
+import tj.khujand.solana.trading.bot.bot.telegram.TelegramBotSettings
 import tj.khujand.solana.trading.bot.MainActivity
 import tj.khujand.solana.trading.bot.data.FilterSettingsManager
 import tj.khujand.solana.trading.bot.domain.TokenMonitor
@@ -16,6 +18,7 @@ class TokenMonitorService : Service() {
 
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private lateinit var tokenMonitor: TokenMonitor
+    private var telegramBotRunner: TelegramBotRunner? = null
 
     override fun onCreate() {
         super.onCreate()
@@ -26,6 +29,12 @@ class TokenMonitorService : Service() {
             startForeground(NOTIFICATION_ID, buildNotification(), android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC)
         } else {
             startForeground(NOTIFICATION_ID, buildNotification())
+        }
+
+        val botConfig = TelegramBotSettings.loadFromAppSettings()
+        if (botConfig != null) {
+            telegramBotRunner = TelegramBotRunner(botConfig).also { it.start() }
+            println("Telegram bot started in Android service")
         }
     }
 
@@ -66,6 +75,10 @@ class TokenMonitorService : Service() {
         AppSettings.putBoolean(AppSettings.KEY_MONITORING_ACTIVE, false)
         AppSettings.putBoolean(AppSettings.KEY_REQUEST_IN_PROGRESS, false)
         tokenMonitor.stopMonitoring()
+        runBlocking {
+            telegramBotRunner?.stop()
+        }
+        telegramBotRunner = null
         serviceScope.cancel()
         super.onDestroy()
     }

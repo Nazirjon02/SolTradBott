@@ -570,6 +570,10 @@ class TokenMonitor {
         println("✅ Мониторинг остановлен")
     }
 
+    fun isMonitoringActive(): Boolean {
+        return isMonitoring
+    }
+
     // 🔍 Фильтрация токенов по условиям входа
     private suspend fun filterTokensByEntryRules(tokens: List<TokenPair>): List<TokenPair> {
         return coroutineScope {
