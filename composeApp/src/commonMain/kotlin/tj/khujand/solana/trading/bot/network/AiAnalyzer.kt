@@ -242,9 +242,7 @@ Now analyze the token above and provide ONLY the format (no thinking, no extra t
     // ════════════════════════════════════════════════════════════════════════════════
     private suspend fun callGroq(prompt: String): String {
         println("🔵 Groq API: отправка запроса...")
-        println("🔑 API Key: ${settings.aiApiKey.take(10)}...")
         println("🤖 Model: ${settings.aiModel}")
-        println("📝 Prompt (first 300 chars): ${prompt.take(300)}...")
         
         val requestBody = GroqRequest(
             model = settings.aiModel,
@@ -263,7 +261,6 @@ Now analyze the token above and provide ONLY the format (no thinking, no extra t
             println("📡 HTTP Status: ${response.status}")
             
             val json = response.body<JsonObject>()
-            println("📦 JSON Response: $json")
             
             // Проверка на ошибку
             val error = json["error"]?.let { it as? JsonObject }

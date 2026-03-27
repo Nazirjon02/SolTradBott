@@ -29,13 +29,13 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import tj.khujand.solana.trading.bot.bot.application.TradingRuntime
 import tj.khujand.solana.trading.bot.ServiceController
 import tj.khujand.solana.trading.bot.createServiceController
 import tj.khujand.solana.trading.bot.data.FilterSettingsManager
 import tj.khujand.solana.trading.bot.util.AppSettings
 import tj.khujand.solana.trading.bot.domain.DemoAccountManager
 import tj.khujand.solana.trading.bot.domain.MonitoredToken
-import tj.khujand.solana.trading.bot.domain.TokenMonitor
 import tj.khujand.solana.trading.bot.domain.TokenStatus
 import tj.khujand.solana.trading.bot.isAndroid
 import tj.khujand.solana.trading.bot.network.FilterSettings
@@ -46,7 +46,7 @@ import kotlin.time.Clock
 
 @Composable
 fun MainScreen() {
-    val tokenMonitor = remember { TokenMonitor() }
+    val tokenMonitor = remember { TradingRuntime.tokenMonitor() }
 
     // Загружаем сохраненные настройки при запуске
     var currentSettings by remember {

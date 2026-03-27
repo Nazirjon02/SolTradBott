@@ -69,6 +69,9 @@ object TelegramMenuBuilder {
             button("Vol5m ${if (view.settings.useVolumeM5) "✅" else "❌"}", "filters", "toggle", "useVolumeM5")
         )
         rows += listOf(
+            button("AI fail-closed ${if (view.settings.aiFailClosed) "✅" else "❌"}", "filters", "toggle", "aiFailClosed")
+        )
+        rows += listOf(
             button("Vol24h ${if (view.settings.useVolumeH24) "✅" else "❌"}", "filters", "toggle", "useVolumeH24")
         )
         rows += listOf(

@@ -211,6 +211,15 @@ data class FilterSettings(
     // Stop Loss: -30% от входной Market Cap ИЛИ -25% по цене → принудительный выход
     // Trailing Stop: -35% от локального максимума Market Cap → выход (после Stage 1 / Aggressive)
     // Stage Pullback: -35% от пика цены после частичной фиксации → выход
+    val stopLossByMarketCapPct: Double = 30.0,      // Процент падения Market Cap от входа для stop-loss
+    val stopLossByPricePct: Double = 25.0,          // Процент падения цены от входа для stop-loss
+    val trailingStopPct: Double = 35.0,             // Процент отката от peak Market Cap для trailing
+    val stagePullbackPct: Double = 35.0,            // Процент отката от peak price после partial exits
+    val maxDailyLossUsd: Double = 250.0,            // Лимит дневного убытка (USD), после достижения новые входы блокируются
+    val maxDrawdownPct: Double = 25.0,              // Лимит drawdown от пика equity (в процентах)
+    val maxTotalExposureUsd: Double = 300.0,        // Макс. суммарная экспозиция в открытых позициях
+    val maxConsecutiveLosses: Int = 4,              // Макс. количество убыточных закрытий подряд
+    val cooldownMinutesAfterLossLimit: Int = 30,    // Пауза после триггера maxConsecutiveLosses
     
     // ─────────────────────────────────────────────────────────────────────────────
     // JUPITER TRADING (реальные свапы через Jupiter Aggregator)
@@ -219,6 +228,8 @@ data class FilterSettings(
     val jupiterApiKey: String = "",                 // Jupiter API ключ (опционально, для rate limits)
     val tradeUsdAmount: Double = 6.0,               // ⭐ Сумма USD на одну реальную покупку (если Jupiter включён)
     val slippageBps: Int = 50,                      // ⭐ Slippage в basis points (50 = 0.5%, 100 = 1%)
+    val jupiterPriorityFeeMode: String = "auto",    // Режим priority fee: auto|none
+    val minFeeBufferLamports: Long = 300_000L,      // Мин. буфер SOL для комиссий и priority fee
     val seedPhrase: String = "",                    // ⭐ SEED PHRASE (12/24 слова) для автоподписи транзакций
     val baseMint: String = "So11111111111111111111111111111111111111112",  // SOL mint адрес (базовая валюта для свапов)
     
@@ -227,6 +238,7 @@ data class FilterSettings(
     // ─────────────────────────────────────────────────────────────────────────────
     val rpcUrl: String = "https://api.mainnet-beta.solana.com",  // ⭐ Solana RPC URL (можно заменить на Helius/QuickNode)
     val rpcTimeoutSeconds: Int = 12,                // Таймаут RPC запросов в секундах
+    val rpcConfirmTimeoutMs: Int = 35_000,          // Таймаут подтверждения sendTransaction
     
     // ─────────────────────────────────────────────────────────────────────────────
     // 🤖 AI ANALYSIS (умный анализ токенов перед входом)
@@ -237,7 +249,14 @@ data class FilterSettings(
     val aiModel: String = "llama-3.1-8b-instant",   // ⭐ Модель: llama-3.1-8b-instant / llama-3.3-70b-versatile (Groq) / claude-3-5-sonnet / gpt-4o-mini
     val minAiScore: Int = 60,                       // ⭐ Мин. AI score для входа (0-100)
     val maxAiRugRisk: String = "MEDIUM",            // ⭐ Макс. допустимый rug risk: LOW/MEDIUM/HIGH
-    val aiTimeoutSeconds: Int = 15                  // Таймаут AI запроса в секундах
+    val aiTimeoutSeconds: Int = 15,                 // Таймаут AI запроса в секундах
+    val aiFailClosed: Boolean = false,              // Если true: при ошибке AI токен отклоняется
+    val requireRevokedMintAuthority: Boolean = true, // Обязательное отсутствие mint authority
+    val requireRevokedFreezeAuthority: Boolean = true, // Обязательное отсутствие freeze authority
+    val maxParallelUpdates: Int = 4,                // Параллелизм обновлений активных токенов
+    val updateDelayMs: Int = 40,                    // Пауза между обновлениями (мс) для контроля rate limit
+    val discoveryEveryNCycles: Int = 3,             // Частота запуска discovery (каждый N-й цикл)
+    val enableVerboseHttpLogs: Boolean = false      // Детальные HTTP-логи (для отладки)
 )
 // ════════════════════════════════════════════════════════════════════════════════
 
@@ -258,7 +277,7 @@ class DexScreenerApi {
         }
 
         install(Logging) {
-            level = LogLevel.HEADERS
+            level = LogLevel.NONE
         }
     }
 
@@ -328,8 +347,9 @@ class DexScreenerApi {
                 }
 
                 // 2. ⏰ Проверка возраста (НОВЫЕ токены)
-                val ageOk = if (token.pairCreatedAt != null && token.pairCreatedAt > 0) {
-                    val ageHours = (Clock.System.now().toEpochMilliseconds() - token.pairCreatedAt) / (1000.0 * 60.0 * 60.0)
+                val createdAtMs = normalizePairCreatedAtMs(token.pairCreatedAt)
+                val ageOk = if (createdAtMs != null) {
+                    val ageHours = (Clock.System.now().toEpochMilliseconds() - createdAtMs) / (1000.0 * 60.0 * 60.0)
                     val isNew = ageHours <= settings.pairMaxAgeHours
                     if (isNew) {
                         println("🆕 НОВЫЙ: ${token.baseToken?.symbol} (возраст: ${ageHours}ч)")
@@ -670,5 +690,10 @@ class DexScreenerApi {
         return array.mapNotNull { element ->
             runCatching { json.decodeFromJsonElement<TokenBoost>(element) }.getOrNull()
         }
+    }
+
+    private fun normalizePairCreatedAtMs(value: Long?): Long? {
+        if (value == null || value <= 0L) return null
+        return if (value < 1_000_000_000_000L) value * 1000 else value
     }
 }

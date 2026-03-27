@@ -71,6 +71,27 @@ class TradingBotService(
             min = 0.0,
             max = 100.0,
             step = 5.0
+        ),
+        FilterFieldSpec(
+            key = "maxDailyLossUsd",
+            title = "Max daily loss $",
+            min = 10.0,
+            max = 10_000.0,
+            step = 25.0
+        ),
+        FilterFieldSpec(
+            key = "maxTotalExposureUsd",
+            title = "Max exposure $",
+            min = 10.0,
+            max = 20_000.0,
+            step = 25.0
+        ),
+        FilterFieldSpec(
+            key = "maxConsecutiveLosses",
+            title = "Max losses row",
+            min = 1.0,
+            max = 20.0,
+            step = 1.0
         )
     )
 
@@ -235,6 +256,18 @@ class TradingBotService(
                 val value = (settings.minAiScore.toDouble() + delta).coerceIn(field.min, field.max).toInt()
                 settings.copy(minAiScore = value)
             }
+            "maxDailyLossUsd" -> {
+                val value = (settings.maxDailyLossUsd + delta).coerceIn(field.min, field.max)
+                settings.copy(maxDailyLossUsd = value)
+            }
+            "maxTotalExposureUsd" -> {
+                val value = (settings.maxTotalExposureUsd + delta).coerceIn(field.min, field.max)
+                settings.copy(maxTotalExposureUsd = value)
+            }
+            "maxConsecutiveLosses" -> {
+                val value = (settings.maxConsecutiveLosses.toDouble() + delta).coerceIn(field.min, field.max).toInt()
+                settings.copy(maxConsecutiveLosses = value)
+            }
             else -> settings
         }
         FilterSettingsManager.saveSettings(updated)
@@ -249,6 +282,7 @@ class TradingBotService(
             "requireSocials" -> settings.copy(requireSocials = !settings.requireSocials)
             "requireWebsite" -> settings.copy(requireWebsite = !settings.requireWebsite)
             "useAiAnalysis" -> settings.copy(useAiAnalysis = !settings.useAiAnalysis)
+            "aiFailClosed" -> settings.copy(aiFailClosed = !settings.aiFailClosed)
             else -> return ActionResult(success = false, message = "Флаг не найден")
         }
         FilterSettingsManager.saveSettings(updated)
@@ -349,7 +383,11 @@ class TradingBotService(
                 "entryMinVolume" to settings.entryMinVolume.toInt().toString(),
                 "entryMinVolumeM5" to settings.entryMinVolumeM5.toInt().toString(),
                 "exitStrategy" to settings.exitStrategy,
-                "useAiAnalysis" to settings.useAiAnalysis.toString()
+                "useAiAnalysis" to settings.useAiAnalysis.toString(),
+                "aiFailClosed" to settings.aiFailClosed.toString(),
+                "maxDailyLossUsd" to settings.maxDailyLossUsd.toInt().toString(),
+                "maxTotalExposureUsd" to settings.maxTotalExposureUsd.toInt().toString(),
+                "maxConsecutiveLosses" to settings.maxConsecutiveLosses.toString()
             )
         )
     }

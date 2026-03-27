@@ -11,13 +11,16 @@ import io.ktor.serialization.kotlinx.json.*
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
+import kotlin.time.Clock
 
 /**
  * Модель для SPL Mint информации
@@ -67,7 +70,8 @@ data class RpcError(
 class SolanaRpcClient(
     private val rpcUrl: String = "https://api.mainnet-beta.solana.com",
     private val timeoutSeconds: Int = 12,
-    private val maxParallel: Int = 8
+    private val maxParallel: Int = 8,
+    private val confirmTimeoutMs: Int = 35_000
 ) {
     private val client = HttpClient {
         install(HttpTimeout) {
@@ -91,6 +95,43 @@ class SolanaRpcClient(
 
     private val semaphore = Semaphore(maxParallel)
     private val maxRetries = 3
+
+    private suspend fun postRpcWithRetry(requestJson: String, operation: String): HttpResponse? {
+        var attempt = 0
+        var backoffMs = 500L
+        while (attempt < maxRetries) {
+            try {
+                val response = client.post(rpcUrl) {
+                    contentType(ContentType.Application.Json)
+                    setBody(requestJson)
+                }
+                val status = response.status
+                if (status.value == 429 || status.value >= 500) {
+                    println("⏳ RPC $operation ${status.value}, retry in ${backoffMs}ms...")
+                    delay(backoffMs)
+                    backoffMs = (backoffMs * 2).coerceAtMost(4000L)
+                    attempt++
+                    continue
+                }
+                if (!status.isSuccess()) {
+                    println("⚠️ RPC $operation HTTP ${status.value}")
+                    return null
+                }
+                return response
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                attempt++
+                if (attempt < maxRetries) {
+                    delay(backoffMs)
+                    backoffMs = (backoffMs * 2).coerceAtMost(4000L)
+                } else {
+                    println("⚠️ RPC $operation error: ${e.message}")
+                }
+            }
+        }
+        return null
+    }
 
     /**
      * Получить информацию о SPL Mint токене
@@ -262,24 +303,10 @@ class SolanaRpcClient(
                 }
                 """.trimIndent()
 
-                val response = client.post(rpcUrl) {
-                    contentType(ContentType.Application.Json)
-                    setBody(requestJson)
-                }
+                val response = postRpcWithRetry(requestJson, "getAccountInfo") ?: return null
 
                 val status = response.status
-                if (status.value == 429 || status.value >= 500) {
-                    println("⏳ Rate limit/Server error ${status.value}, retry in ${backoffMs}ms...")
-                    delay(backoffMs)
-                    backoffMs = (backoffMs * 2).coerceAtMost(4000L)
-                    attempt++
-                    continue
-                }
-
-                if (!status.isSuccess()) {
-                    println("⚠️ Ошибка HTTP ${status.value} для RPC запроса")
-                    return null
-                }
+                if (!status.isSuccess()) return null
 
                 val responseText = response.bodyAsText()
                 return json.decodeFromString<RpcResponse>(responseText)
@@ -314,21 +341,7 @@ class SolanaRpcClient(
                 }
                 """.trimIndent()
 
-                val response = client.post(rpcUrl) {
-                    contentType(ContentType.Application.Json)
-                    setBody(requestJson)
-                }
-
-                val status = response.status
-                if (status.value == 429 || status.value >= 500) {
-                    println("⏳ RPC getBalance error ${status.value}")
-                    return@withPermit null
-                }
-
-                if (!status.isSuccess()) {
-                    println("⚠️ RPC getBalance HTTP ${status.value}")
-                    return@withPermit null
-                }
+                val response = postRpcWithRetry(requestJson, "getBalance") ?: return@withPermit null
 
                 val responseText = response.bodyAsText()
                 val jsonElement = json.parseToJsonElement(responseText)
@@ -367,21 +380,7 @@ class SolanaRpcClient(
                 }
                 """.trimIndent()
 
-                val response = client.post(rpcUrl) {
-                    contentType(ContentType.Application.Json)
-                    setBody(requestJson)
-                }
-
-                val status = response.status
-                if (status.value == 429 || status.value >= 500) {
-                    println("⏳ RPC sendTransaction error ${status.value}")
-                    return@withPermit null
-                }
-
-                if (!status.isSuccess()) {
-                    println("⚠️ RPC sendTransaction HTTP ${status.value}")
-                    return@withPermit null
-                }
+                val response = postRpcWithRetry(requestJson, "sendTransaction") ?: return@withPermit null
 
                 val responseText = response.bodyAsText()
                 val jsonElement = json.parseToJsonElement(responseText)
@@ -394,6 +393,41 @@ class SolanaRpcClient(
                 null
             }
         }
+    }
+
+    suspend fun confirmTransaction(signature: String): Boolean {
+        val startedMs = Clock.System.now().toEpochMilliseconds()
+        var backoffMs = 500L
+        while (Clock.System.now().toEpochMilliseconds() - startedMs < confirmTimeoutMs) {
+            val requestJson = """
+                {
+                    "jsonrpc": "2.0",
+                    "id": 1,
+                    "method": "getSignatureStatuses",
+                    "params": [
+                        ["$signature"],
+                        { "searchTransactionHistory": true }
+                    ]
+                }
+            """.trimIndent()
+            val response = postRpcWithRetry(requestJson, "getSignatureStatuses")
+            if (response != null) {
+                val jsonElement = json.parseToJsonElement(response.bodyAsText())
+                val value = jsonElement.jsonObject["result"]
+                    ?.jsonObject
+                    ?.get("value")
+                    ?.jsonArray
+                    ?.firstOrNull()
+                    ?.jsonObject
+                val confirmationStatus = value?.get("confirmationStatus")?.jsonPrimitive?.content
+                val err = value?.get("err")
+                if (confirmationStatus == "confirmed" || confirmationStatus == "finalized") return true
+                if (err != null && err != JsonNull) return false
+            }
+            delay(backoffMs)
+            backoffMs = (backoffMs * 2).coerceAtMost(3000L)
+        }
+        return false
     }
 
     fun close() {

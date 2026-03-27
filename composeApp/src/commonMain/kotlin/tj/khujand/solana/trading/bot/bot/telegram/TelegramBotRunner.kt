@@ -8,13 +8,14 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import tj.khujand.solana.trading.bot.bot.application.TradingBotService
+import tj.khujand.solana.trading.bot.bot.application.TradingRuntime
 import tj.khujand.solana.trading.bot.bot.domain.security.AdminAccessPolicy
 import tj.khujand.solana.trading.bot.bot.telegram.api.TelegramHttpClient
 import tj.khujand.solana.trading.bot.bot.telegram.routing.UpdateRouter
 
 class TelegramBotRunner(
     config: TelegramBotConfig,
-    service: TradingBotService = TradingBotService()
+    service: TradingBotService = TradingRuntime.tradingBotService()
 ) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private val telegram = TelegramHttpClient(config)

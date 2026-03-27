@@ -6,6 +6,7 @@ import android.os.Build
 import android.os.IBinder
 import androidx.core.app.NotificationCompat
 import kotlinx.coroutines.*
+import tj.khujand.solana.trading.bot.bot.application.TradingRuntime
 import tj.khujand.solana.trading.bot.bot.telegram.TelegramBotRunner
 import tj.khujand.solana.trading.bot.bot.telegram.TelegramBotSettings
 import tj.khujand.solana.trading.bot.MainActivity
@@ -22,7 +23,7 @@ class TokenMonitorService : Service() {
 
     override fun onCreate() {
         super.onCreate()
-        tokenMonitor = TokenMonitor()
+        tokenMonitor = TradingRuntime.tokenMonitor()
         createNotificationChannel()
         // Сразу показываем foreground — иначе Android выбросит ForegroundServiceDidNotStartInTimeException
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
@@ -33,7 +34,10 @@ class TokenMonitorService : Service() {
 
         val botConfig = TelegramBotSettings.loadFromAppSettings()
         if (botConfig != null) {
-            telegramBotRunner = TelegramBotRunner(botConfig).also { it.start() }
+            telegramBotRunner = TelegramBotRunner(
+                config = botConfig,
+                service = TradingRuntime.tradingBotService()
+            ).also { it.start() }
             println("Telegram bot started in Android service")
         }
     }

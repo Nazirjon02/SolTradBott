@@ -19,6 +19,9 @@ object FilterSettingsManager {
     private const val KEY_CHAINS = "filter_chains"
     private const val KEY_EXCLUDE_RUG = "filter_exclude_rug"
     private const val KEY_CHECK_HOLDERS = "filter_check_holders"
+    private const val KEY_SECRET_SEED_PHRASE = "secret_seed_phrase"
+    private const val KEY_SECRET_JUPITER_API_KEY = "secret_jupiter_api_key"
+    private const val KEY_SECRET_AI_API_KEY = "secret_ai_api_key"
 
     // Сохранить настройки
     fun saveSettings(settings: FilterSettings) {
@@ -34,8 +37,14 @@ object FilterSettingsManager {
             val chainsJson = json.encodeToString(settings.chains)
             AppSettings.putString(KEY_CHAINS, chainsJson)
 
-            // Также сохраняем весь объект целиком как JSON (для быстрой загрузки)
-            val fullSettingsJson = json.encodeToString(settings)
+            // Секреты сохраняем отдельно, чтобы не держать их в общем JSON.
+            saveSecret(KEY_SECRET_SEED_PHRASE, settings.seedPhrase)
+            saveSecret(KEY_SECRET_JUPITER_API_KEY, settings.jupiterApiKey)
+            saveSecret(KEY_SECRET_AI_API_KEY, settings.aiApiKey)
+
+            // Также сохраняем весь объект целиком как JSON (для быстрой загрузки), но без секретов.
+            val sanitized = settings.copy(seedPhrase = "", jupiterApiKey = "", aiApiKey = "")
+            val fullSettingsJson = json.encodeToString(sanitized)
             AppSettings.putString(KEY_FILTER_SETTINGS, fullSettingsJson)
 
         } catch (e: Exception) {
@@ -49,7 +58,8 @@ object FilterSettingsManager {
             // Пробуем загрузить полный объект
             val fullJson = AppSettings.getStringSafe(KEY_FILTER_SETTINGS, "")
             if (fullJson.isNotEmpty()) {
-                json.decodeFromString<FilterSettings>(fullJson)
+                val base = json.decodeFromString<FilterSettings>(fullJson)
+                injectSecrets(base)
             } else {
                 // Или загружаем по отдельным полям (для обратной совместимости)
                 loadFromIndividualFields()
@@ -81,7 +91,7 @@ object FilterSettingsManager {
         }
 
         // Загружаем новые поля из конфига (значения по умолчанию)
-        return FilterSettings(
+        return injectSecrets(FilterSettings(
             minVolumeUSD = minVolume,
             maxAgeHours = maxAge,
             minLiquidityUSD = minLiquidity,
@@ -141,7 +151,7 @@ object FilterSettingsManager {
             minAiScore = 60,
             maxAiRugRisk = "MEDIUM",
             aiTimeoutSeconds = 15
-        )
+        ))
     }
 
     // Сбросить настройки к значениям по умолчанию
@@ -153,11 +163,34 @@ object FilterSettingsManager {
         AppSettings.remove(KEY_CHAINS)
         AppSettings.remove(KEY_EXCLUDE_RUG)
         AppSettings.remove(KEY_CHECK_HOLDERS)
+        AppSettings.remove(KEY_SECRET_SEED_PHRASE)
+        AppSettings.remove(KEY_SECRET_JUPITER_API_KEY)
+        AppSettings.remove(KEY_SECRET_AI_API_KEY)
     }
 
     // Проверить есть ли сохраненные настройки
     fun hasSavedSettings(): Boolean {
         return AppSettings.getStringSafe(KEY_FILTER_SETTINGS, "").isNotEmpty() ||
                 AppSettings.getStringSafe(KEY_CHAINS, "").isNotEmpty()
+    }
+
+    private fun injectSecrets(settings: FilterSettings): FilterSettings {
+        return settings.copy(
+            seedPhrase = loadSecret(KEY_SECRET_SEED_PHRASE),
+            jupiterApiKey = loadSecret(KEY_SECRET_JUPITER_API_KEY),
+            aiApiKey = loadSecret(KEY_SECRET_AI_API_KEY)
+        )
+    }
+
+    private fun saveSecret(key: String, value: String) {
+        if (value.isBlank()) {
+            AppSettings.remove(key)
+        } else {
+            AppSettings.putString(key, value.trim())
+        }
+    }
+
+    private fun loadSecret(key: String): String {
+        return AppSettings.getStringSafe(key, "")
     }
 }

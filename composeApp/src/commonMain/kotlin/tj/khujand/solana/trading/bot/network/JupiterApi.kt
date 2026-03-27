@@ -148,13 +148,23 @@ class JupiterApi {
     suspend fun getSwap(
         quote: JsonObject,
         userPublicKey: String,
-        apiKey: String? = null
+        apiKey: String? = null,
+        priorityFeeMode: String = "auto"
     ): JupiterSwapResponse? {
         val url = "$baseUrl/swap/v1/swap"
         return try {
-            val response = postWithRetry(url, JupiterSwapRequest(
+            val feeMode = priorityFeeMode.lowercase()
+            val request = JupiterSwapRequest(
                 quoteResponse = quote,
-                userPublicKey = userPublicKey
+                userPublicKey = userPublicKey,
+                prioritizationFeeLamports = if (feeMode == "none") "0" else "auto"
+            )
+            val response = postWithRetry(url, JupiterSwapRequest(
+                quoteResponse = request.quoteResponse,
+                userPublicKey = request.userPublicKey,
+                wrapAndUnwrapSol = request.wrapAndUnwrapSol,
+                dynamicComputeUnitLimit = request.dynamicComputeUnitLimit,
+                prioritizationFeeLamports = request.prioritizationFeeLamports
             ), apiKey) ?: return null
             response.body()
         } catch (e: Exception) {

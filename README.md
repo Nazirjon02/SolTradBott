@@ -33,3 +33,22 @@ in your IDE’s toolbar or open the [/iosApp](./iosApp) directory in Xcode and r
 ---
 
 Learn more about [Kotlin Multiplatform](https://www.jetbrains.com/help/kotlin-multiplatform-dev/get-started.html)…
+
+### Run Telegram Bot On Installed Windows App
+
+If you already installed the app (for example in `C:\Program Files\tj.khujand.solana.trading.bot`), you can run Telegram bot without Gradle.
+
+1. Copy `scripts/windows/run-telegram-bot-installed.bat` to your installed app folder:
+   - `C:\Program Files\tj.khujand.solana.trading.bot`
+2. Open PowerShell and set env vars:
+   ```powershell
+   $env:TELEGRAM_BOT_TOKEN="YOUR_NEW_TOKEN"
+   $env:TELEGRAM_ADMIN_CHAT_ID="7629981910"
+   $env:TELEGRAM_ADMIN_USER_ID="7629981910"
+   ```
+3. Run:
+   ```powershell
+   & "C:\Program Files\tj.khujand.solana.trading.bot\run-telegram-bot-installed.bat"
+   ```
+
+To restart bot: stop it in the console (`Ctrl + C`) and run the same `.bat` again.

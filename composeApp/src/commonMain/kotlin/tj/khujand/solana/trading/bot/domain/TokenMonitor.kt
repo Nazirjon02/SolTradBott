@@ -18,6 +18,7 @@ import kotlin.time.Clock
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import tj.khujand.solana.trading.bot.util.formatNumber
+import kotlin.math.absoluteValue
 
 // ════════════════════════════════════════════════════════════════════════════════
 // ТОКЕН В МОНИТОРИНГЕ (активная позиция)
@@ -84,12 +85,18 @@ class TokenMonitor {
     private var aiAnalyzer: AiAnalyzer? = null  // ⭐ AI-анализатор (создаётся при необходимости)
     private var monitorJob: Job? = null
     private var isMonitoring = false
-    private val maxParallelUpdates = 2
-    private val updateSemaphore = Semaphore(maxParallelUpdates)
+    private var updateSemaphore = Semaphore(FilterSettings().maxParallelUpdates.coerceAtLeast(1))
     private val listMutex = Mutex()
     private val closedTokenAddresses = mutableSetOf<String>()
     private var rpcClient: SolanaRpcClient? = null
     private var cachedSigner: Signer? = null
+    private var signerFingerprint: String = ""
+    private var rpcFingerprint: String = ""
+    private var consecutiveLosses: Int = 0
+    private var dailyRealizedPnlUsd: Double = 0.0
+    private var dailyPnlEpochDay: String = currentUtcDateId()
+    private var peakTrackedEquityUsd: Double = 0.0
+    private var cooldownUntilEpochMs: Long = 0L
     private val usdcMint = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"
 
     // Список отслеживаемых токенов
@@ -100,6 +107,8 @@ class TokenMonitor {
     var filterSettings = FilterSettings() 
         set(value) {
             field = value
+            refreshCachedDependencies()
+            updateSemaphore = Semaphore(value.maxParallelUpdates.coerceAtLeast(1))
             // Пересоздаём AI analyzer при изменении настроек
             if (value.useAiAnalysis && value.aiApiKey.isNotBlank()) {
                 aiAnalyzer = AiAnalyzer(value)
@@ -153,7 +162,7 @@ class TokenMonitor {
                     val runPhase1 = allowNewTokenDiscovery && (
                         cycleCount == 1 ||
                         _monitoredTokens.isEmpty() ||
-                        cycleCount % 5 == 0
+                        cycleCount % filterSettings.discoveryEveryNCycles.coerceAtLeast(1) == 0
                     )
                     if (runPhase1) {
                         println("🔄 Цикл мониторинга (поиск новых + цены)...")
@@ -206,6 +215,10 @@ class TokenMonitor {
                                     println("⏸️ Достигнут лимит ${filterSettings.maxTokensToMonitor} токенов. Поиск приостановлен.")
                                     allowNewTokenDiscovery = false
                                     break  // 🛑 Прерываем добавление новых
+                                }
+                                if (!canOpenNewPosition()) {
+                                    println("🛡️ Пропуск ${token.baseToken?.symbol}: сработали портфельные risk-limits")
+                                    continue
                                 }
 
                                 // 4. 🤖 AI-АНАЛИЗ ТОКЕНА (если включён)
@@ -265,11 +278,24 @@ class TokenMonitor {
                                             
                                             println("✅ AI: токен прошёл анализ!")
                                         } else {
+                                            if (filterSettings.aiFailClosed) {
+                                                println("🛑 AI fail-closed: анализ не удался, токен отклонен")
+                                                continue
+                                            }
                                             println("⚠️ AI: анализ не удался, пропускаем AI-фильтр")
                                         }
                                     } catch (e: Exception) {
+                                        if (filterSettings.aiFailClosed) {
+                                            println("🛑 AI fail-closed: ошибка анализа (${e.message}), токен отклонен")
+                                            continue
+                                        }
                                         println("⚠️ AI анализ ошибка: ${e.message}, пропускаем AI-фильтр")
                                     }
+                                }
+
+                                if (!passesOnChainAuthorityChecks(token)) {
+                                    println("🛑 On-chain checks failed: ${token.baseToken?.symbol}")
+                                    continue
                                 }
 
                                 // 5. Добавляем токен
@@ -421,7 +447,7 @@ class TokenMonitor {
                         } catch (e: Exception) {
                             println("❌ Ошибка обновления токена ${monitoredToken.tokenPair.baseToken?.symbol}: ${e.message}")
                         } finally {
-                            delay(80)
+                            delay(filterSettings.updateDelayMs.toLong().coerceAtLeast(0L))
                         }
                     }
                 }
@@ -624,7 +650,75 @@ class TokenMonitor {
         return _monitoredTokens.count { it.status == TokenStatus.MONITORING }
     }
 
+    private fun currentOpenExposureUsd(): Double {
+        return _monitoredTokens
+            .filter { it.status == TokenStatus.MONITORING }
+            .sumOf { it.investedUsd * (it.remainingPositionPct.coerceIn(0.0, 100.0) / 100.0) }
+    }
+
+    private fun canOpenNewPosition(): Boolean {
+        resetDailyCountersIfNeeded()
+        val nowMs = Clock.System.now().toEpochMilliseconds()
+        if (cooldownUntilEpochMs > nowMs) return false
+        if (dailyRealizedPnlUsd <= -filterSettings.maxDailyLossUsd.absoluteValue) return false
+        if (consecutiveLosses >= filterSettings.maxConsecutiveLosses.coerceAtLeast(1)) return false
+
+        val openExposure = currentOpenExposureUsd()
+        if (openExposure + filterSettings.tradeUsdAmount > filterSettings.maxTotalExposureUsd) return false
+
+        val equityEstimate = DemoAccountManager.getBalance() + dailyRealizedPnlUsd
+        if (equityEstimate > peakTrackedEquityUsd) {
+            peakTrackedEquityUsd = equityEstimate
+        }
+        if (peakTrackedEquityUsd > 0) {
+            val drawdownPct = ((peakTrackedEquityUsd - equityEstimate) / peakTrackedEquityUsd) * 100.0
+            if (drawdownPct >= filterSettings.maxDrawdownPct) return false
+        }
+        return true
+    }
+
+    private suspend fun passesOnChainAuthorityChecks(token: TokenPair): Boolean {
+        if (!filterSettings.requireRevokedMintAuthority && !filterSettings.requireRevokedFreezeAuthority) return true
+        val mintAddress = token.baseToken?.address ?: return false
+        val mintInfo = getRpcClient().getSplMintInfo(mintAddress) ?: return false
+        val score = TokenScoring.calculateScore(token, mintInfo, filterSettings)
+        if (score.hardRejectReasons.isNotEmpty()) return false
+        if (filterSettings.requireRevokedMintAuthority && mintInfo.hasMintAuthority) return false
+        if (filterSettings.requireRevokedFreezeAuthority && mintInfo.hasFreezeAuthority) return false
+        return true
+    }
+
+    private fun resetDailyCountersIfNeeded() {
+        val day = currentUtcDateId()
+        if (day == dailyPnlEpochDay) return
+        dailyPnlEpochDay = day
+        dailyRealizedPnlUsd = 0.0
+        consecutiveLosses = 0
+        cooldownUntilEpochMs = 0L
+    }
+
+    private fun currentUtcDateId(): String {
+        val epochDay = Clock.System.now().toEpochMilliseconds() / 86_400_000L
+        return epochDay.toString()
+    }
+
+    private fun updateRiskStateAfterClose(closedToken: MonitoredToken) {
+        resetDailyCountersIfNeeded()
+        val realized = closedToken.profitUsd
+        dailyRealizedPnlUsd += realized
+        if (realized < 0) {
+            consecutiveLosses += 1
+        } else {
+            consecutiveLosses = 0
+        }
+        if (consecutiveLosses >= filterSettings.maxConsecutiveLosses.coerceAtLeast(1)) {
+            val cooldownMs = filterSettings.cooldownMinutesAfterLossLimit.coerceAtLeast(1) * 60_000L
+            cooldownUntilEpochMs = Clock.System.now().toEpochMilliseconds() + cooldownMs
+        }
+    }
+
     private fun addClosedToken(token: MonitoredToken, skipHistory: Boolean = false) {
+        updateRiskStateAfterClose(token)
         if (token.demoBuyApplied) {
             DemoAccountManager.applyCloseResult(token.profitUsd)
         }
@@ -715,11 +809,32 @@ class TokenMonitor {
         val profitUsd: Double
     )
 
+    private fun refreshCachedDependencies() {
+        val normalizedPhrase = filterSettings.seedPhrase.trim().replace("\\s+".toRegex(), " ")
+        val signerKey = normalizedPhrase
+        if (signerKey != signerFingerprint) {
+            cachedSigner = null
+            signerFingerprint = signerKey
+        }
+
+        val rpcKey = "${filterSettings.rpcUrl}|${filterSettings.rpcTimeoutSeconds}|${filterSettings.rpcConfirmTimeoutMs}"
+        if (rpcKey != rpcFingerprint) {
+            rpcClient?.close()
+            rpcClient = null
+            rpcFingerprint = rpcKey
+        }
+    }
+
     private fun getSigner(): Signer? {
         val phrase = filterSettings.seedPhrase.trim()
         if (phrase.isBlank()) return null
         val words = phrase.split("\\s+".toRegex()).filter { it.isNotBlank() }
         if (words.size != 12 && words.size != 24) return null
+        val key = phrase.replace("\\s+".toRegex(), " ")
+        if (signerFingerprint != key) {
+            cachedSigner = null
+            signerFingerprint = key
+        }
         if (cachedSigner == null) {
             cachedSigner = try {
                 createSignerFromSeedPhrase(phrase)
@@ -732,11 +847,13 @@ class TokenMonitor {
     }
 
     private fun getRpcClient(): SolanaRpcClient {
+        refreshCachedDependencies()
         val current = rpcClient
         return if (current == null) {
             SolanaRpcClient(
                 rpcUrl = filterSettings.rpcUrl,
-                timeoutSeconds = filterSettings.rpcTimeoutSeconds
+                timeoutSeconds = filterSettings.rpcTimeoutSeconds,
+                confirmTimeoutMs = filterSettings.rpcConfirmTimeoutMs
             ).also { rpcClient = it }
         } else current
     }
@@ -752,7 +869,7 @@ class TokenMonitor {
         val solAmount = filterSettings.tradeUsdAmount / solPriceUsd
         val lamports = (solAmount * 1_000_000_000L).toLong().coerceAtLeast(1L)
         val balance = getRpcClient().getBalanceLamports(signer.publicKeyBase58()) ?: 0L
-        val feeBuffer = 5000L
+        val feeBuffer = filterSettings.minFeeBufferLamports.coerceAtLeast(100_000L)
         if (balance < lamports + feeBuffer) {
             println("⚠️ Недостаточно SOL: balance=$balance, need=${lamports + feeBuffer}")
             return null
@@ -766,10 +883,19 @@ class TokenMonitor {
             apiKey = filterSettings.jupiterApiKey
         ) ?: return null
 
-        val swap = jupiterApi.getSwap(quote, signer.publicKeyBase58(), filterSettings.jupiterApiKey) ?: return null
+        val swap = jupiterApi.getSwap(
+            quote = quote,
+            userPublicKey = signer.publicKeyBase58(),
+            apiKey = filterSettings.jupiterApiKey,
+            priorityFeeMode = filterSettings.jupiterPriorityFeeMode
+        ) ?: return null
         val unsignedTx = swap.swapTransaction ?: return null
         val signedTx = signTransactionBase64(unsignedTx, signer) ?: return null
         val txId = getRpcClient().sendTransaction(signedTx) ?: return null
+        if (!getRpcClient().confirmTransaction(txId)) {
+            println("⚠️ Jupiter buy tx not confirmed: $txId")
+            return null
+        }
 
         val outAmountStr = quote["outAmount"]?.jsonPrimitive?.content
         val inAmountStr = quote["inAmount"]?.jsonPrimitive?.content
@@ -802,10 +928,19 @@ class TokenMonitor {
             apiKey = filterSettings.jupiterApiKey
         ) ?: return null
 
-        val swap = jupiterApi.getSwap(quote, signer.publicKeyBase58(), filterSettings.jupiterApiKey) ?: return null
+        val swap = jupiterApi.getSwap(
+            quote = quote,
+            userPublicKey = signer.publicKeyBase58(),
+            apiKey = filterSettings.jupiterApiKey,
+            priorityFeeMode = filterSettings.jupiterPriorityFeeMode
+        ) ?: return null
         val unsignedTx = swap.swapTransaction ?: return null
         val signedTx = signTransactionBase64(unsignedTx, signer) ?: return null
         val txId = getRpcClient().sendTransaction(signedTx) ?: return null
+        if (!getRpcClient().confirmTransaction(txId)) {
+            println("⚠️ Jupiter sell tx not confirmed: $txId")
+            return null
+        }
 
         val outAmountStr = quote["outAmount"]?.jsonPrimitive?.content
         val outAmount = outAmountStr?.toLongOrNull() ?: 0L
@@ -824,7 +959,7 @@ class TokenMonitor {
         val solAmount = filterSettings.tradeUsdAmount / solPriceUsd
         val lamports = (solAmount * 1_000_000_000L).toLong().coerceAtLeast(1L)
         val balance = getRpcClient().getBalanceLamports(signer.publicKeyBase58()) ?: 0L
-        if (balance < lamports + 5000L) return "Insufficient SOL balance"
+        if (balance < lamports + filterSettings.minFeeBufferLamports.coerceAtLeast(100_000L)) return "Insufficient SOL balance"
 
         val quoteResult = jupiterApi.getQuoteDebug(
             inputMint = filterSettings.baseMint,
@@ -835,10 +970,16 @@ class TokenMonitor {
         )
         val quote = quoteResult.quote ?: return "Quote failed: ${quoteResult.error ?: "Unknown error"} (amount=${lamports}, slippageBps=${filterSettings.slippageBps})"
 
-        val swap = jupiterApi.getSwap(quote, signer.publicKeyBase58(), filterSettings.jupiterApiKey) ?: return "Swap build failed"
+        val swap = jupiterApi.getSwap(
+            quote = quote,
+            userPublicKey = signer.publicKeyBase58(),
+            apiKey = filterSettings.jupiterApiKey,
+            priorityFeeMode = filterSettings.jupiterPriorityFeeMode
+        ) ?: return "Swap build failed"
         val unsignedTx = swap.swapTransaction ?: return "Swap transaction empty"
         val signedTx = signTransactionBase64(unsignedTx, signer) ?: return "Sign failed"
         val txId = getRpcClient().sendTransaction(signedTx) ?: return "Send failed"
+        if (!getRpcClient().confirmTransaction(txId)) return "Send failed: tx not confirmed"
 
         return "Test swap sent: $txId"
     }
@@ -860,7 +1001,7 @@ class TokenMonitor {
 
     // ⏰ Проверка возраста токена
     private fun checkTokenAge(token: TokenPair): Boolean {
-        return token.pairCreatedAt?.let { createdAt ->
+        return getPairCreatedAtMs(token.pairCreatedAt)?.let { createdAt ->
             val ageHours = (Clock.System.now().toEpochMilliseconds() - createdAt) / (1000.0 * 60.0 * 60.0)
             ageHours <= filterSettings.pairMaxAgeHours
         } ?: true // Если даты нет, пропускаем
@@ -957,7 +1098,7 @@ class TokenMonitor {
         val priceChangePercent =
             if (entry > 0) ((newPrice - entry) / entry) * 100 else 0.0  // ⭐ Прибыль в % от входа
 
-        val investment = DemoAccountManager.DEMO_TRADE_AMOUNT
+        val investment = token.investedUsd.coerceAtLeast(0.0)
         val priceBasedProfitUsd = investment * priceChangePercent / 100  // ⭐ Прибыль в USD (для демо)
 
         // ──── ОБНОВЛЕНИЕ СОСТОЯНИЯ ────
@@ -1117,39 +1258,28 @@ class TokenMonitor {
         // - В Stages: после Stage 1 ИЛИ при достижении Stage 1 Cap
         val trailingEnabled = if (isAggressive) stage1Done else (stage1Done || marketCap >= filterSettings.exitStage1Cap)
         
-        // ⭐ 1. STOP LOSS: -30% от входной капы ИЛИ -25% по цене
+        val stopLossCapFactor = 1.0 - (filterSettings.stopLossByMarketCapPct / 100.0)
+        val stopLossPricePct = -filterSettings.stopLossByPricePct
+        val trailingFactor = 1.0 - (filterSettings.trailingStopPct / 100.0)
+        val stagePullbackFactor = 1.0 - (filterSettings.stagePullbackPct / 100.0)
+
+        // ⭐ 1. STOP LOSS: настраиваемый порог от входной капы и по цене
         val forcedExitByStopLoss =
-            (entryCap > 0 && marketCap <= entryCap * 0.70) || priceChangePercent <= -25.0
+            (entryCap > 0 && marketCap <= entryCap * stopLossCapFactor) || priceChangePercent <= stopLossPricePct
         
         // ⭐ 2. TRAILING STOP: -35% от локального максимума Market Cap
         // Срабатывает только если trailing включён (после Stage 1 / Aggressive)
         val forcedExitByTrailing =
-            trailingEnabled && newPeakMarketCap > 0 && marketCap <= newPeakMarketCap * 0.65
+            trailingEnabled && newPeakMarketCap > 0 && marketCap <= newPeakMarketCap * trailingFactor
         
         // ⭐ 3. STAGE PULLBACK: -35% от пика цены после частичной фиксации
         // Если цена упала на 35% от максимума ПОСЛЕ любого Stage
         val forcedExitByStagePullback =
             (stage1Done || stage2Done || stage3Done || stage4Done) &&
-                newPrice <= prevHigh * 0.65
+                newPrice <= prevHigh * stagePullbackFactor
 
         val forcedExit = forcedExitByStopLoss || forcedExitByTrailing || forcedExitByStagePullback
-        val closedByStage4 = stage4Done || remainingPct <= 0.0
-
-        // ──── ВЫЧИСЛЯЕМ ФИНАЛЬНЫЙ ПРОФИТ ────
-        val finalProfitUsd = if (filterSettings.jupiterEnabled) {
-            realizedProfitUsd  // ⭐ Jupiter: только реализованная прибыль от продаж
-        } else {
-            // ⭐ Demo: реализованная прибыль + текущая от остатка позиции
-            val remainingProfit = investment * priceChangePercent / 100 * (remainingPct / 100.0)
-            realizedProfitUsd + remainingProfit
-        }
-
-        // ──── ОПРЕДЕЛЕНИЕ СТАТУСА ────
-        val newStatus = when {
-            forcedExit -> if (finalProfitUsd >= 0) TokenStatus.STOPPED_TP else TokenStatus.STOPPED_SL
-            closedByStage4 -> TokenStatus.STOPPED_TP
-            else -> TokenStatus.MONITORING
-        }
+        var forcedExitExecuted = !forcedExit
 
         // ──── ПРИНУДИТЕЛЬНЫЙ ВЫХОД (продажа остатка) ────
         if (forcedExit) {
@@ -1159,14 +1289,38 @@ class TokenMonitor {
                 if (sellResult != null) {
                     realizedProfitUsd += sellResult.profitUsd
                     tokenAmountRaw = 0L
+                    remainingPct = 0.0
+                } else {
+                    forcedExitExecuted = false
                 }
+            } else {
+                remainingPct = 0.0
             }
-            remainingPct = 0.0
             when {
                 forcedExitByStopLoss -> println("🛑 Forced exit: -30% от входной капы")
                 forcedExitByTrailing -> println("🛑 Forced exit: -35% от локального максимума")
                 forcedExitByStagePullback -> println("🛑 Forced exit: -35% после Stage")
             }
+        }
+
+        val closedByStage4 = stage4Done || remainingPct <= 0.0
+
+        // ──── ВЫЧИСЛЯЕМ ФИНАЛЬНЫЙ ПРОФИТ ────
+        val finalProfitUsd = if (filterSettings.jupiterEnabled) {
+            // Для real mode показываем реализованный PnL + оценку по открытому остатку
+            val unrealizedFromPrice = priceBasedProfitUsd * (remainingPct / 100.0)
+            realizedProfitUsd + unrealizedFromPrice
+        } else {
+            val remainingProfit = investment * priceChangePercent / 100 * (remainingPct / 100.0)
+            realizedProfitUsd + remainingProfit
+        }
+
+        // ──── ОПРЕДЕЛЕНИЕ СТАТУСА ────
+        val newStatus = when {
+            forcedExit && !forcedExitExecuted -> TokenStatus.MONITORING
+            forcedExit -> if (finalProfitUsd >= 0) TokenStatus.STOPPED_TP else TokenStatus.STOPPED_SL
+            closedByStage4 -> TokenStatus.STOPPED_TP
+            else -> TokenStatus.MONITORING
         }
 
         val updatedToken = token.copy(

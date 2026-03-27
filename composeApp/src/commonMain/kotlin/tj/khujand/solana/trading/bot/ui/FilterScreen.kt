@@ -894,7 +894,66 @@ valueRange = 10f..100f,
                             label = { Text("HIGH") }
                         )
                     }
+
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                        Switch(
+                            checked = currentSettings.aiFailClosed,
+                            onCheckedChange = { checked ->
+                                applySettings(currentSettings.copy(aiFailClosed = checked))
+                            }
+                        )
+                        Spacer(modifier = Modifier.width(12.dp))
+                        Text("Fail-closed on AI errors")
+                    }
                 }
+            }
+        }
+
+        Spacer(modifier = Modifier.height(16.dp))
+
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            colors = CardDefaults.cardColors(
+                containerColor = MaterialTheme.colorScheme.surfaceVariant
+            )
+        ) {
+            Column(modifier = Modifier.padding(16.dp)) {
+                Text("🛡️ Portfolio Risk Limits", fontWeight = FontWeight.Medium, fontSize = 16.sp)
+                Spacer(modifier = Modifier.height(10.dp))
+
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                    Text("Max daily loss ($)")
+                    Text("${currentSettings.maxDailyLossUsd.toInt()}", fontWeight = FontWeight.Bold)
+                }
+                Slider(
+                    value = currentSettings.maxDailyLossUsd.toFloat(),
+                    onValueChange = { v -> applySettings(currentSettings.copy(maxDailyLossUsd = v.toDouble().coerceIn(10.0, 10_000.0))) },
+                    valueRange = 10f..10_000f,
+                    steps = 99
+                )
+
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                    Text("Max total exposure ($)")
+                    Text("${currentSettings.maxTotalExposureUsd.toInt()}", fontWeight = FontWeight.Bold)
+                }
+                Slider(
+                    value = currentSettings.maxTotalExposureUsd.toFloat(),
+                    onValueChange = { v -> applySettings(currentSettings.copy(maxTotalExposureUsd = v.toDouble().coerceIn(10.0, 20_000.0))) },
+                    valueRange = 10f..20_000f,
+                    steps = 199
+                )
+
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                    Text("Max consecutive losses")
+                    Text("${currentSettings.maxConsecutiveLosses}", fontWeight = FontWeight.Bold)
+                }
+                Slider(
+                    value = currentSettings.maxConsecutiveLosses.toFloat(),
+                    onValueChange = { v -> applySettings(currentSettings.copy(maxConsecutiveLosses = v.toInt().coerceIn(1, 20))) },
+                    valueRange = 1f..20f,
+                    steps = 18
+                )
             }
         }
 
