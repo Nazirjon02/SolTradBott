@@ -5,8 +5,10 @@ import tj.khujand.solana.trading.bot.bot.domain.model.DealsSummary
 import tj.khujand.solana.trading.bot.bot.domain.model.ExitStrategyView
 import tj.khujand.solana.trading.bot.bot.domain.model.FilterFieldSpec
 import tj.khujand.solana.trading.bot.bot.domain.model.FilterSettingsView
+import tj.khujand.solana.trading.bot.bot.domain.model.MonitoredTokenView
 import tj.khujand.solana.trading.bot.bot.domain.model.SystemSnapshot
 import tj.khujand.solana.trading.bot.bot.domain.model.TradingMode
+import tj.khujand.solana.trading.bot.domain.TokenStatus
 import tj.khujand.solana.trading.bot.data.FilterSettingsManager
 import tj.khujand.solana.trading.bot.domain.DemoAccountManager
 import tj.khujand.solana.trading.bot.domain.TokenHistoryManager
@@ -364,6 +366,27 @@ class TradingBotService(
             netProfitUsd = stats.netProfit,
             winRatePct = stats.winRate
         )
+    }
+
+    fun getMonitoredTokensView(): List<MonitoredTokenView> {
+        return engineController
+            .tokenMonitor()
+            .monitoredTokens
+            .asSequence()
+            .filter { it.status == TokenStatus.MONITORING }
+            .map { token ->
+                val rawName = token.tokenPair.baseToken?.name
+                    ?: token.tokenPair.baseToken?.symbol
+                    ?: "Unknown"
+                val rawAddress = token.tokenPair.baseToken?.address
+                    ?: token.tokenPair.pairAddress
+                    ?: "N/A"
+                MonitoredTokenView(
+                    name = rawName,
+                    tokenAddress = rawAddress
+                )
+            }
+            .toList()
     }
 
     fun getSystemSnapshot(): SystemSnapshot {

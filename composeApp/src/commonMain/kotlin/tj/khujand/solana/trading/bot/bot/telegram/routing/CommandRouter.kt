@@ -46,6 +46,13 @@ class CommandRouter(
                     TelegramMenuBuilder.dealsMenu()
                 )
             }
+            "/monitoring" -> {
+                telegram.sendMessage(
+                    ctx.chatId,
+                    TelegramMessageFormatter.monitoringMessage(service.getMonitoredTokensView()),
+                    TelegramMenuBuilder.monitoringMenu()
+                )
+            }
             "/filters" -> {
                 val view = service.getFilterSettingsView()
                 telegram.sendMessage(
@@ -83,6 +90,7 @@ class CommandRouter(
             appendLine("/mode")
             appendLine("/balance")
             appendLine("/deals")
+            appendLine("/monitoring")
             appendLine("/filters")
             appendLine("/exit")
         }

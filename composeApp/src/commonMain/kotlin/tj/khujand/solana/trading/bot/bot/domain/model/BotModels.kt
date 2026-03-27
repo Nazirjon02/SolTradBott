@@ -45,3 +45,8 @@ data class ExitStrategyView(
     val settings: FilterSettings,
     val editableFields: List<FilterFieldSpec>
 )
+
+data class MonitoredTokenView(
+    val name: String,
+    val tokenAddress: String
+)

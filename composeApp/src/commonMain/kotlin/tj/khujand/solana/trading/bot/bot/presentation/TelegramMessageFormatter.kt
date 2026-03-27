@@ -3,6 +3,7 @@ package tj.khujand.solana.trading.bot.bot.presentation
 import tj.khujand.solana.trading.bot.bot.domain.model.DealsSummary
 import tj.khujand.solana.trading.bot.bot.domain.model.ExitStrategyView
 import tj.khujand.solana.trading.bot.bot.domain.model.FilterSettingsView
+import tj.khujand.solana.trading.bot.bot.domain.model.MonitoredTokenView
 import tj.khujand.solana.trading.bot.bot.domain.model.SystemSnapshot
 import tj.khujand.solana.trading.bot.bot.domain.model.TradingMode
 import kotlin.math.absoluteValue
@@ -49,6 +50,23 @@ object TelegramMessageFormatter {
         return buildString {
             appendLine("*Deals Summary*")
             appendLine(formatDealsSummary(summary))
+        }
+    }
+
+    fun monitoringMessage(tokens: List<MonitoredTokenView>): String {
+        return buildString {
+            appendLine("*Monitoring Tokens*")
+            appendLine()
+            if (tokens.isEmpty()) {
+                appendLine("Сейчас нет монет в мониторинге.")
+            } else {
+                tokens.forEachIndexed { index, token ->
+                    appendLine("${index + 1}. ${token.name}")
+                    appendLine("`${token.tokenAddress}`")
+                    appendLine()
+                }
+                appendLine("_Адрес токена можно скопировать как code-текст_")
+            }
         }
     }
 

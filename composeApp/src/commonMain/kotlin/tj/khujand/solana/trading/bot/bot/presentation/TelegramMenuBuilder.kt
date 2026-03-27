@@ -14,7 +14,7 @@ object TelegramMenuBuilder {
                 listOf(button("▶️ Start", "trade", "start"), button("⏹ Stop", "trade", "stop")),
                 listOf(button("📊 Status", "main", "status"), button("💼 Balance", "main", "balance")),
                 listOf(button("🧾 Deals", "main", "deals"), button("⚙️ Filters", "main", "filters")),
-                listOf(button("📤 Exit Strategy", "main", "exit")),
+                listOf(button("📤 Exit Strategy", "main", "exit"), button("👀 Monitoring", "main", "monitoring")),
                 listOf(button("🔁 Mode", "main", "mode"), button("🔄 Refresh", "main", "refresh"))
             )
         )
@@ -51,6 +51,15 @@ object TelegramMenuBuilder {
         return TelegramInlineKeyboard(
             rows = listOf(
                 listOf(button("🔄 Refresh", "deals", "refresh")),
+                listOf(button("⬅️ Back", "main", "home"))
+            )
+        )
+    }
+
+    fun monitoringMenu(): TelegramInlineKeyboard {
+        return TelegramInlineKeyboard(
+            rows = listOf(
+                listOf(button("🔄 Refresh", "monitoring", "refresh")),
                 listOf(button("⬅️ Back", "main", "home"))
             )
         )

@@ -23,6 +23,7 @@ class CallbackRouter(
             "mode" -> handleMode(payload.action, payload.param, ctx)
             "balance" -> showBalance(ctx)
             "deals" -> showDeals(ctx)
+            "monitoring" -> showMonitoring(ctx)
             "filters" -> handleFilters(payload.action, payload.param, ctx)
             "exit" -> handleExit(payload.action, payload.param, ctx)
             else -> ctx.callbackQueryId?.let { telegram.answerCallbackQuery(it, "Unknown action") }
@@ -35,6 +36,7 @@ class CallbackRouter(
             "status" -> showStatus(ctx)
             "balance" -> showBalance(ctx)
             "deals" -> showDeals(ctx)
+            "monitoring" -> showMonitoring(ctx)
             "filters" -> showFilters(ctx)
             "exit" -> showExitStrategy(ctx)
             "mode" -> showMode(ctx)
@@ -156,6 +158,11 @@ class CallbackRouter(
     private suspend fun showDeals(ctx: RouterContext) {
         val text = TelegramMessageFormatter.dealsSummaryMessage(service.getDealsSummary())
         editOrSend(ctx, text, TelegramMenuBuilder.dealsMenu())
+    }
+
+    private suspend fun showMonitoring(ctx: RouterContext) {
+        val text = TelegramMessageFormatter.monitoringMessage(service.getMonitoredTokensView())
+        editOrSend(ctx, text, TelegramMenuBuilder.monitoringMenu())
     }
 
     private suspend fun showFilters(ctx: RouterContext) {
