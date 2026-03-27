@@ -22,6 +22,8 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
 import kotlin.time.Clock
 
 // МОДЕЛИ ДАННЫХ (перенесем сюда чтобы все в одном месте)
@@ -290,7 +292,10 @@ class DexScreenerApi {
     private val maxProfileTokens = 25
     private val minRequestDelayMs = 700L
     private val maxRetries = 3
+    private val maxDetailRequestsInFlight = 2
+    private val boostsCooldownMs = 90_000L
     private var useBoostsNext = true
+    private var boostsRateLimitedUntilMs = 0L
 
     suspend fun getTokenPriceUsd(chainId: String, tokenAddress: String): Double? {
         val url = "https://api.dexscreener.com/tokens/v1/$chainId/$tokenAddress"
@@ -317,6 +322,14 @@ class DexScreenerApi {
                     allTokens.addAll(boostTokens)
                 } else {
                     println("⚠️ token-boosts не вернул данные или пусто")
+                    println("🔁 Fallback: пробуем token-profiles в этом же цикле...")
+                    val profileTokens = getLatestTokenProfilePairs(settings)
+                    if (profileTokens.isNotEmpty()) {
+                        println("🧩 Найдено токенов через token-profiles: ${profileTokens.size}")
+                        allTokens.addAll(profileTokens)
+                    } else {
+                        println("⚠️ token-profiles тоже вернул пусто")
+                    }
                 }
             } else {
                 println("🔍 Поиск новых токенов через token-profiles...")
@@ -326,6 +339,14 @@ class DexScreenerApi {
                     allTokens.addAll(profileTokens)
                 } else {
                     println("⚠️ token-profiles не вернул данные или пусто")
+                    println("🔁 Fallback: пробуем token-boosts в этом же цикле...")
+                    val boostTokens = getLatestTokenBoosts(settings)
+                    if (boostTokens.isNotEmpty()) {
+                        println("🧩 Найдено токенов через token-boosts: ${boostTokens.size}")
+                        allTokens.addAll(boostTokens)
+                    } else {
+                        println("⚠️ token-boosts тоже вернул пусто")
+                    }
                 }
             }
 
@@ -529,6 +550,13 @@ class DexScreenerApi {
 
     // ✅ НОВЫЙ МЕТОД: Получение токенов через token-boosts/latest/v1 (оптимизировано с параллельными запросами)
     private suspend fun getLatestTokenBoosts(settings: FilterSettings): List<TokenPair> {
+        val nowMs = Clock.System.now().toEpochMilliseconds()
+        if (boostsRateLimitedUntilMs > nowMs) {
+            val waitSec = ((boostsRateLimitedUntilMs - nowMs) / 1000L).coerceAtLeast(1L)
+            println("⏸️ token-boosts cooldown активен, ждём ~${waitSec}с")
+            return emptyList()
+        }
+
         val url = "https://api.dexscreener.com/token-boosts/latest/v1"
         val jsonElement = getJsonElementWithRetry(url) ?: return emptyList()
         
@@ -536,24 +564,29 @@ class DexScreenerApi {
         val boosts = parseTokenBoostsFromJson(jsonElement)
         
         // Фильтруем только Solana токены
-        val solanaTokens = boosts.filter { it.chainId == "solana" && !it.tokenAddress.isNullOrBlank() }
+        val solanaTokens = boosts
+            .filter { it.chainId == "solana" && !it.tokenAddress.isNullOrBlank() }
+            .take((settings.maxTokensPerTick * 6).coerceAtLeast(8).coerceAtMost(maxProfileTokens))
         
         if (solanaTokens.isEmpty()) return emptyList()
 
         // ✅ ОПТИМИЗАЦИЯ: Параллельные запросы для получения деталей токенов
         return coroutineScope {
+            val semaphore = Semaphore(maxDetailRequestsInFlight)
             solanaTokens.map { boost ->
                 async {
-                    val tokenAddress = boost.tokenAddress ?: return@async emptyList<TokenPair>()
-                    try {
-                        val tokenPairs = getTokenPairsForAddress("solana", tokenAddress)
-                        delay(minRequestDelayMs) // Задержка для rate limiting
-                        tokenPairs
-                    } catch (e: CancellationException) {
-                        throw e
-                    } catch (e: Exception) {
-                        println("⚠️ Ошибка получения пар для $tokenAddress: ${e.message}")
-                        emptyList()
+                    semaphore.withPermit {
+                        val tokenAddress = boost.tokenAddress ?: return@withPermit emptyList<TokenPair>()
+                        try {
+                            val tokenPairs = getTokenPairsForAddress("solana", tokenAddress)
+                            delay(minRequestDelayMs) // Задержка для rate limiting
+                            tokenPairs
+                        } catch (e: CancellationException) {
+                            throw e
+                        } catch (e: Exception) {
+                            println("⚠️ Ошибка получения пар для $tokenAddress: ${e.message}")
+                            emptyList()
+                        }
                     }
                 }
             }.awaitAll().flatten()
@@ -571,23 +604,26 @@ class DexScreenerApi {
             if (chainId.isNullOrBlank() || tokenAddress.isNullOrBlank()) return@mapNotNull null
             if (settings.chains.isNotEmpty() && !settings.chains.contains(chainId)) return@mapNotNull null
             chainId to tokenAddress
-        }.distinct().take(maxProfileTokens)
+        }.distinct().take((settings.maxTokensPerTick * 6).coerceAtLeast(8).coerceAtMost(maxProfileTokens))
 
         if (recentTokens.isEmpty()) return emptyList()
 
         // ✅ ОПТИМИЗАЦИЯ: Параллельные запросы для получения деталей токенов
         return coroutineScope {
+            val semaphore = Semaphore(maxDetailRequestsInFlight)
             recentTokens.map { (chainId, tokenAddress) ->
                 async {
-                    try {
-                        val tokenPairs = getTokenPairsForAddress(chainId, tokenAddress)
-                        delay(minRequestDelayMs) // Задержка для rate limiting
-                        tokenPairs
-                    } catch (e: CancellationException) {
-                        throw e
-                    } catch (e: Exception) {
-                        println("⚠️ Ошибка получения пар для $chainId/$tokenAddress: ${e.message}")
-                        emptyList()
+                    semaphore.withPermit {
+                        try {
+                            val tokenPairs = getTokenPairsForAddress(chainId, tokenAddress)
+                            delay(minRequestDelayMs) // Задержка для rate limiting
+                            tokenPairs
+                        } catch (e: CancellationException) {
+                            throw e
+                        } catch (e: Exception) {
+                            println("⚠️ Ошибка получения пар для $chainId/$tokenAddress: ${e.message}")
+                            emptyList()
+                        }
                     }
                 }
             }.awaitAll().flatten()
@@ -615,6 +651,10 @@ class DexScreenerApi {
 
                 val status = response.status
                 if (status.value == 429 || status.value >= 500) {
+                    if (status.value == 429 && isTokenBoostsLatestUrl(url)) {
+                        val nextAllowed = Clock.System.now().toEpochMilliseconds() + boostsCooldownMs
+                        boostsRateLimitedUntilMs = maxOf(boostsRateLimitedUntilMs, nextAllowed)
+                    }
                     println("⏳ Rate limit/Server error ${status.value}, retry in ${backoffMs}ms...")
                     delay(backoffMs)
                     backoffMs = (backoffMs * 2).coerceAtMost(4000L)
@@ -654,6 +694,10 @@ class DexScreenerApi {
         }
 
         return null
+    }
+
+    private fun isTokenBoostsLatestUrl(url: String): Boolean {
+        return url.contains("/token-boosts/latest/", ignoreCase = true)
     }
 
     private fun parsePairsFromJson(jsonElement: JsonElement): List<TokenPair> {
