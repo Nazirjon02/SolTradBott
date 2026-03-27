@@ -25,16 +25,7 @@ if "%TELEGRAM_BOT_TOKEN%"=="" (
     exit /b 1
 )
 
-set "APP_JARS="
-for %%f in ("%APP_HOME%\app\*.jar") do (
-    if defined APP_JARS (
-        set "APP_JARS=!APP_JARS!;%%~ff"
-    ) else (
-        set "APP_JARS=%%~ff"
-    )
-)
-
-if not defined APP_JARS (
+if not exist "%APP_HOME%\app\*.jar" (
     echo [ERROR] Could not find JAR files in "%APP_HOME%\app".
     echo Make sure this script is in installed app root folder.
     pause
@@ -45,7 +36,7 @@ echo Starting Telegram bot...
 echo App home: "%APP_HOME%"
 echo.
 
-"%JAVA_EXE%" -cp "%APP_JARS%" tj.khujand.solana.trading.bot.TelegramBotMainKt
+"%JAVA_EXE%" -cp "%APP_HOME%\app\*" tj.khujand.solana.trading.bot.TelegramBotMainKt
 set "BOT_EXIT=%ERRORLEVEL%"
 
 echo.
