@@ -96,6 +96,10 @@ object TelegramMessageFormatter {
             appendLine("• maxDailyLossUsd: `${s.maxDailyLossUsd.toInt()}`")
             appendLine("• maxTotalExposureUsd: `${s.maxTotalExposureUsd.toInt()}`")
             appendLine("• maxConsecutiveLosses: `${s.maxConsecutiveLosses}`")
+            appendLine("• stopLossByPricePct: `${s.stopLossByPricePct.toInt()}%`")
+            appendLine("• stopLossByMarketCapPct: `${s.stopLossByMarketCapPct.toInt()}%`")
+            appendLine("• trailingStopPct: `${s.trailingStopPct.toInt()}%`")
+            appendLine("• stagePullbackPct: `${s.stagePullbackPct.toInt()}%`")
             appendLine()
             appendLine("_Изменение параметров доступно через кнопки ниже_")
         }

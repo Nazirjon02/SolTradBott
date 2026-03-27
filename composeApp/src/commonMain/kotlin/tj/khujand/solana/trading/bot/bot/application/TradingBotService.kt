@@ -95,6 +95,34 @@ class TradingBotService(
             min = 1.0,
             max = 20.0,
             step = 1.0
+        ),
+        FilterFieldSpec(
+            key = "stopLossByPricePct",
+            title = "SL by price %",
+            min = 1.0,
+            max = 80.0,
+            step = 1.0
+        ),
+        FilterFieldSpec(
+            key = "stopLossByMarketCapPct",
+            title = "SL by mcap %",
+            min = 1.0,
+            max = 90.0,
+            step = 1.0
+        ),
+        FilterFieldSpec(
+            key = "trailingStopPct",
+            title = "Trailing stop %",
+            min = 1.0,
+            max = 90.0,
+            step = 1.0
+        ),
+        FilterFieldSpec(
+            key = "stagePullbackPct",
+            title = "Stage pullback %",
+            min = 1.0,
+            max = 90.0,
+            step = 1.0
         )
     )
 
@@ -271,6 +299,22 @@ class TradingBotService(
                 val value = (settings.maxConsecutiveLosses.toDouble() + delta).coerceIn(field.min, field.max).toInt()
                 settings.copy(maxConsecutiveLosses = value)
             }
+            "stopLossByPricePct" -> {
+                val value = (settings.stopLossByPricePct + delta).coerceIn(field.min, field.max)
+                settings.copy(stopLossByPricePct = value)
+            }
+            "stopLossByMarketCapPct" -> {
+                val value = (settings.stopLossByMarketCapPct + delta).coerceIn(field.min, field.max)
+                settings.copy(stopLossByMarketCapPct = value)
+            }
+            "trailingStopPct" -> {
+                val value = (settings.trailingStopPct + delta).coerceIn(field.min, field.max)
+                settings.copy(trailingStopPct = value)
+            }
+            "stagePullbackPct" -> {
+                val value = (settings.stagePullbackPct + delta).coerceIn(field.min, field.max)
+                settings.copy(stagePullbackPct = value)
+            }
             else -> settings
         }
         FilterSettingsManager.saveSettings(updated)
@@ -423,7 +467,11 @@ class TradingBotService(
                 "aiFailClosed" to settings.aiFailClosed.toString(),
                 "maxDailyLossUsd" to settings.maxDailyLossUsd.toInt().toString(),
                 "maxTotalExposureUsd" to settings.maxTotalExposureUsd.toInt().toString(),
-                "maxConsecutiveLosses" to settings.maxConsecutiveLosses.toString()
+                "maxConsecutiveLosses" to settings.maxConsecutiveLosses.toString(),
+                "stopLossByPricePct" to settings.stopLossByPricePct.toInt().toString(),
+                "stopLossByMarketCapPct" to settings.stopLossByMarketCapPct.toInt().toString(),
+                "trailingStopPct" to settings.trailingStopPct.toInt().toString(),
+                "stagePullbackPct" to settings.stagePullbackPct.toInt().toString()
             )
         )
     }

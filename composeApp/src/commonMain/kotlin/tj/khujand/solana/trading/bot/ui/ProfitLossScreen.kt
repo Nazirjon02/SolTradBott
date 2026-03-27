@@ -108,7 +108,7 @@ fun ProfitLossScreen(
                 verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
                 item {
-                    if (statistics.totalTrades > 0) {
+                    if (history.isNotEmpty()) {
                         StatsSection(statistics)
                         Spacer(modifier = Modifier.height(8.dp))
                         Button(
@@ -296,7 +296,7 @@ private fun StatCard(
 @Composable
 private fun StatsSection(statistics: ProfitLossStatistics) {
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        Text("Summary", fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
+        Text("Closed Trades Summary", fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.spacedBy(12.dp)
@@ -334,6 +334,47 @@ private fun StatsSection(statistics: ProfitLossStatistics) {
                 value = formatCurrency(statistics.totalReturn),
                 icon = Icons.Default.AttachMoney,
                 color = MaterialTheme.colorScheme.primary
+            )
+        }
+
+        Text("PnL Breakdown", fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            StatCard(
+                modifier = Modifier.weight(1f),
+                title = "Closed PnL",
+                value = formatCurrency(statistics.netProfit),
+                icon = Icons.Default.DoneAll,
+                color = if (statistics.netProfit >= 0) Color(0xFF4CAF50) else Color(0xFFF44336)
+            )
+            StatCard(
+                modifier = Modifier.weight(1f),
+                title = "Partial PnL",
+                value = formatCurrency(statistics.partialNetProfit),
+                icon = Icons.Default.CallSplit,
+                color = if (statistics.partialNetProfit >= 0) Color(0xFF4CAF50) else Color(0xFFF44336)
+            )
+        }
+
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            StatCard(
+                modifier = Modifier.weight(1f),
+                title = "Overall PnL",
+                value = formatCurrency(statistics.overallNetProfit),
+                icon = Icons.Default.AccountBalanceWallet,
+                color = if (statistics.overallNetProfit >= 0) Color(0xFF4CAF50) else Color(0xFFF44336)
+            )
+            StatCard(
+                modifier = Modifier.weight(1f),
+                title = "Partial Exits",
+                value = "${statistics.partialExitsCount}",
+                icon = Icons.Default.BarChart,
+                color = MaterialTheme.colorScheme.tertiary
             )
         }
 

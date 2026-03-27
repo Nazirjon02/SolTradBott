@@ -664,9 +664,19 @@ class TokenMonitor {
         if (consecutiveLosses >= filterSettings.maxConsecutiveLosses.coerceAtLeast(1)) return false
 
         val openExposure = currentOpenExposureUsd()
-        if (openExposure + filterSettings.tradeUsdAmount > filterSettings.maxTotalExposureUsd) return false
+        val nextPositionUsd = if (filterSettings.jupiterEnabled) {
+            filterSettings.tradeUsdAmount
+        } else {
+            DemoAccountManager.DEMO_TRADE_AMOUNT
+        }
+        if (openExposure + nextPositionUsd > filterSettings.maxTotalExposureUsd) return false
 
-        val equityEstimate = DemoAccountManager.getBalance() + dailyRealizedPnlUsd
+        val equityEstimate = if (filterSettings.jupiterEnabled) {
+            dailyRealizedPnlUsd
+        } else {
+            // Demo баланс уже включает реализованный PnL, не учитываем его повторно.
+            DemoAccountManager.getBalance()
+        }
         if (equityEstimate > peakTrackedEquityUsd) {
             peakTrackedEquityUsd = equityEstimate
         }
@@ -1110,6 +1120,7 @@ class TokenMonitor {
         var stage3Done = token.exitStage3Done
         var stage4Done = token.exitStage4Done
         var realizedProfitUsd = token.realizedProfitUsd  // ⭐ Реализованная прибыль (сумма частичных выходов)
+        var closedByFullStageExit = false
         val entryCap = token.entryMarketCap
         val newPeakMarketCap = if (marketCap > token.peakMarketCap) marketCap else token.peakMarketCap
 
@@ -1127,6 +1138,7 @@ class TokenMonitor {
             if (!filterSettings.jupiterEnabled || sellResult != null) {
                 remainingPct -= pct
                 tokenAmountRaw = (tokenAmountRaw - (tokenAmountRaw * (pct / 100.0)).toLong()).coerceAtLeast(0L)
+                if (remainingPct <= 0.0) closedByFullStageExit = true
                 stage1Done = true
                 println("✅ Aggressive: фиксация ${pct.toInt()}% при +${priceChangePercent.toInt()}%")
                 val partialProfitUsd = sellResult?.profitUsd ?: (priceBasedProfitUsd * (pct / 100.0))
@@ -1153,6 +1165,7 @@ class TokenMonitor {
             if (!filterSettings.jupiterEnabled || sellResult != null) {
                 remainingPct -= pct
                 tokenAmountRaw = (tokenAmountRaw - (tokenAmountRaw * (pct / 100.0)).toLong()).coerceAtLeast(0L)
+                if (remainingPct <= 0.0) closedByFullStageExit = true
                 stage1Done = true
                 println("✅ Этап 1: фиксация ${pct.toInt()}% при Market Cap ${filterSettings.exitStage1Cap.toInt()}")
                 val partialProfitUsd = sellResult?.profitUsd ?: (priceBasedProfitUsd * (pct / 100.0))
@@ -1178,6 +1191,7 @@ class TokenMonitor {
             if (!filterSettings.jupiterEnabled || sellResult != null) {
                 remainingPct -= pct
                 tokenAmountRaw = (tokenAmountRaw - (tokenAmountRaw * (pct / 100.0)).toLong()).coerceAtLeast(0L)
+                if (remainingPct <= 0.0) closedByFullStageExit = true
                 stage2Done = true
                 println("✅ Этап 2: фиксация ${pct.toInt()}% при Market Cap ${filterSettings.exitStage2Cap.toInt()}")
                 val partialProfitUsd = sellResult?.profitUsd ?: (priceBasedProfitUsd * (pct / 100.0))
@@ -1203,6 +1217,7 @@ class TokenMonitor {
             if (!filterSettings.jupiterEnabled || sellResult != null) {
                 remainingPct -= pct
                 tokenAmountRaw = (tokenAmountRaw - (tokenAmountRaw * (pct / 100.0)).toLong()).coerceAtLeast(0L)
+                if (remainingPct <= 0.0) closedByFullStageExit = true
                 stage3Done = true
                 println("✅ Этап 3: фиксация ${pct.toInt()}% при Market Cap ${filterSettings.exitStage3Cap.toInt()}")
                 val partialProfitUsd = sellResult?.profitUsd ?: (priceBasedProfitUsd * (pct / 100.0))
@@ -1228,6 +1243,7 @@ class TokenMonitor {
             if (!filterSettings.jupiterEnabled || sellResult != null) {
                 remainingPct -= pct
                 tokenAmountRaw = (tokenAmountRaw - (tokenAmountRaw * (pct / 100.0)).toLong()).coerceAtLeast(0L)
+                if (remainingPct <= 0.0) closedByFullStageExit = true
                 stage4Done = true
                 println("✅ Этап 4: фиксация ${pct.toInt()}% при Market Cap ${filterSettings.exitStage4Cap.toInt()}")
                 val partialProfitUsd = sellResult?.profitUsd ?: (priceBasedProfitUsd * (pct / 100.0))
@@ -1303,7 +1319,7 @@ class TokenMonitor {
             }
         }
 
-        val closedByStage4 = stage4Done || remainingPct <= 0.0
+        val positionFullyClosed = remainingPct <= 0.0
 
         // ──── ВЫЧИСЛЯЕМ ФИНАЛЬНЫЙ ПРОФИТ ────
         val finalProfitUsd = if (filterSettings.jupiterEnabled) {
@@ -1319,7 +1335,7 @@ class TokenMonitor {
         val newStatus = when {
             forcedExit && !forcedExitExecuted -> TokenStatus.MONITORING
             forcedExit -> if (finalProfitUsd >= 0) TokenStatus.STOPPED_TP else TokenStatus.STOPPED_SL
-            closedByStage4 -> TokenStatus.STOPPED_TP
+            positionFullyClosed -> TokenStatus.STOPPED_TP
             else -> TokenStatus.MONITORING
         }
 
@@ -1349,7 +1365,8 @@ class TokenMonitor {
             if (index != -1) {
                 // 💾 Сохраняем в историю если достигнут TP или SL
                 if (newStatus != TokenStatus.MONITORING) {
-                    addClosedToken(updatedToken, skipHistory = closedByStage4)
+                    val skipFinalHistory = closedByFullStageExit && !forcedExit
+                    addClosedToken(updatedToken, skipHistory = skipFinalHistory)
                     // ✅ Автоматически удаляем из списка мониторинга
                     _monitoredTokens.removeAt(index)
                     println("🗑️ Токен ${token.tokenPair.baseToken?.symbol} удален из мониторинга (${if (newStatus == TokenStatus.STOPPED_TP) "TP HIT" else "SL HIT"})")
