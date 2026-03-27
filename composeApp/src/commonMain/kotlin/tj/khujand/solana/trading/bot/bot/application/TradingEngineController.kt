@@ -6,6 +6,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
 import tj.khujand.solana.trading.bot.bot.domain.model.ActionResult
 import tj.khujand.solana.trading.bot.data.FilterSettingsManager
+import tj.khujand.solana.trading.bot.domain.MonitoredToken
 import tj.khujand.solana.trading.bot.domain.TokenMonitor
 import tj.khujand.solana.trading.bot.util.AppSettings
 
@@ -13,7 +14,29 @@ class TradingEngineController(
     private val tokenMonitor: TokenMonitor = TokenMonitor(),
     private val scope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
 ) {
+    private val tokenFoundListeners = mutableMapOf<Long, (MonitoredToken) -> Unit>()
+    private var nextTokenFoundListenerId: Long = 1L
+
     fun tokenMonitor(): TokenMonitor = tokenMonitor
+
+    @Synchronized
+    fun subscribeOnTokenFound(listener: (MonitoredToken) -> Unit): Long {
+        val id = nextTokenFoundListenerId++
+        tokenFoundListeners[id] = listener
+        return id
+    }
+
+    @Synchronized
+    fun unsubscribeOnTokenFound(id: Long) {
+        tokenFoundListeners.remove(id)
+    }
+
+    private fun notifyTokenFound(token: MonitoredToken) {
+        val listeners = synchronized(this) { tokenFoundListeners.values.toList() }
+        listeners.forEach { listener ->
+            runCatching { listener(token) }
+        }
+    }
 
     fun isMonitoring(): Boolean {
         return tokenMonitor.isMonitoringActive() ||
@@ -32,6 +55,9 @@ class TradingEngineController(
         tokenMonitor.restoreFromCache()
         tokenMonitor.startMonitoring(
             intervalSeconds = intervalSeconds,
+            onNewTokenFound = { token ->
+                notifyTokenFound(token)
+            },
             onRequestStateChanged = { inProgress ->
                 AppSettings.putBoolean(AppSettings.KEY_REQUEST_IN_PROGRESS, inProgress)
             },

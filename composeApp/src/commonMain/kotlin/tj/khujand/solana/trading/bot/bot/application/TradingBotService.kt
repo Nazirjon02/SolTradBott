@@ -8,6 +8,7 @@ import tj.khujand.solana.trading.bot.bot.domain.model.FilterSettingsView
 import tj.khujand.solana.trading.bot.bot.domain.model.MonitoredTokenView
 import tj.khujand.solana.trading.bot.bot.domain.model.SystemSnapshot
 import tj.khujand.solana.trading.bot.bot.domain.model.TradingMode
+import tj.khujand.solana.trading.bot.domain.MonitoredToken
 import tj.khujand.solana.trading.bot.domain.TokenStatus
 import tj.khujand.solana.trading.bot.data.FilterSettingsManager
 import tj.khujand.solana.trading.bot.domain.DemoAccountManager
@@ -374,19 +375,31 @@ class TradingBotService(
             .monitoredTokens
             .asSequence()
             .filter { it.status == TokenStatus.MONITORING }
-            .map { token ->
-                val rawName = token.tokenPair.baseToken?.name
-                    ?: token.tokenPair.baseToken?.symbol
-                    ?: "Unknown"
-                val rawAddress = token.tokenPair.baseToken?.address
-                    ?: token.tokenPair.pairAddress
-                    ?: "N/A"
-                MonitoredTokenView(
-                    name = rawName,
-                    tokenAddress = rawAddress
-                )
-            }
+            .map(::toMonitoredTokenView)
             .toList()
+    }
+
+    fun subscribeOnTokenFound(listener: (MonitoredTokenView) -> Unit): Long {
+        return engineController.subscribeOnTokenFound { token ->
+            listener(toMonitoredTokenView(token))
+        }
+    }
+
+    fun unsubscribeOnTokenFound(id: Long) {
+        engineController.unsubscribeOnTokenFound(id)
+    }
+
+    private fun toMonitoredTokenView(token: MonitoredToken): MonitoredTokenView {
+        val rawName = token.tokenPair.baseToken?.name
+            ?: token.tokenPair.baseToken?.symbol
+            ?: "Unknown"
+        val rawAddress = token.tokenPair.baseToken?.address
+            ?: token.tokenPair.pairAddress
+            ?: "N/A"
+        return MonitoredTokenView(
+            name = rawName,
+            tokenAddress = rawAddress
+        )
     }
 
     fun getSystemSnapshot(): SystemSnapshot {

@@ -17,8 +17,10 @@ class TelegramBotRunner(
     config: TelegramBotConfig,
     service: TradingBotService = TradingRuntime.tradingBotService()
 ) {
+    private val adminChatId = config.adminChatId
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private val telegram = TelegramHttpClient(config)
+    private val tradingService = service
     private val router = UpdateRouter(
         service = service,
         telegram = telegram,
@@ -29,10 +31,12 @@ class TelegramBotRunner(
     )
 
     private var pollingJob: Job? = null
+    private var tokenFoundSubscriptionId: Long? = null
     private var offset: Long? = null
 
     fun start() {
         if (pollingJob?.isActive == true) return
+        subscribeTokenFoundNotifications()
         pollingJob = scope.launch {
             println("Telegram bot polling started")
             while (isActive) {
@@ -51,9 +55,29 @@ class TelegramBotRunner(
     }
 
     suspend fun stop() {
+        tokenFoundSubscriptionId?.let { tradingService.unsubscribeOnTokenFound(it) }
+        tokenFoundSubscriptionId = null
         pollingJob?.cancel()
         pollingJob = null
         telegram.close()
         println("Telegram bot stopped")
+    }
+
+    private fun subscribeTokenFoundNotifications() {
+        if (tokenFoundSubscriptionId != null || adminChatId == null) return
+        tokenFoundSubscriptionId = tradingService.subscribeOnTokenFound { token ->
+            scope.launch {
+                val text = buildString {
+                    appendLine("*Найдена и куплена монета*")
+                    appendLine(token.name)
+                    append("`${token.tokenAddress}`")
+                }
+                runCatching {
+                    telegram.sendMessage(adminChatId, text)
+                }.onFailure { e ->
+                    println("Telegram notify error: ${e.message}")
+                }
+            }
+        }
     }
 }
