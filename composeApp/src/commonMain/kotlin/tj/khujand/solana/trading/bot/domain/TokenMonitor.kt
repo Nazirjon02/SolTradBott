@@ -411,6 +411,10 @@ class TokenMonitor {
             }
             println("⏹️ Цикл мониторинга завершен")
         }
+        monitorJob?.invokeOnCompletion {
+            isMonitoring = false
+            runCatching { onRequestStateChanged(false) }
+        }
     }
 
     // 🔴 НОВЫЙ МЕТОД: параллельное обновление токенов
@@ -1335,7 +1339,7 @@ class TokenMonitor {
         val newStatus = when {
             forcedExit && !forcedExitExecuted -> TokenStatus.MONITORING
             forcedExit -> if (finalProfitUsd >= 0) TokenStatus.STOPPED_TP else TokenStatus.STOPPED_SL
-            positionFullyClosed -> TokenStatus.STOPPED_TP
+            positionFullyClosed -> if (finalProfitUsd >= 0) TokenStatus.STOPPED_TP else TokenStatus.STOPPED_SL
             else -> TokenStatus.MONITORING
         }
 
