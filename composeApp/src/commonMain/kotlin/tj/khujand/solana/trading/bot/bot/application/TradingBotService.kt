@@ -406,7 +406,8 @@ class TradingBotService(
         val stats = TokenHistoryManager.getStatistics()
         return DealsSummary(
             totalTrades = stats.totalTrades,
-            profitableTrades = stats.tpCount,
+            profitableTrades = stats.profitableCloseCount,
+            tpTriggerHits = stats.tpTriggerCount,
             losingTrades = stats.slCount,
             netProfitUsd = stats.netProfit,
             winRatePct = stats.winRate

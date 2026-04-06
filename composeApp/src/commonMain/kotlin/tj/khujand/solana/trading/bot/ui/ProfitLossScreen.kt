@@ -431,11 +431,24 @@ private fun StatsSection(statistics: ProfitLossStatistics) {
         ) {
             StatCard(
                 modifier = Modifier.weight(1f),
-                title = "TP Hits",
-                value = "${statistics.tpCount}",
+                title = "TP Trigger Hits",
+                value = "${statistics.tpTriggerCount}",
                 icon = Icons.Default.CheckCircle,
                 color = Color(0xFF4CAF50)
             )
+            StatCard(
+                modifier = Modifier.weight(1f),
+                title = "Profitable Closes",
+                value = "${statistics.profitableCloseCount}",
+                icon = Icons.Default.ThumbUp,
+                color = MaterialTheme.colorScheme.primary
+            )
+        }
+
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
             StatCard(
                 modifier = Modifier.weight(1f),
                 title = "SL Hits",
@@ -443,6 +456,7 @@ private fun StatsSection(statistics: ProfitLossStatistics) {
                 icon = Icons.Default.Cancel,
                 color = Color(0xFFF44336)
             )
+            Spacer(modifier = Modifier.weight(1f))
         }
     }
 }

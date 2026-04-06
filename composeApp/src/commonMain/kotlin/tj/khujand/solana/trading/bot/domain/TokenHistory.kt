@@ -96,8 +96,25 @@ object TokenHistoryManager {
         val history = loadHistory()
         val completedTrades = history.filter { !it.isPartialExit }
         val partialExits = history.filter { it.isPartialExit }
-        val tpTokens = completedTrades.filter { it.status == TokenStatus.STOPPED_TP }
         val slTokens = completedTrades.filter { it.status == TokenStatus.STOPPED_SL }
+        val completedTradeKeys = completedTrades
+            .map { it.tokenPair.baseToken?.address ?: it.tokenPair.pairAddress ?: "${it.symbol}_${it.entryTime}" }
+            .toSet()
+        val partialGroups = partialExits
+            .groupBy { it.tokenPair.baseToken?.address ?: it.tokenPair.pairAddress ?: "${it.symbol}_${it.entryTime}" }
+        val fullyClosedByPartials = partialGroups
+            .filter { (tradeKey, exits) ->
+                tradeKey !in completedTradeKeys && exits.sumOf { it.partialExitPct.coerceAtLeast(0.0) } >= 99.0
+            }
+            .values
+        val fullyClosedByPartialsCount = fullyClosedByPartials.size
+        val profitablePartialsCloseCount = fullyClosedByPartials.count { exits ->
+            exits.sumOf { it.profitUsd } >= 0.0
+        }
+        val totalTradesForStats = completedTrades.size + fullyClosedByPartialsCount
+        val profitableCompletedCloseCount = completedTrades.count { it.profitUsd >= 0.0 }
+        val profitableCloseCountForStats = profitableCompletedCloseCount + profitablePartialsCloseCount
+        val tpTriggerCountForStats = fullyClosedByPartialsCount
 
         // Ключевые метрики считаем только по завершенным сделкам.
         val totalProfit = completedTrades.filter { it.profitUsd > 0 }.sumOf { it.profitUsd }
@@ -125,13 +142,15 @@ object TokenHistoryManager {
         val realSuccessCount = realHistory.count { !it.isPartialExit && it.isSwapSuccess }
         
         return ProfitLossStatistics(
-            totalTrades = completedTrades.size,
-            tpCount = tpTokens.size,
+            totalTrades = totalTradesForStats,
+            tpCount = profitableCloseCountForStats,
+            tpTriggerCount = tpTriggerCountForStats,
+            profitableCloseCount = profitableCloseCountForStats,
             slCount = slTokens.size,
             totalProfit = totalProfit,
             totalLoss = totalLoss,
             netProfit = netProfit,
-            winRate = if (completedTrades.isNotEmpty()) (tpTokens.size.toDouble() / completedTrades.size) * 100 else 0.0,
+            winRate = if (totalTradesForStats > 0) (profitableCloseCountForStats.toDouble() / totalTradesForStats) * 100 else 0.0,
             totalInvested = totalInvested,
             totalReturn = totalReturn,
             returnPct = returnPct,
@@ -218,6 +237,8 @@ object TokenHistoryManager {
 data class ProfitLossStatistics(
     val totalTrades: Int,
     val tpCount: Int,
+    val tpTriggerCount: Int,
+    val profitableCloseCount: Int,
     val slCount: Int,
     val totalProfit: Double,
     val totalLoss: Double,

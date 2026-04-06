@@ -16,7 +16,7 @@ if "%TELEGRAM_BOT_TOKEN%"=="" (
     echo [ERROR] TELEGRAM_BOT_TOKEN is not set.
     echo.
     echo PowerShell example:
-    echo   $env:TELEGRAM_BOT_TOKEN="YOUR_TOKEN"
+    echo   $env:TELEGRAM_BOT_TOKEN="8314662081:AAESUklV-8vvYaD_lIBegEijWf0Axe96mmQ"
     echo   $env:TELEGRAM_ADMIN_CHAT_ID="7629981910"
     echo   $env:TELEGRAM_ADMIN_USER_ID="7629981910"
     echo.

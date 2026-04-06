@@ -16,7 +16,12 @@ object TelegramMessageFormatter {
             appendLine("• Мониторинг: ${if (snapshot.isMonitoring) "🟢 active" else "⚪ stopped"}")
             appendLine("• Режим: ${formatMode(snapshot.mode)}")
             appendLine("• Demo balance: `$${formatUsd(snapshot.demoBalanceUsd)}`")
-            appendLine("• Сделки: `${snapshot.dealsSummary.totalTrades}` (win `${snapshot.dealsSummary.profitableTrades}` / loss `${snapshot.dealsSummary.losingTrades}`)")
+            appendLine(
+                "• Сделки: `${snapshot.dealsSummary.totalTrades}` " +
+                    "(profit `${snapshot.dealsSummary.profitableTrades}` / " +
+                    "sl `${snapshot.dealsSummary.losingTrades}` / " +
+                    "tp-trigger `${snapshot.dealsSummary.tpTriggerHits}`)"
+            )
         }
     }
 
@@ -136,7 +141,8 @@ object TelegramMessageFormatter {
         val pnlPrefix = if (summary.netProfitUsd >= 0) "+" else "-"
         return buildString {
             appendLine("• Всего: `${summary.totalTrades}`")
-            appendLine("• Прибыльные: `+${summary.profitableTrades}`")
+            appendLine("• Profitable closes: `+${summary.profitableTrades}`")
+            appendLine("• TP trigger hits: `${summary.tpTriggerHits}`")
             appendLine("• Убыточные: `-${summary.losingTrades}`")
             appendLine("• Win rate: `${summary.winRatePct.toInt()}%`")
             appendLine("• Итог PnL: `${pnlPrefix}$${formatUsd(summary.netProfitUsd.absoluteValue)}`")

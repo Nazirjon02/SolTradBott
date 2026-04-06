@@ -15,6 +15,7 @@ data class ActionResult(
 data class DealsSummary(
     val totalTrades: Int,
     val profitableTrades: Int,
+    val tpTriggerHits: Int,
     val losingTrades: Int,
     val netProfitUsd: Double,
     val winRatePct: Double
