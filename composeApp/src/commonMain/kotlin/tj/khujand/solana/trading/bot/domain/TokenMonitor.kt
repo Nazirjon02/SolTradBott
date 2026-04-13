@@ -94,6 +94,8 @@ class TokenMonitor {
     private var rpcFingerprint: String = ""
     private var consecutiveLosses: Int = 0
     private var dailyRealizedPnlUsd: Double = 0.0
+    private val tokenUpdateFailureCount = mutableMapOf<String, Int>()
+    private val MAX_UPDATE_FAILURES = 3
     private var dailyPnlEpochDay: String = currentUtcDateId()
     private var peakTrackedEquityUsd: Double = 0.0
     private var cooldownUntilEpochMs: Long = 0L
@@ -428,6 +430,10 @@ class TokenMonitor {
             val updateJobs = tokensToUpdate.map { monitoredToken ->
                 async {
                     updateSemaphore.withPermit {
+                        val pairKey = monitoredToken.tokenPair.pairAddress
+                            ?: monitoredToken.tokenPair.baseToken?.address
+                            ?: return@withPermit
+
                         try {
                             // Проверяем, что токен все еще в списке
                             val currentIndex = _monitoredTokens.indexOfFirst { 
@@ -442,14 +448,19 @@ class TokenMonitor {
                             if (updatedPair != null) {
                                 val newPrice = parsePrice(updatedPair.priceUsd)
                                 if (newPrice > 0) {
+                                    tokenUpdateFailureCount.remove(pairKey)
                                     updateTokenPrice(monitoredToken, updatedPair, newPrice, onUpdate)
                                     println("✅ ${monitoredToken.tokenPair.baseToken?.symbol}: цена обновлена до $${newPrice}")
+                                } else {
+                                    handleUpdateFailure(monitoredToken, pairKey, "некорректная цена (${updatedPair.priceUsd})", onUpdate)
                                 }
+                            } else {
+                                handleUpdateFailure(monitoredToken, pairKey, "API вернул null", onUpdate)
                             }
                         } catch (e: CancellationException) {
                             throw e
                         } catch (e: Exception) {
-                            println("❌ Ошибка обновления токена ${monitoredToken.tokenPair.baseToken?.symbol}: ${e.message}")
+                            handleUpdateFailure(monitoredToken, pairKey, e.message ?: "unknown error", onUpdate)
                         } finally {
                             delay(filterSettings.updateDelayMs.toLong().coerceAtLeast(0L))
                         }
@@ -458,6 +469,65 @@ class TokenMonitor {
             }
 
             updateJobs.awaitAll()
+        }
+    }
+
+    private suspend fun handleUpdateFailure(
+        token: MonitoredToken,
+        key: String,
+        reason: String,
+        onUpdate: (MonitoredToken) -> Unit
+    ) {
+        val failures = (tokenUpdateFailureCount[key] ?: 0) + 1
+        tokenUpdateFailureCount[key] = failures
+        println("⚠️ ${token.tokenPair.baseToken?.symbol} ошибка обновления ($reason), попытка $failures/$MAX_UPDATE_FAILURES")
+        if (failures >= MAX_UPDATE_FAILURES) {
+            println("🛑 ${token.tokenPair.baseToken?.symbol}: превышен лимит ошибок, принудительное закрытие как SL")
+            tokenUpdateFailureCount.remove(key)
+            forceCloseOnUpdateFailure(token, onUpdate)
+        }
+    }
+
+    private suspend fun forceCloseOnUpdateFailure(
+        token: MonitoredToken,
+        onUpdate: (MonitoredToken) -> Unit
+    ) {
+        var tokenAmountRaw = token.tokenAmountRaw
+        var realizedProfitUsd = token.realizedProfitUsd
+
+        // Пытаемся продать через Jupiter ДО захвата мьютекса
+        if (filterSettings.jupiterEnabled && tokenAmountRaw > 0L) {
+            val pct = token.remainingPositionPct.coerceIn(0.0, 100.0)
+            val sellResult = runCatching {
+                sellTokenPercent(token, tokenAmountRaw, pct, token.lastMarketCap)
+            }.getOrNull()
+            if (sellResult != null) {
+                realizedProfitUsd += sellResult.profitUsd
+                tokenAmountRaw = 0L
+                println("✅ Jupiter sell выполнен при принудительном закрытии ${token.tokenPair.baseToken?.symbol}")
+            } else {
+                println("⚠️ Jupiter sell не удался при принудительном закрытии ${token.tokenPair.baseToken?.symbol}, закрываем без продажи")
+            }
+        }
+
+        listMutex.withLock {
+            val index = _monitoredTokens.indexOfFirst {
+                it.tokenPair.pairAddress == token.tokenPair.pairAddress
+            }
+            if (index == -1) return@withLock
+
+            val closedToken = token.copy(
+                status = TokenStatus.STOPPED_SL,
+                remainingPositionPct = 0.0,
+                tokenAmountRaw = tokenAmountRaw,
+                realizedProfitUsd = realizedProfitUsd
+            )
+            addClosedToken(closedToken)
+            _monitoredTokens.removeAt(index)
+            checkAndResumeDiscovery()
+            saveTokensToCache()
+            onUpdate(closedToken)
+            println("🗑️ Токен ${token.tokenPair.baseToken?.symbol} принудительно закрыт (SL) из-за ошибок обновления")
         }
     }
 
@@ -1314,6 +1384,10 @@ class TokenMonitor {
                     forcedExitExecuted = false
                 }
             } else {
+                // Demo-режим: нет реального свапа, но убыток остатка позиции
+                // нужно зафиксировать — иначе finalProfitUsd будет 0 вместо реального убытка
+                val remainingLoss = investment * priceChangePercent / 100.0 * (remainingPct / 100.0)
+                realizedProfitUsd += remainingLoss
                 remainingPct = 0.0
             }
             when {

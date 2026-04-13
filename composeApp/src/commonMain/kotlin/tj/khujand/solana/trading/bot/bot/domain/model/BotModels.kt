@@ -49,5 +49,8 @@ data class ExitStrategyView(
 
 data class MonitoredTokenView(
     val name: String,
-    val tokenAddress: String
+    val tokenAddress: String,
+    val profitUsd: Double = 0.0,
+    val priceChangePercent: Double = 0.0,
+    val investedUsd: Double = 0.0
 )

@@ -111,6 +111,9 @@ object TokenHistoryManager {
         val profitablePartialsCloseCount = fullyClosedByPartials.count { exits ->
             exits.sumOf { it.profitUsd } >= 0.0
         }
+        val losingPartialsCloseCount = fullyClosedByPartials.count { exits ->
+            exits.sumOf { it.profitUsd } < 0.0
+        }
         val totalTradesForStats = completedTrades.size + fullyClosedByPartialsCount
         val profitableCompletedCloseCount = completedTrades.count { it.profitUsd >= 0.0 }
         val profitableCloseCountForStats = profitableCompletedCloseCount + profitablePartialsCloseCount
@@ -146,7 +149,7 @@ object TokenHistoryManager {
             tpCount = profitableCloseCountForStats,
             tpTriggerCount = tpTriggerCountForStats,
             profitableCloseCount = profitableCloseCountForStats,
-            slCount = slTokens.size,
+            slCount = slTokens.size + losingPartialsCloseCount,
             totalProfit = totalProfit,
             totalLoss = totalLoss,
             netProfit = netProfit,

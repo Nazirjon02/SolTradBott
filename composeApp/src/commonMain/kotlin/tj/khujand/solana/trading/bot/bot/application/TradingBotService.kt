@@ -409,7 +409,7 @@ class TradingBotService(
             profitableTrades = stats.profitableCloseCount,
             tpTriggerHits = stats.tpTriggerCount,
             losingTrades = stats.slCount,
-            netProfitUsd = stats.netProfit,
+            netProfitUsd = stats.overallNetProfit,
             winRatePct = stats.winRate
         )
     }
@@ -443,7 +443,10 @@ class TradingBotService(
             ?: "N/A"
         return MonitoredTokenView(
             name = rawName,
-            tokenAddress = rawAddress
+            tokenAddress = rawAddress,
+            profitUsd = token.profitUsd,
+            priceChangePercent = token.priceChangePercent,
+            investedUsd = token.investedUsd
         )
     }
 

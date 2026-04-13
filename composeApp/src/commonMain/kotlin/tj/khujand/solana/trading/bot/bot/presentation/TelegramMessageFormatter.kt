@@ -66,8 +66,11 @@ object TelegramMessageFormatter {
                 appendLine("Сейчас нет монет в мониторинге.")
             } else {
                 tokens.forEachIndexed { index, token ->
-                    appendLine("${index + 1}. ${token.name}")
+                    val pnlSign = if (token.profitUsd >= 0) "+" else ""
+                    val pctSign = if (token.priceChangePercent >= 0) "+" else ""
+                    appendLine("${index + 1}. *${token.name}*")
                     appendLine("`${token.tokenAddress}`")
+                    appendLine("P&L: `${pnlSign}$${formatUsd(token.profitUsd)}` (`${pctSign}${token.priceChangePercent.toInt()}%`)")
                     appendLine()
                 }
                 appendLine("_Адрес токена можно скопировать как code-текст_")
