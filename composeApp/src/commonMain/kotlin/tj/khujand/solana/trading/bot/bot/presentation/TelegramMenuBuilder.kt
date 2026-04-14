@@ -109,6 +109,10 @@ object TelegramMenuBuilder {
                 button("➕ ${field.title}", "exit", "inc", field.key)
             )
         }
+        rows += listOf(
+            button("⏱️ TimedExit ${if (view.settings.useTimeBasedExit) "✅" else "❌"}", "exit", "toggle", "useTimeBasedExit"),
+            button("🕐 TradingHours ${if (view.settings.tradingHoursEnabled) "✅" else "❌"}", "exit", "toggle", "tradingHoursEnabled")
+        )
         rows += listOf(button("🔄 Refresh", "exit", "refresh"))
         rows += listOf(button("⬅️ Back", "main", "home"))
         return TelegramInlineKeyboard(rows = rows)

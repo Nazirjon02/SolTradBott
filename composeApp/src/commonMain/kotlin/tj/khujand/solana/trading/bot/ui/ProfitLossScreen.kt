@@ -1,10 +1,16 @@
 package tj.khujand.solana.trading.bot.ui
 
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
@@ -13,6 +19,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.text.AnnotatedString
@@ -28,130 +35,117 @@ import tj.khujand.solana.trading.bot.domain.TokenHistory
 import tj.khujand.solana.trading.bot.domain.TokenHistoryManager
 import tj.khujand.solana.trading.bot.domain.TokenStatus
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Main Screen
+// ─────────────────────────────────────────────────────────────────────────────
+
 @Composable
-fun ProfitLossScreen(
-    onClose: () -> Unit
-) {
-    var history by remember { mutableStateOf(TokenHistoryManager.loadHistory()) }
+fun ProfitLossScreen(onClose: () -> Unit) {
+    var history    by remember { mutableStateOf(TokenHistoryManager.loadHistory()) }
     var statistics by remember { mutableStateOf(TokenHistoryManager.getStatistics()) }
-    var showClearDialog by remember { mutableStateOf(false) }
+    var showClearDialog  by remember { mutableStateOf(false) }
     var showHistoryScreen by remember { mutableStateOf(false) }
 
     LaunchedEffect(Unit) {
-        history = TokenHistoryManager.loadHistory()
+        history    = TokenHistoryManager.loadHistory()
         statistics = TokenHistoryManager.getStatistics()
     }
 
     if (showHistoryScreen) {
-        HistoryListScreen(
-            history = history,
-            onBack = { showHistoryScreen = false }
-        )
+        HistoryListScreen(history = history, onBack = { showHistoryScreen = false })
     } else {
-        Column(
+        Box(
             modifier = Modifier
                 .fillMaxSize()
                 .background(MaterialTheme.colorScheme.background)
         ) {
-            // Заголовок
-            Card(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(top = 55.dp, start = 16.dp, end = 16.dp, bottom = 12.dp),
-                colors = CardDefaults.cardColors(
-                    containerColor = MaterialTheme.colorScheme.primaryContainer
-                ),
-                shape = RoundedCornerShape(16.dp)
-            ) {
-                Row(
+            Column(modifier = Modifier.fillMaxSize()) {
+
+                // ── Gradient header ──────────────────────────────────────
+                Box(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(16.dp),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
+                        .background(
+                            Brush.linearGradient(listOf(BrandPurple, Color(0xFF6366F1))),
+                            RoundedCornerShape(bottomStart = 24.dp, bottomEnd = 24.dp)
+                        )
+                        .padding(top = 52.dp, start = 20.dp, end = 16.dp, bottom = 20.dp)
                 ) {
-                    Column {
-                        Text(
-                            "📊 Profit & Loss",
-                            fontSize = 24.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = MaterialTheme.colorScheme.onPrimaryContainer
-                        )
-                        Text(
-                            "Статистика",
-                            fontSize = 14.sp,
-                            color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.7f)
-                        )
-                    }
-
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        IconButton(
-                            onClick = { showClearDialog = true },
-                            enabled = history.isNotEmpty()
-                        ) {
-                            Icon(
-                                Icons.Default.Delete,
-                                contentDescription = "Clear history",
-                                tint = if (history.isNotEmpty()) MaterialTheme.colorScheme.error else Color.Gray
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                            Text(
+                                "Прибыль и убытки",
+                                fontSize = 24.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = Color.White
+                            )
+                            Text(
+                                closedTradesSubtitle(history.size),
+                                fontSize = 13.sp,
+                                color = Color.White.copy(alpha = 0.75f)
                             )
                         }
-                        IconButton(onClick = onClose) {
-                            Icon(Icons.Default.Close, contentDescription = "Close")
+                        Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                            if (history.isNotEmpty()) {
+                                IconButton(onClick = { showClearDialog = true }) {
+                                    Icon(
+                                        Icons.Default.Delete,
+                                        contentDescription = "Очистить историю",
+                                        tint = Color.White.copy(alpha = 0.8f)
+                                    )
+                                }
+                            }
+                            IconButton(onClick = onClose) {
+                                Icon(Icons.Default.Close, contentDescription = "Закрыть", tint = Color.White)
+                            }
+                        }
+                    }
+                }
+
+                // ── Content ──────────────────────────────────────────────
+                LazyColumn(
+                    modifier = Modifier.fillMaxSize(),
+                    contentPadding = PaddingValues(horizontal = 16.dp, vertical = 16.dp),
+                    verticalArrangement = Arrangement.spacedBy(14.dp)
+                ) {
+                    item {
+                        if (history.isNotEmpty()) {
+                            PnLMainSummary(statistics, onOpenAllTrades = { showHistoryScreen = true })
+                        } else {
+                            EmptyHistoryState()
                         }
                     }
                 }
             }
 
-            LazyColumn(
-                modifier = Modifier.fillMaxSize(),
-                contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
-                verticalArrangement = Arrangement.spacedBy(12.dp)
-            ) {
-                item {
-                    if (history.isNotEmpty()) {
-                        StatsSection(statistics)
-                        Spacer(modifier = Modifier.height(8.dp))
-                        Button(
-                            onClick = { showHistoryScreen = true },
-                            modifier = Modifier.fillMaxWidth()
-                                .padding(bottom = 30.dp),
-                            colors = ButtonDefaults.buttonColors(
-                                containerColor = MaterialTheme.colorScheme.secondaryContainer,
-                                contentColor = MaterialTheme.colorScheme.onSecondaryContainer
-                            )
-                        ) {
-                            Icon(Icons.Default.List, contentDescription = null)
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Text("Open trades list")
-                        }
-                    } else {
-                        EmptyHistoryState()
-                    }
-                }
-            }
-
-            // Диалог очистки
+            // ── Clear dialog ─────────────────────────────────────────────
             if (showClearDialog) {
                 AlertDialog(
                     onDismissRequest = { showClearDialog = false },
-                    title = { Text("Очистить историю?") },
-                    text = { Text("Все данные о прибылях и убытках будут удалены. Это действие нельзя отменить.") },
+                    shape = RoundedCornerShape(20.dp),
+                    icon = {
+                        Icon(Icons.Default.DeleteForever, contentDescription = null,
+                            tint = DangerRed, modifier = Modifier.size(32.dp))
+                    },
+                    title = { Text("Очистить историю?", fontWeight = FontWeight.Bold) },
+                    text  = { Text("Вся история сделок будет удалена безвозвратно.", color = TextSecondary) },
                     confirmButton = {
-                        TextButton(
+                        Button(
                             onClick = {
                                 TokenHistoryManager.clearHistory()
-                                history = emptyList()
+                                history    = emptyList()
                                 statistics = TokenHistoryManager.getStatistics()
                                 showClearDialog = false
-                            }
-                        ) {
-                            Text("Очистить", color = MaterialTheme.colorScheme.error)
-                        }
+                            },
+                            colors = ButtonDefaults.buttonColors(containerColor = DangerRed)
+                        ) { Text("Очистить", color = Color.White) }
                     },
                     dismissButton = {
-                        TextButton(onClick = { showClearDialog = false }) {
-                            Text("Отмена")
-                        }
+                        TextButton(onClick = { showClearDialog = false }) { Text("Отмена") }
                     }
                 )
             }
@@ -159,54 +153,136 @@ fun ProfitLossScreen(
     }
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// History list sub-screen
+// ─────────────────────────────────────────────────────────────────────────────
+
 @Composable
-private fun HistoryListScreen(
-    history: List<TokenHistory>,
-    onBack: () -> Unit
-) {
+private fun HistoryListScreen(history: List<TokenHistory>, onBack: () -> Unit) {
     var filterMode by remember { mutableStateOf("all") }
     val filteredHistory = when (filterMode) {
         "demo" -> history.filter { !it.isRealTrade }
         "real" -> history.filter { it.isRealTrade }
-        else -> history
+        else   -> history
     }
-    Column(
+
+    Box(
         modifier = Modifier
             .fillMaxSize()
             .background(MaterialTheme.colorScheme.background)
     ) {
-        Card(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(top = 55.dp, start = 16.dp, end = 16.dp, bottom = 12.dp),
-            colors = CardDefaults.cardColors(
-                containerColor = MaterialTheme.colorScheme.primaryContainer
-            ),
-            shape = RoundedCornerShape(16.dp)
-        ) {
+        Column(modifier = Modifier.fillMaxSize()) {
+
+            // Header
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(
+                        Brush.linearGradient(listOf(BrandPurple, Color(0xFF6366F1))),
+                        RoundedCornerShape(bottomStart = 24.dp, bottomEnd = 24.dp)
+                    )
+                    .padding(top = 52.dp, start = 20.dp, end = 16.dp, bottom = 20.dp)
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Text("Сделки", fontSize = 24.sp, fontWeight = FontWeight.Bold, color = Color.White)
+                        Text(recordsSubtitle(filteredHistory.size), fontSize = 13.sp, color = Color.White.copy(alpha = 0.75f))
+                    }
+                    IconButton(onClick = onBack) {
+                        Icon(Icons.Default.ArrowBack, contentDescription = "Назад", tint = Color.White)
+                    }
+                }
+            }
+
+            // Filter chips
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(16.dp),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
+                    .padding(horizontal = 16.dp, vertical = 12.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                Column {
-                    Text(
-                        "📋 Trades List",
-                        fontSize = 22.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = MaterialTheme.colorScheme.onPrimaryContainer
-                    )
-                    Text(
-                        "Все сделки",
-                        fontSize = 14.sp,
-                        color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.7f)
+                listOf("all" to "Все", "demo" to "Демо", "real" to "Реал").forEach { (mode, label) ->
+                    FilterChip(
+                        selected = filterMode == mode,
+                        onClick  = { filterMode = mode },
+                        label    = { Text(label, fontSize = 13.sp) },
+                        colors   = FilterChipDefaults.filterChipColors(
+                            selectedContainerColor = BrandPurple,
+                            selectedLabelColor     = Color.White
+                        )
                     )
                 }
+            }
 
-                IconButton(onClick = onBack) {
-                    Icon(Icons.Default.ArrowBack, contentDescription = "Back")
+            if (filteredHistory.isNotEmpty()) {
+                LazyColumn(
+                    modifier = Modifier.fillMaxSize(),
+                    contentPadding = PaddingValues(horizontal = 16.dp, vertical = 4.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    items(filteredHistory.sortedByDescending { it.exitTime }) { HistoryItemCard(it) }
+                    item { Spacer(modifier = Modifier.height(20.dp)) }
+                }
+            } else {
+                EmptyHistoryState()
+            }
+        }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Summary (главный экран — без «сетки из 20 карточек»)
+// ─────────────────────────────────────────────────────────────────────────────
+
+@Composable
+private fun PnLMainSummary(statistics: ProfitLossStatistics, onOpenAllTrades: () -> Unit) {
+    var detailsOpen by remember { mutableStateOf(false) }
+
+    Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
+        HeroSummaryCard(statistics)
+
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(14.dp),
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+            elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)
+        ) {
+            Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Text("По режимам", fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = TextSecondary)
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Icon(Icons.Default.Savings, null, modifier = Modifier.size(18.dp), tint = BrandIndigo)
+                        Text("Демо", fontSize = 14.sp, color = TextPrimary)
+                    }
+                    Text(
+                        "${formatCurrency(statistics.demoNetProfit)} · ${statistics.demoReturnPct.toInt()}%",
+                        fontSize = 14.sp,
+                        fontWeight = FontWeight.Medium,
+                        color = TextPrimary
+                    )
+                }
+                HorizontalDivider(color = NeutralBorder.copy(alpha = 0.6f))
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Icon(Icons.Default.AttachMoney, null, modifier = Modifier.size(18.dp), tint = BrandTeal)
+                        Text("Реал", fontSize = 14.sp, color = TextPrimary)
+                    }
+                    Text(
+                        "${formatCurrency(statistics.realNetProfit)} · ${statistics.realReturnPct.toInt()}%",
+                        fontSize = 14.sp,
+                        fontWeight = FontWeight.Medium,
+                        color = TextPrimary
+                    )
                 }
             }
         }
@@ -214,603 +290,375 @@ private fun HistoryListScreen(
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 16.dp),
-            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                .clip(RoundedCornerShape(12.dp))
+                .clickable { detailsOpen = !detailsOpen }
+                .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f))
+                .padding(horizontal = 14.dp, vertical = 12.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
         ) {
-            FilterChip(
-                selected = filterMode == "all",
-                onClick = { filterMode = "all" },
-                label = { Text("All") }
+            Text(
+                if (detailsOpen) "Скрыть подробности" else "Подробная статистика",
+                fontSize = 14.sp,
+                fontWeight = FontWeight.Medium,
+                color = TextPrimary
             )
-            FilterChip(
-                selected = filterMode == "demo",
-                onClick = { filterMode = "demo" },
-                label = { Text("Demo") }
-            )
-            FilterChip(
-                selected = filterMode == "real",
-                onClick = { filterMode = "real" },
-                label = { Text("Real") }
+            Icon(
+                if (detailsOpen) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
+                contentDescription = null,
+                tint = BrandPurple
             )
         }
 
-        Spacer(modifier = Modifier.height(8.dp))
+        AnimatedVisibility(
+            visible = detailsOpen,
+            enter = fadeIn() + expandVertically(),
+            exit = fadeOut() + shrinkVertically()
+        ) {
+            DetailedStatsList(statistics)
+        }
 
-        if (filteredHistory.isNotEmpty()) {
-            LazyColumn(
-                modifier = Modifier.fillMaxSize(),
-                contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
-                verticalArrangement = Arrangement.spacedBy(10.dp)
-            ) {
-                items(filteredHistory.sortedByDescending { it.exitTime }) { item ->
-                    HistoryItemCard(item)
-                }
-            }
-        } else {
-            EmptyHistoryState()
+        Button(
+            onClick = onOpenAllTrades,
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(12.dp),
+            colors = ButtonDefaults.buttonColors(
+                containerColor = BrandPurple,
+                contentColor = Color.White
+            )
+        ) {
+            Icon(Icons.Default.List, contentDescription = null, modifier = Modifier.size(18.dp))
+            Spacer(modifier = Modifier.width(8.dp))
+            Text("Открыть список сделок", fontWeight = FontWeight.SemiBold)
         }
     }
 }
 
 @Composable
-private fun StatCard(
-    modifier: Modifier = Modifier,
-    title: String,
-    value: String,
-    icon: androidx.compose.ui.graphics.vector.ImageVector,
-    color: Color
-) {
+private fun HeroSummaryCard(statistics: ProfitLossStatistics) {
+    val totalColor = if (statistics.overallNetProfit >= 0) SuccessGreen else DangerRed
     Card(
-        modifier = modifier,
-        colors = CardDefaults.cardColors(
-            containerColor = color.copy(alpha = 0.1f)
-        ),
-        shape = RoundedCornerShape(12.dp)
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.cardColors(containerColor = Color.White),
+        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+    ) {
+        Column(modifier = Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
+            Text("Итог по счёту", fontSize = 13.sp, color = TextSecondary)
+            Text(
+                formatCurrency(statistics.overallNetProfit),
+                fontSize = 36.sp,
+                fontWeight = FontWeight.Bold,
+                color = totalColor,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+            Text(
+                "Доходность ${statistics.returnPct.toInt()}% · винрейт ${statistics.winRate.toInt()}% · сделок ${statistics.totalTrades}",
+                fontSize = 13.sp,
+                color = TextSecondary,
+                lineHeight = 18.sp
+            )
+            HorizontalDivider(color = NeutralBorder.copy(alpha = 0.7f))
+            SummaryMoneyRow("Вложено", formatUsdPlain(statistics.totalInvested))
+            SummaryMoneyRow("Вернулись (USD)", formatUsdPlain(statistics.totalReturn))
+            if (statistics.partialExitsCount > 0) {
+                Text(
+                    "Есть частичные выходы: ${statistics.partialExitsCount}. Полный разбор — в блоке ниже.",
+                    fontSize = 12.sp,
+                    color = TextMuted,
+                    lineHeight = 16.sp
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun SummaryMoneyRow(label: String, value: String) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(label, fontSize = 14.sp, color = TextSecondary)
+        Text(value, fontSize = 15.sp, fontWeight = FontWeight.SemiBold, color = TextPrimary)
+    }
+}
+
+@Composable
+private fun DetailedStatsList(statistics: ProfitLossStatistics) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(14.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+        elevation = CardDefaults.cardElevation(0.dp)
     ) {
         Column(
             modifier = Modifier.padding(16.dp),
-            horizontalAlignment = Alignment.CenterHorizontally
+            verticalArrangement = Arrangement.spacedBy(10.dp)
         ) {
-            Icon(
-                icon,
-                contentDescription = null,
-                modifier = Modifier.size(24.dp),
-                tint = color
-            )
-            Spacer(modifier = Modifier.height(8.dp))
-            Text(
-                value,
-                fontSize = 20.sp,
-                fontWeight = FontWeight.Bold,
-                color = color
-            )
-            Text(
-                title,
-                fontSize = 12.sp,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
+            DetailLine("Закрытые сделки (P&L)", formatCurrency(statistics.netProfit))
+            if (statistics.partialExitsCount > 0) {
+                DetailLine("Частичные выходы, шт.", "${statistics.partialExitsCount}")
+                DetailLine("Сумма по частичным", formatCurrency(statistics.partialNetProfit))
+            }
+            HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp), color = NeutralBorder.copy(alpha = 0.6f))
+            DetailLine("Полностью закрыто частичными выходами", "${statistics.tpTriggerCount}")
+            DetailLine("Стоп-лоссов (включая частичные убытки)", "${statistics.slCount}")
+            DetailLine("Прибыльных закрытий", "${statistics.profitableCloseCount}")
+            val realOk = if (statistics.realTrades > 0) "${statistics.realSuccessCount} из ${statistics.realTrades}" else "—"
+            DetailLine("Реал: успешных свапов", realOk)
         }
     }
 }
 
 @Composable
-private fun StatsSection(statistics: ProfitLossStatistics) {
-    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        Text("Closed Trades Summary", fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(12.dp)
-        ) {
-            StatCard(
-                modifier = Modifier.weight(1f),
-                title = "Net Profit",
-                value = formatCurrency(statistics.netProfit),
-                icon = Icons.Default.TrendingUp,
-                color = if (statistics.netProfit >= 0) Color(0xFF4CAF50) else Color(0xFFF44336)
-            )
-            StatCard(
-                modifier = Modifier.weight(1f),
-                title = "Return %",
-                value = "${statistics.returnPct.toInt()}%",
-                icon = Icons.Default.Percent,
-                color = MaterialTheme.colorScheme.tertiary
-            )
-        }
-
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(12.dp)
-        ) {
-            StatCard(
-                modifier = Modifier.weight(1f),
-                title = "Invested",
-                value = formatCurrency(statistics.totalInvested),
-                icon = Icons.Default.Paid,
-                color = MaterialTheme.colorScheme.secondary
-            )
-            StatCard(
-                modifier = Modifier.weight(1f),
-                title = "Total Return",
-                value = formatCurrency(statistics.totalReturn),
-                icon = Icons.Default.AttachMoney,
-                color = MaterialTheme.colorScheme.primary
-            )
-        }
-
-        Text("PnL Breakdown", fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(12.dp)
-        ) {
-            StatCard(
-                modifier = Modifier.weight(1f),
-                title = "Closed PnL",
-                value = formatCurrency(statistics.netProfit),
-                icon = Icons.Default.DoneAll,
-                color = if (statistics.netProfit >= 0) Color(0xFF4CAF50) else Color(0xFFF44336)
-            )
-            StatCard(
-                modifier = Modifier.weight(1f),
-                title = "Partial PnL",
-                value = formatCurrency(statistics.partialNetProfit),
-                icon = Icons.Default.CallSplit,
-                color = if (statistics.partialNetProfit >= 0) Color(0xFF4CAF50) else Color(0xFFF44336)
-            )
-        }
-
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(12.dp)
-        ) {
-            StatCard(
-                modifier = Modifier.weight(1f),
-                title = "Overall PnL",
-                value = formatCurrency(statistics.overallNetProfit),
-                icon = Icons.Default.AccountBalanceWallet,
-                color = if (statistics.overallNetProfit >= 0) Color(0xFF4CAF50) else Color(0xFFF44336)
-            )
-            StatCard(
-                modifier = Modifier.weight(1f),
-                title = "Partial Exits",
-                value = "${statistics.partialExitsCount}",
-                icon = Icons.Default.BarChart,
-                color = MaterialTheme.colorScheme.tertiary
-            )
-        }
-
-        Text("Demo / Real", fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(12.dp)
-        ) {
-            StatCard(
-                modifier = Modifier.weight(1f),
-                title = "Demo Return",
-                value = formatCurrency(statistics.demoReturn),
-                icon = Icons.Default.Savings,
-                color = MaterialTheme.colorScheme.secondary
-            )
-            StatCard(
-                modifier = Modifier.weight(1f),
-                title = "Real Return",
-                value = formatCurrency(statistics.realReturn),
-                icon = Icons.Default.AttachMoney,
-                color = MaterialTheme.colorScheme.primary
-            )
-        }
-
-        Text("Performance", fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(12.dp)
-        ) {
-            StatCard(
-                modifier = Modifier.weight(1f),
-                title = "Win Rate",
-                value = "${statistics.winRate.toInt()}%",
-                icon = Icons.Default.Star,
-                color = MaterialTheme.colorScheme.primary
-            )
-            val realSuccessValue = if (statistics.realTrades > 0) {
-                "${statistics.realSuccessCount}/${statistics.realTrades}"
-            } else {
-                "0/0"
-            }
-            StatCard(
-                modifier = Modifier.weight(1f),
-                title = "Real Success",
-                value = realSuccessValue,
-                icon = Icons.Default.Verified,
-                color = MaterialTheme.colorScheme.tertiary
-            )
-        }
-
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(12.dp)
-        ) {
-            StatCard(
-                modifier = Modifier.weight(1f),
-                title = "TP Trigger Hits",
-                value = "${statistics.tpTriggerCount}",
-                icon = Icons.Default.CheckCircle,
-                color = Color(0xFF4CAF50)
-            )
-            StatCard(
-                modifier = Modifier.weight(1f),
-                title = "Profitable Closes",
-                value = "${statistics.profitableCloseCount}",
-                icon = Icons.Default.ThumbUp,
-                color = MaterialTheme.colorScheme.primary
-            )
-        }
-
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(12.dp)
-        ) {
-            StatCard(
-                modifier = Modifier.weight(1f),
-                title = "SL Hits",
-                value = "${statistics.slCount}",
-                icon = Icons.Default.Cancel,
-                color = Color(0xFFF44336)
-            )
-            Spacer(modifier = Modifier.weight(1f))
-        }
+private fun DetailLine(label: String, value: String) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(label, fontSize = 13.sp, color = TextSecondary, modifier = Modifier.weight(1f))
+        Text(
+            value,
+            fontSize = 13.sp,
+            fontWeight = FontWeight.Medium,
+            color = TextPrimary,
+            maxLines = 2,
+            textAlign = TextAlign.End
+        )
     }
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Empty state
+// ─────────────────────────────────────────────────────────────────────────────
 
 @Composable
 private fun EmptyHistoryState() {
     Box(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(32.dp),
+        modifier = Modifier.fillMaxWidth().padding(top = 60.dp),
         contentAlignment = Alignment.Center
     ) {
         Column(
             horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(16.dp)
+            verticalArrangement = Arrangement.spacedBy(14.dp)
         ) {
-            Icon(
-                Icons.Default.Assessment,
-                contentDescription = null,
-                modifier = Modifier.size(64.dp),
-                tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
-            )
+            Surface(shape = CircleShape, color = BrandPurpleLight, modifier = Modifier.size(80.dp)) {
+                Box(contentAlignment = Alignment.Center) {
+                    Icon(Icons.Default.Assessment, contentDescription = null,
+                        modifier = Modifier.size(40.dp), tint = BrandPurple)
+                }
+            }
+            Text("Пока нет истории сделок", fontSize = 18.sp, fontWeight = FontWeight.SemiBold, color = TextPrimary)
             Text(
-                "Нет истории торговли",
-                fontSize = 18.sp,
-                fontWeight = FontWeight.Medium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-            Text(
-                "Токены с TP/SL будут отображаться здесь",
-                fontSize = 14.sp,
-                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
-                textAlign = TextAlign.Center
+                "Токены, закрытые по TP или SL, появятся здесь",
+                fontSize = 13.sp, color = TextSecondary, textAlign = TextAlign.Center,
+                modifier = Modifier.padding(horizontal = 40.dp)
             )
         }
     }
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// History item card
+// ─────────────────────────────────────────────────────────────────────────────
+
 @Composable
 private fun HistoryItemCard(item: TokenHistory) {
-    val clipboardManager = LocalClipboardManager.current
+    val clipboardManager  = LocalClipboardManager.current
     var showCopiedMessage by remember { mutableStateOf(false) }
-    var showFullAddress by remember { mutableStateOf(false) }
-    
+    var showFullAddress   by remember { mutableStateOf(false) }
     LaunchedEffect(showCopiedMessage) {
-        if (showCopiedMessage) {
-            delay(2000)
-            showCopiedMessage = false
-        }
+        if (showCopiedMessage) { delay(2000); showCopiedMessage = false }
     }
-    
-    val isProfit = item.status == TokenStatus.STOPPED_TP
-    val cardColor = if (isProfit) Color(0xFF1B5E20).copy(alpha = 0.1f) else Color(0xFFB71C1C).copy(alpha = 0.1f)
-    val borderColor = if (isProfit) Color(0xFF4CAF50) else Color(0xFFF44336)
-    
+
+    val isProfit     = item.status == TokenStatus.STOPPED_TP
+    val accentColor  = if (isProfit) SuccessGreen else DangerRed
+    val cardColor    = if (isProfit) SuccessGreenBg else DangerRedBg
     val tokenAddress = item.tokenPair.baseToken?.address ?: ""
+    val modeLabel    =
+        if (item.isRealTrade) if (item.isSwapSuccess) "Реал ✓" else "Реал ✗" else "Демо"
+    val pctLabel     = if (!item.isPartialExit && item.investedUsd > 0) {
+        val exitPct = ((item.exitAmountUsd / item.investedUsd) * 100).toInt()
+        " · $exitPct% позиции"
+    } else ""
 
     Card(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(14.dp))
-            .background(cardColor),
-        colors = CardDefaults.cardColors(
-            containerColor = cardColor
-        ),
-        shape = RoundedCornerShape(14.dp)
+        modifier  = Modifier.fillMaxWidth(),
+        shape     = RoundedCornerShape(14.dp),
+        colors    = CardDefaults.cardColors(containerColor = cardColor),
+        elevation = CardDefaults.cardElevation(0.dp)
     ) {
-        Column(
-            modifier = Modifier.padding(16.dp)
-        ) {
-            // Заголовок
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
+        Row(modifier = Modifier.fillMaxWidth()) {
+            Box(
+                modifier = Modifier
+                    .width(4.dp)
+                    .fillMaxHeight()
+                    .background(accentColor, RoundedCornerShape(topStart = 14.dp, bottomStart = 14.dp))
+            )
+            Column(modifier = Modifier.padding(start = 12.dp, end = 12.dp, top = 12.dp, bottom = 12.dp)) {
+
                 Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.Top
                 ) {
-                    Badge(
-                        containerColor = if (isProfit) Color(0xFF4CAF50) else Color(0xFFF44336),
-                        contentColor = Color.White
-                    ) {
-                        Text(
-                            if (isProfit) "TP HIT" else "SL HIT",
-                            fontSize = 10.sp,
-                            fontWeight = FontWeight.Bold,
-                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 3.dp)
-                        )
-                    }
-                    Column {
-                        Text(
-                            item.symbol,
-                            fontSize = 18.sp,
-                            fontWeight = FontWeight.Bold
-                        )
-                        Text(
-                            if (item.isRealTrade) {
-                                if (item.isSwapSuccess) "REAL ✅" else "REAL ❌"
-                            } else {
-                                "DEMO"
-                            },
-                            fontSize = 10.sp,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    val exitPctText = if (!item.isPartialExit && item.investedUsd > 0) {
-                        "${((item.exitAmountUsd / item.investedUsd) * 100.0).toInt()}%"
-                    } else null
-                    val summaryLine = buildString {
-                        append("Entry $")
-                        append(formatCurrencyNoSign(item.investedUsd))
-                        append(" • Exit $")
-                        append(formatCurrencyNoSign(item.exitAmountUsd))
-                        if (exitPctText != null) {
-                            append(" • ")
-                            append(exitPctText)
+                    Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Surface(shape = RoundedCornerShape(6.dp), color = accentColor.copy(alpha = 0.18f)) {
+                                Text(
+                                    if (isProfit) "ТП" else "СЛ",
+                                    fontSize = 10.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = accentColor,
+                                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 3.dp)
+                                )
+                            }
+                            Text(item.symbol, fontSize = 16.sp, fontWeight = FontWeight.Bold, color = TextPrimary, maxLines = 1, overflow = TextOverflow.Ellipsis)
                         }
+                        Text(
+                            "$modeLabel$pctLabel · ${item.exitDate}",
+                            fontSize = 11.sp,
+                            color = TextSecondary,
+                            maxLines = 2
+                        )
                     }
                     Text(
-                        summaryLine,
-                        fontSize = 10.sp,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
+                        formatCurrency(item.profitUsd),
+                        fontSize = 17.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = accentColor,
+                        modifier = Modifier.padding(start = 8.dp)
                     )
-                        if (item.isPartialExit && item.note.isNotBlank()) {
-                            Text(
-                                item.note,
-                                fontSize = 11.sp,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis
-                            )
-                        }
-                    }
                 }
 
-                Text(
-                    formatCurrency(item.profitUsd),
-                    fontSize = 18.sp,
-                    fontWeight = FontWeight.Bold,
-                    color = if (isProfit) Color(0xFF4CAF50) else Color(0xFFF44336)
-                )
-            }
+                if (item.isPartialExit && item.note.isNotBlank()) {
+                    Text(item.note, fontSize = 11.sp, color = TextSecondary, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                }
 
-            Spacer(modifier = Modifier.height(12.dp))
+                val priceLine =
+                    "\$${formatPrice(item.entryPrice)} → \$${formatPrice(item.exitPrice)}  ·  " +
+                        "${if (item.priceChangePercent >= 0) "+" else ""}${formatDecimal(item.priceChangePercent, 2)}%"
+                Text(priceLine, fontSize = 13.sp, fontWeight = FontWeight.Medium, color = TextPrimary)
 
-            // Token Address с копированием
-            if (tokenAddress.isNotEmpty()) {
-                Column(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalArrangement = Arrangement.spacedBy(6.dp)
-                ) {
-                    Text(
-                        "Token Address:",
-                        fontSize = 10.sp,
-                        fontWeight = FontWeight.Medium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-
+                if (tokenAddress.isNotEmpty()) {
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text("Адрес", fontSize = 10.sp, color = TextMuted, fontWeight = FontWeight.Medium)
+                    Spacer(modifier = Modifier.height(4.dp))
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
                             .clip(RoundedCornerShape(8.dp))
-                            .background(MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.3f))
-                            .clickable {
-                                clipboardManager.setText(AnnotatedString(tokenAddress))
-                                showCopiedMessage = true
-                            }
-                            .padding(horizontal = 12.dp, vertical = 8.dp),
+                            .background(MaterialTheme.colorScheme.surfaceVariant)
+                            .clickable { clipboardManager.setText(AnnotatedString(tokenAddress)); showCopiedMessage = true }
+                            .padding(horizontal = 8.dp, vertical = 6.dp),
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.SpaceBetween
                     ) {
                         Text(
-                            if (showFullAddress) tokenAddress
-                            else formatAddress(tokenAddress),
+                            if (showFullAddress) tokenAddress else formatAddress(tokenAddress),
                             fontSize = 11.sp,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            maxLines = 1,
+                            color = TextSecondary,
+                            maxLines = if (showFullAddress) 4 else 1,
                             overflow = TextOverflow.Ellipsis,
                             modifier = Modifier.weight(1f)
                         )
-
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(4.dp)
-                        ) {
-                            IconButton(
-                                onClick = {
-                                    showFullAddress = !showFullAddress
-                                },
-                                modifier = Modifier.size(20.dp)
-                            ) {
+                        Row(horizontalArrangement = Arrangement.spacedBy(0.dp)) {
+                            IconButton(onClick = { showFullAddress = !showFullAddress }, modifier = Modifier.size(28.dp)) {
                                 Icon(
                                     if (showFullAddress) Icons.Default.VisibilityOff else Icons.Default.Visibility,
-                                    contentDescription = if (showFullAddress) "Hide address" else "Show full address",
-                                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    modifier = Modifier.size(14.dp)
+                                    contentDescription = null,
+                                    tint = TextSecondary,
+                                    modifier = Modifier.size(16.dp)
                                 )
                             }
-
                             IconButton(
                                 onClick = {
                                     clipboardManager.setText(AnnotatedString(tokenAddress))
                                     showCopiedMessage = true
                                 },
-                                modifier = Modifier.size(20.dp)
+                                modifier = Modifier.size(28.dp)
                             ) {
-                                if (showCopiedMessage) {
-                                    Icon(
-                                        Icons.Default.Check,
-                                        contentDescription = "Copied",
-                                        tint = Color(0xFF4CAF50),
-                                        modifier = Modifier.size(14.dp)
-                                    )
-                                } else {
-                                    Icon(
-                                        Icons.Default.ContentCopy,
-                                        contentDescription = "Copy token address",
-                                        tint = MaterialTheme.colorScheme.primary,
-                                        modifier = Modifier.size(14.dp)
-                                    )
-                                }
+                                Icon(
+                                    if (showCopiedMessage) Icons.Default.Check else Icons.Default.ContentCopy,
+                                    contentDescription = null,
+                                    tint = if (showCopiedMessage) SuccessGreen else BrandIndigo,
+                                    modifier = Modifier.size(16.dp)
+                                )
                             }
                         }
                     }
+                    if (showCopiedMessage) {
+                        Text(
+                            "✓ Скопировано",
+                            fontSize = 10.sp,
+                            color = SuccessGreen,
+                            modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
+                            textAlign = TextAlign.Center
+                        )
+                    }
                 }
-
-                Spacer(modifier = Modifier.height(8.dp))
-
-                if (showCopiedMessage) {
-                    Text(
-                        "✓ Address copied to clipboard",
-                        fontSize = 10.sp,
-                        color = Color(0xFF4CAF50),
-                        modifier = Modifier.fillMaxWidth(),
-                        textAlign = TextAlign.Center
-                    )
-                    Spacer(modifier = Modifier.height(4.dp))
-                }
-            }
-
-            // Детали
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween
-            ) {
-                Column(modifier = Modifier.weight(1f)) {
-                    Text(
-                        "Entry Price",
-                        fontSize = 11.sp,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                    Text(
-                        "$${formatPrice(item.entryPrice)}",
-                        fontSize = 14.sp,
-                        fontWeight = FontWeight.Medium
-                    )
-                }
-
-                Column(modifier = Modifier.weight(1f), horizontalAlignment = Alignment.End) {
-                    Text(
-                        "Exit Price",
-                        fontSize = 11.sp,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                    Text(
-                        "$${formatPrice(item.exitPrice)}",
-                        fontSize = 14.sp,
-                        fontWeight = FontWeight.Medium
-                    )
-                }
-            }
-
-            Spacer(modifier = Modifier.height(8.dp))
-
-            // Изменение цены
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(4.dp)
-                ) {
-                    Icon(
-                        if (isProfit) Icons.Default.TrendingUp else Icons.Default.TrendingDown,
-                        contentDescription = null,
-                        modifier = Modifier.size(16.dp),
-                        tint = if (isProfit) Color(0xFF4CAF50) else Color(0xFFF44336)
-                    )
-                    Text(
-                        "${if (item.priceChangePercent >= 0) "+" else ""}${formatDecimal(item.priceChangePercent, 2)}%",
-                        fontSize = 14.sp,
-                        fontWeight = FontWeight.Medium,
-                        color = if (isProfit) Color(0xFF4CAF50) else Color(0xFFF44336)
-                    )
-                }
-
-                Text(
-                    item.exitDate,
-                    fontSize = 11.sp,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
             }
         }
     }
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Formatters
+// ─────────────────────────────────────────────────────────────────────────────
+
+private fun closedTradesSubtitle(count: Int): String {
+    val n = count % 100
+    val n1 = count % 10
+    val word = when {
+        n in 11..14 -> "закрытых сделок"
+        n1 == 1 -> "закрытая сделка"
+        n1 in 2..4 -> "закрытые сделки"
+        else -> "закрытых сделок"
+    }
+    return "$count $word"
+}
+
+private fun recordsSubtitle(count: Int): String {
+    val n = count % 100
+    val n1 = count % 10
+    val word = when {
+        n in 11..14 -> "записей"
+        n1 == 1 -> "запись"
+        n1 in 2..4 -> "записи"
+        else -> "записей"
+    }
+    return "$count $word"
+}
+
 private fun formatCurrency(value: Double): String {
     val sign = if (value >= 0) "+" else ""
-    val formatted = formatDecimal(value, 2)
-    return "$sign$$formatted"
+    return "$sign\$${formatDecimal(value, 2)}"
 }
 
-private fun formatCurrencyNoSign(value: Double): String {
-    val formatted = formatDecimal(value, 2)
-    return "$formatted"
-}
+private fun formatUsdPlain(value: Double): String = "\$${formatDecimal(value, 2)}"
 
-private fun formatPrice(value: Double): String {
-    return when {
-        value >= 1 -> formatDecimal(value, 4)
-        value >= 0.0001 -> formatDecimal(value, 6)
-        else -> formatDecimal(value, 8)
-    }.trimEnd('0').trimEnd('.')
-}
+private fun formatPrice(value: Double): String = when {
+    value >= 1      -> formatDecimal(value, 4)
+    value >= 0.0001 -> formatDecimal(value, 6)
+    else            -> formatDecimal(value, 8)
+}.trimEnd('0').trimEnd('.')
 
 private fun formatDecimal(value: Double, decimals: Int): String {
-    // Вычисляем factor без pow для совместимости
     var factor = 1.0
-    repeat(decimals) {
-        factor *= 10.0
-    }
+    repeat(decimals) { factor *= 10.0 }
     val rounded = round(value * factor) / factor
     val str = rounded.toString()
-    
-    // Добавляем нули если нужно
     val parts = str.split('.')
-    return if (parts.size == 1) {
-        "$str.${"0".repeat(decimals)}"
-    } else {
-        val decimalPart = parts[1].padEnd(decimals, '0').take(decimals)
-        "${parts[0]}.$decimalPart"
-    }
+    return if (parts.size == 1) "$str.${"0".repeat(decimals)}"
+    else "${parts[0]}.${parts[1].padEnd(decimals, '0').take(decimals)}"
 }
 
-/**
- * Форматирование адреса (первые 6 и последние 4 символа)
- */
 private fun formatAddress(address: String): String {
-    if (address.isBlank()) return "N/A"
+    if (address.isBlank()) return "—"
     if (address.length <= 10) return address
-    return "${address.take(6)}...${address.takeLast(4)}"
+    return "${address.take(6)}…${address.takeLast(4)}"
 }

@@ -196,6 +196,27 @@ class TradingBotService(
             min = 5.0,
             max = 90.0,
             step = 5.0
+        ),
+        FilterFieldSpec(
+            key = "timeBasedExitMinutes",
+            title = "Timed exit min",
+            min = 5.0,
+            max = 120.0,
+            step = 5.0
+        ),
+        FilterFieldSpec(
+            key = "tradingHoursStartUtcHour",
+            title = "Hours start UTC",
+            min = 0.0,
+            max = 23.0,
+            step = 1.0
+        ),
+        FilterFieldSpec(
+            key = "tradingHoursEndUtcHour",
+            title = "Hours end UTC",
+            min = 0.0,
+            max = 23.0,
+            step = 1.0
         )
     )
 
@@ -330,6 +351,8 @@ class TradingBotService(
             "requireWebsite" -> settings.copy(requireWebsite = !settings.requireWebsite)
             "useAiAnalysis" -> settings.copy(useAiAnalysis = !settings.useAiAnalysis)
             "aiFailClosed" -> settings.copy(aiFailClosed = !settings.aiFailClosed)
+            "useTimeBasedExit" -> settings.copy(useTimeBasedExit = !settings.useTimeBasedExit)
+            "tradingHoursEnabled" -> settings.copy(tradingHoursEnabled = !settings.tradingHoursEnabled)
             else -> return ActionResult(success = false, message = "Флаг не найден")
         }
         FilterSettingsManager.saveSettings(updated)
@@ -381,6 +404,15 @@ class TradingBotService(
             )
             "exitStage4Pct" -> settings.copy(
                 exitStage4Pct = (settings.exitStage4Pct + delta).coerceIn(field.min, field.max)
+            )
+            "timeBasedExitMinutes" -> settings.copy(
+                timeBasedExitMinutes = (settings.timeBasedExitMinutes.toDouble() + delta).coerceIn(field.min, field.max).toInt()
+            )
+            "tradingHoursStartUtcHour" -> settings.copy(
+                tradingHoursStartUtcHour = (settings.tradingHoursStartUtcHour.toDouble() + delta).coerceIn(field.min, field.max).toInt()
+            )
+            "tradingHoursEndUtcHour" -> settings.copy(
+                tradingHoursEndUtcHour = (settings.tradingHoursEndUtcHour.toDouble() + delta).coerceIn(field.min, field.max).toInt()
             )
             else -> settings
         }

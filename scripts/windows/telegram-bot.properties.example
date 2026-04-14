@@ -1,0 +1,7 @@
+# Copy this file to telegram-bot.properties next to run-telegram-bot-installed.bat
+# (same folder as the installed app, e.g. C:\Program Files\tj.khujand.solana.trading.bot\)
+# Replace placeholders with your values from @BotFather and your Telegram IDs.
+
+telegram.bot.token=PASTE_BOT_TOKEN_HERE
+telegram.admin.chat.id=YOUR_CHAT_ID
+telegram.admin.user.id=YOUR_USER_ID

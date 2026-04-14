@@ -36,19 +36,14 @@ Learn more about [Kotlin Multiplatform](https://www.jetbrains.com/help/kotlin-mu
 
 ### Run Telegram Bot On Installed Windows App
 
-If you already installed the app (for example in `C:\Program Files\tj.khujand.solana.trading.bot`), you can run Telegram bot without Gradle.
+If you already installed the app (for example in `C:\Program Files\tj.khujand.solana.trading.bot`), you can run the Telegram bot without Gradle.
 
-1. Copy `scripts/windows/run-telegram-bot-installed.bat` to your installed app folder:
-   - `C:\Program Files\tj.khujand.solana.trading.bot`
-2. Open PowerShell and set env vars:
-   ```powershell
-   $env:TELEGRAM_BOT_TOKEN="YOUR_NEW_TOKEN"
-   $env:TELEGRAM_ADMIN_CHAT_ID="7629981910"
-   $env:TELEGRAM_ADMIN_USER_ID="7629981910"
-   ```
-3. Run:
-   ```powershell
-   & "C:\Program Files\tj.khujand.solana.trading.bot\run-telegram-bot-installed.bat"
-   ```
+**Simplest (double‑click):**
 
-To restart bot: stop it in the console (`Ctrl + C`) and run the same `.bat` again.
+1. Copy `scripts/windows/run-telegram-bot-installed.bat` into the installed app folder (next to `app\` and `runtime\`).
+2. Double‑click `run-telegram-bot-installed.bat`. On the first run it can open Notepad with `%USERPROFILE%\.soltradbot\telegram-bot.properties` — paste your bot token and admin IDs, save, close Notepad, then double‑click the `.bat` again.
+3. Later, starting the bot is always: double‑click the same `.bat`.
+
+Config is read in this order: environment variables `TELEGRAM_BOT_TOKEN` (and optional `TELEGRAM_ADMIN_*`), then `telegram-bot.properties` in the app folder, then `%USERPROFILE%\.soltradbot\telegram-bot.properties`, then token saved in the desktop app (Filters screen). You can copy `scripts/windows/telegram-bot.properties.example` and rename it to `telegram-bot.properties` if you prefer editing that file by hand.
+
+To stop the bot: close the console window or press `Ctrl + C`. To run again, double‑click the `.bat` again.

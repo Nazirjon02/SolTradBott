@@ -116,6 +116,12 @@ class CallbackRouter(
                 }
                 showExitStrategy(ctx)
             }
+            "toggle" -> {
+                if (param != null) {
+                    service.toggleFilterFlag(param)
+                }
+                showExitStrategy(ctx)
+            }
             "refresh" -> showExitStrategy(ctx)
         }
     }

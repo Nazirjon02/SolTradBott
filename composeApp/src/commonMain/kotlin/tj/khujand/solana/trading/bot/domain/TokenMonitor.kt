@@ -160,8 +160,15 @@ class TokenMonitor {
                 var requestedThisCycle = false
                 try {
                     cycleCount++
+                    // 🕐 Проверяем торговые часы: если не в активном окне — поиск новых токенов запрещён
+                    val withinTradingHours = isWithinTradingHours()
+                    if (filterSettings.tradingHoursEnabled && !withinTradingHours) {
+                        val hourNow = ((Clock.System.now().toEpochMilliseconds() / 3_600_000L) % 24).toInt()
+                        println("🕐 Trading hours: текущий час UTC=$hourNow вне окна [${filterSettings.tradingHoursStartUtcHour}:00–${filterSettings.tradingHoursEndUtcHour}:00], поиск новых токенов пропущен")
+                    }
+
                     // Поиск новых токенов — раз в 5 циклов (чтобы цены обновлялись чаще)
-                    val runPhase1 = allowNewTokenDiscovery && (
+                    val runPhase1 = withinTradingHours && allowNewTokenDiscovery && (
                         cycleCount == 1 ||
                         _monitoredTokens.isEmpty() ||
                         cycleCount % filterSettings.discoveryEveryNCycles.coerceAtLeast(1) == 0
@@ -1384,7 +1391,19 @@ class TokenMonitor {
             (stage1Done || stage2Done || stage3Done || stage4Done) &&
                 newPrice <= prevHigh * stagePullbackFactor
 
-        val forcedExit = forcedExitByStopLoss || forcedExitByTrailing || forcedExitByStagePullback
+        // ⭐ 4. TIME-BASED EXIT: если первая цель не достигнута за N минут — выходим
+        // Срабатывает только если ни один stage/aggressive ещё не выполнен (позиция без движения)
+        val timeBasedExitTriggered = if (filterSettings.useTimeBasedExit && !stage1Done) {
+            val holdingMs = Clock.System.now().toEpochMilliseconds() - token.foundTime
+            val holdingMinutes = holdingMs / 60_000.0
+            holdingMinutes >= filterSettings.timeBasedExitMinutes
+        } else false
+
+        if (timeBasedExitTriggered) {
+            println("⏱️ Time-based exit: ${token.tokenPair.baseToken?.symbol} — нет прогресса ${filterSettings.timeBasedExitMinutes} мин")
+        }
+
+        val forcedExit = forcedExitByStopLoss || forcedExitByTrailing || forcedExitByStagePullback || timeBasedExitTriggered
         var forcedExitExecuted = !forcedExit
 
         // ──── ПРИНУДИТЕЛЬНЫЙ ВЫХОД (продажа остатка) ────
@@ -1418,6 +1437,7 @@ class TokenMonitor {
                 forcedExitByStopLoss -> println("🛑 Forced exit: SL по капе/цене")
                 forcedExitByTrailing -> println("🛑 Forced exit: trailing stop от максимума")
                 forcedExitByStagePullback -> println("🛑 Forced exit: pullback после Stage/Aggressive")
+                timeBasedExitTriggered -> println("⏱️ Forced exit: time-based (${filterSettings.timeBasedExitMinutes} мин без прогресса)")
             }
         }
 
@@ -1551,6 +1571,20 @@ class TokenMonitor {
 
     private fun abs(value: Double): Double {
         return if (value < 0) -value else value
+    }
+
+    // 🕐 Проверка: попадаем ли в разрешённые часы торговли (UTC)
+    private fun isWithinTradingHours(): Boolean {
+        if (!filterSettings.tradingHoursEnabled) return true
+        val hourOfDay = ((Clock.System.now().toEpochMilliseconds() / 3_600_000L) % 24).toInt()
+        val start = filterSettings.tradingHoursStartUtcHour.coerceIn(0, 23)
+        val end = filterSettings.tradingHoursEndUtcHour.coerceIn(0, 23)
+        return if (start <= end) {
+            hourOfDay in start until end
+        } else {
+            // Диапазон переходит через полночь (напр. 22:00 – 06:00)
+            hourOfDay >= start || hourOfDay < end
+        }
     }
 
     // Закрытие ресурсов

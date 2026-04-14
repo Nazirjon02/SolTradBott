@@ -127,6 +127,17 @@ object TelegramMessageFormatter {
             appendLine("• stage3: `${s.exitStage3Cap.toInt()}` / `${s.exitStage3Pct.toInt()}%`")
             appendLine("• stage4: `${s.exitStage4Cap.toInt()}` / `${s.exitStage4Pct.toInt()}%`")
             appendLine()
+            appendLine("*⏱️ Time-based Exit*")
+            appendLine("• useTimeBasedExit: `${s.useTimeBasedExit}`")
+            appendLine("• timeBasedExitMinutes: `${s.timeBasedExitMinutes} мин`")
+            appendLine()
+            appendLine("*🕐 Trading Hours*")
+            val hoursStatus = if (s.tradingHoursEnabled) "ON" else "OFF"
+            appendLine("• tradingHours: `$hoursStatus`")
+            if (s.tradingHoursEnabled) {
+                appendLine("• window: `${s.tradingHoursStartUtcHour}:00 – ${s.tradingHoursEndUtcHour}:00 UTC`")
+            }
+            appendLine()
             appendLine("_Изменение параметров доступно через кнопки ниже_")
         }
     }

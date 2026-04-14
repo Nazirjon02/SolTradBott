@@ -24,4 +24,20 @@ object TelegramBotSettings {
             adminUserId = userId
         )
     }
+
+    /**
+     * For JVM standalone entrypoint ([tj.khujand.solana.trading.bot.TelegramBotMainKt]): load token from saved app
+     * settings without requiring [KEY_ENABLED], so the desktop app UI can supply credentials for the external bot process.
+     */
+    fun loadForStandaloneBot(): TelegramBotConfig? {
+        val token = AppSettings.getStringSafe(KEY_TOKEN, "").trim()
+        if (token.isBlank()) return null
+        val chatId = AppSettings.getStringSafe(KEY_ADMIN_CHAT_ID, "").toLongOrNull()
+        val userId = AppSettings.getStringSafe(KEY_ADMIN_USER_ID, "").toLongOrNull()
+        return TelegramBotConfig(
+            token = token,
+            adminChatId = chatId,
+            adminUserId = userId
+        )
+    }
 }
