@@ -10,20 +10,16 @@ import tj.khujand.solana.trading.bot.bot.application.TradingRuntime
 import tj.khujand.solana.trading.bot.bot.telegram.TelegramBotRunner
 import tj.khujand.solana.trading.bot.bot.telegram.TelegramBotSettings
 import tj.khujand.solana.trading.bot.MainActivity
-import tj.khujand.solana.trading.bot.data.FilterSettingsManager
-import tj.khujand.solana.trading.bot.domain.TokenMonitor
 import tj.khujand.solana.trading.bot.R
 import tj.khujand.solana.trading.bot.util.AppSettings
 
 class TokenMonitorService : Service() {
 
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
-    private lateinit var tokenMonitor: TokenMonitor
     private var telegramBotRunner: TelegramBotRunner? = null
 
     override fun onCreate() {
         super.onCreate()
-        tokenMonitor = TradingRuntime.tokenMonitor()
         createNotificationChannel()
         // Сразу показываем foreground — иначе Android выбросит ForegroundServiceDidNotStartInTimeException
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
@@ -52,15 +48,9 @@ class TokenMonitorService : Service() {
                 // ACTION_START или null (перезапуск системой после убийства)
                 AppSettings.putBoolean(AppSettings.KEY_MONITORING_ACTIVE, true)
                 serviceScope.launch {
-                    tokenMonitor.filterSettings = FilterSettingsManager.loadSettings()
-                    tokenMonitor.restoreFromCache()
-                    tokenMonitor.startMonitoring(
-                        intervalSeconds = 10,
-                        onRequestStateChanged = { inProgress ->
-                            AppSettings.putBoolean(AppSettings.KEY_REQUEST_IN_PROGRESS, inProgress)
-                        },
-                        onError = { println(it) }
-                    )
+                    // Через TradingBotService — иначе onNewTokenFound не вызывает notifyTokenFound,
+                    // и Telegram subscribeOnTokenFound не получает события о покупке.
+                    TradingRuntime.tradingBotService().startTrading()
                 }
             }
         }
@@ -70,7 +60,7 @@ class TokenMonitorService : Service() {
     private fun stopMonitoring() {
         AppSettings.putBoolean(AppSettings.KEY_MONITORING_ACTIVE, false)
         AppSettings.putBoolean(AppSettings.KEY_REQUEST_IN_PROGRESS, false)
-        tokenMonitor.stopMonitoring()
+        TradingRuntime.tradingBotService().stopTrading()
         stopForeground(true)
         stopSelf()
     }
@@ -78,7 +68,7 @@ class TokenMonitorService : Service() {
     override fun onDestroy() {
         AppSettings.putBoolean(AppSettings.KEY_MONITORING_ACTIVE, false)
         AppSettings.putBoolean(AppSettings.KEY_REQUEST_IN_PROGRESS, false)
-        tokenMonitor.stopMonitoring()
+        TradingRuntime.tradingBotService().stopTrading()
         runBlocking {
             telegramBotRunner?.stop()
         }

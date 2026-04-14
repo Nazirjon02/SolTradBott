@@ -33,7 +33,6 @@ import kotlin.math.round
 import tj.khujand.solana.trading.bot.domain.ProfitLossStatistics
 import tj.khujand.solana.trading.bot.domain.TokenHistory
 import tj.khujand.solana.trading.bot.domain.TokenHistoryManager
-import tj.khujand.solana.trading.bot.domain.TokenStatus
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Main Screen
@@ -475,7 +474,9 @@ private fun HistoryItemCard(item: TokenHistory) {
         if (showCopiedMessage) { delay(2000); showCopiedMessage = false }
     }
 
-    val isProfit     = item.status == TokenStatus.STOPPED_TP
+    // Полные закрытия: TP/SL в status; частичные выходы всегда были с TP в данных —
+    // итог по сделке смотрим по profitUsd, чтобы убытки не подсвечивались как прибыль.
+    val isProfit     = item.profitUsd >= 0.0
     val accentColor  = if (isProfit) SuccessGreen else DangerRed
     val cardColor    = if (isProfit) SuccessGreenBg else DangerRedBg
     val tokenAddress = item.tokenPair.baseToken?.address ?: ""

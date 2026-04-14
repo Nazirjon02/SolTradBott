@@ -224,7 +224,7 @@ object TokenHistoryManager {
             exitTime = now,
             priceChangePercent = priceChangePercent,
             profitUsd = profitUsd,
-            status = TokenStatus.STOPPED_TP,
+            status = if (profitUsd >= 0.0) TokenStatus.STOPPED_TP else TokenStatus.STOPPED_SL,
             symbol = token.tokenPair.baseToken?.symbol ?: "Unknown",
             entryDate = formatDate(token.foundTime),
             exitDate = formatDate(now),
