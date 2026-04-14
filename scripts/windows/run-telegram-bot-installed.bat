@@ -54,6 +54,10 @@ echo Starting Telegram bot...
 echo App home: "%APP_HOME%"
 echo.
 
+REM Old packaged JARs only read TELEGRAM_* env vars — load telegram-bot.properties into env (same keys as Kotlin loader).
+call :ApplyTelegramPropsMerge "%APP_HOME%\telegram-bot.properties"
+call :ApplyTelegramPropsOverwrite "%USER_BOT_CONFIG%"
+
 cd /d "%APP_HOME%"
 
 "%JAVA_EXE%" -cp "%APP_HOME%\app\*" tj.khujand.solana.trading.bot.TelegramBotMainKt
@@ -63,3 +67,21 @@ echo.
 echo Telegram bot stopped. Exit code: %BOT_EXIT%
 pause
 exit /b %BOT_EXIT%
+
+:ApplyTelegramPropsMerge
+if not exist "%~1" exit /b 0
+for /f "tokens=1,* delims==" %%a in ('findstr /b /c:"telegram.bot.token=" /c:"telegram.admin.chat.id=" /c:"telegram.admin.user.id=" "%~1" 2^>nul') do (
+  if /I "%%a"=="telegram.bot.token" if not "%%b"=="" if not defined TELEGRAM_BOT_TOKEN set "TELEGRAM_BOT_TOKEN=%%b"
+  if /I "%%a"=="telegram.admin.chat.id" if not "%%b"=="" if not defined TELEGRAM_ADMIN_CHAT_ID set "TELEGRAM_ADMIN_CHAT_ID=%%b"
+  if /I "%%a"=="telegram.admin.user.id" if not "%%b"=="" if not defined TELEGRAM_ADMIN_USER_ID set "TELEGRAM_ADMIN_USER_ID=%%b"
+)
+exit /b 0
+
+:ApplyTelegramPropsOverwrite
+if not exist "%~1" exit /b 0
+for /f "tokens=1,* delims==" %%a in ('findstr /b /c:"telegram.bot.token=" /c:"telegram.admin.chat.id=" /c:"telegram.admin.user.id=" "%~1" 2^>nul') do (
+  if /I "%%a"=="telegram.bot.token" if not "%%b"=="" set "TELEGRAM_BOT_TOKEN=%%b"
+  if /I "%%a"=="telegram.admin.chat.id" if not "%%b"=="" set "TELEGRAM_ADMIN_CHAT_ID=%%b"
+  if /I "%%a"=="telegram.admin.user.id" if not "%%b"=="" set "TELEGRAM_ADMIN_USER_ID=%%b"
+)
+exit /b 0
