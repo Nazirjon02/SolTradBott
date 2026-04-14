@@ -127,7 +127,17 @@ object TokenHistoryManager {
         val totalReturn = completedTrades.sumOf { it.exitAmountUsd }
         val returnPct = if (totalInvested > 0) (netProfit / totalInvested) * 100.0 else 0.0
         val partialNetProfit = partialExits.sumOf { it.profitUsd }
-        val overallNetProfit = netProfit + partialNetProfit
+        // overallNetProfit: прибавляем только частичные выходы тех токенов, у которых НЕТ
+        // финальной закрытой записи — иначе частичная прибыль уже включена в completedTrade.profitUsd
+        val orphanPartialNetProfit = partialExits
+            .filter { exit ->
+                val key = exit.tokenPair.baseToken?.address
+                    ?: exit.tokenPair.pairAddress
+                    ?: "${exit.symbol}_${exit.entryTime}"
+                key !in completedTradeKeys
+            }
+            .sumOf { it.profitUsd }
+        val overallNetProfit = netProfit + orphanPartialNetProfit
 
         val demoHistory = completedTrades.filter { !it.isRealTrade }
         val realHistory = completedTrades.filter { it.isRealTrade }

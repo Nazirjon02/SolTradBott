@@ -510,17 +510,32 @@ class TokenMonitor {
             }
         }
 
+        // Для демо-режима: пересчитываем P&L по последней известной цене,
+        // чтобы закрытый токен не показывал 0$ вместо реального убытка
+        if (!filterSettings.jupiterEnabled) {
+            val entry = token.entryPrice
+            val lastPrice = parsePrice(token.currentPrice)
+            if (entry > 0 && lastPrice > 0) {
+                val priceChangePct = ((lastPrice - entry) / entry) * 100.0
+                val investment = token.investedUsd.coerceAtLeast(0.0)
+                val remainingLoss = investment * priceChangePct / 100.0 * (token.remainingPositionPct.coerceIn(0.0, 100.0) / 100.0)
+                realizedProfitUsd += remainingLoss
+            }
+        }
+
         listMutex.withLock {
             val index = _monitoredTokens.indexOfFirst {
                 it.tokenPair.pairAddress == token.tokenPair.pairAddress
             }
             if (index == -1) return@withLock
 
+            val finalProfitUsd = realizedProfitUsd
             val closedToken = token.copy(
                 status = TokenStatus.STOPPED_SL,
                 remainingPositionPct = 0.0,
                 tokenAmountRaw = tokenAmountRaw,
-                realizedProfitUsd = realizedProfitUsd
+                realizedProfitUsd = realizedProfitUsd,
+                profitUsd = finalProfitUsd
             )
             addClosedToken(closedToken)
             _monitoredTokens.removeAt(index)
@@ -1175,7 +1190,8 @@ class TokenMonitor {
         onUpdate: (MonitoredToken) -> Unit
     ) {
         // ──── РАСЧЁТ ПРИБЫЛИ ────
-        val entry = token.entryPrice
+        // Если entryPrice=0 (старый кеш), используем сохранённый currentPrice как fallback
+        val entry = if (token.entryPrice > 0) token.entryPrice else parsePrice(token.currentPrice)
         val prevHigh = if (token.sessionHighPrice > 0) token.sessionHighPrice else entry
         val newSessionHigh = maxOf(prevHigh, newPrice)
 
@@ -1374,26 +1390,34 @@ class TokenMonitor {
         // ──── ПРИНУДИТЕЛЬНЫЙ ВЫХОД (продажа остатка) ────
         if (forcedExit) {
             val percentToSell = remainingPct.coerceAtMost(100.0)
-            if (filterSettings.jupiterEnabled && tokenAmountRaw > 0) {
-                val sellResult = sellTokenPercent(token, tokenAmountRaw, percentToSell, marketCap)
-                if (sellResult != null) {
-                    realizedProfitUsd += sellResult.profitUsd
-                    tokenAmountRaw = 0L
-                    remainingPct = 0.0
-                } else {
-                    forcedExitExecuted = false
+            when {
+                percentToSell <= 0.0 -> {
+                    // Позиция уже полностью продана через частичные выходы — просто фиксируем закрытие
+                    forcedExitExecuted = true
                 }
-            } else {
-                // Demo-режим: нет реального свапа, но убыток остатка позиции
-                // нужно зафиксировать — иначе finalProfitUsd будет 0 вместо реального убытка
-                val remainingLoss = investment * priceChangePercent / 100.0 * (remainingPct / 100.0)
-                realizedProfitUsd += remainingLoss
-                remainingPct = 0.0
+                filterSettings.jupiterEnabled && tokenAmountRaw > 0 -> {
+                    val sellResult = sellTokenPercent(token, tokenAmountRaw, percentToSell, marketCap)
+                    if (sellResult != null) {
+                        realizedProfitUsd += sellResult.profitUsd
+                        tokenAmountRaw = 0L
+                        remainingPct = 0.0
+                        forcedExitExecuted = true  // ✅ продажа прошла — закрываем
+                    } else {
+                        forcedExitExecuted = false  // Jupiter sell не удался — попробуем в следующем тике
+                    }
+                }
+                else -> {
+                    // Demo-режим: нет реального свапа — фиксируем P&L по текущей цене
+                    val remainingLoss = investment * priceChangePercent / 100.0 * (remainingPct / 100.0)
+                    realizedProfitUsd += remainingLoss
+                    remainingPct = 0.0
+                    forcedExitExecuted = true  // ✅ демо-выход всегда успешен
+                }
             }
             when {
-                forcedExitByStopLoss -> println("🛑 Forced exit: -30% от входной капы")
-                forcedExitByTrailing -> println("🛑 Forced exit: -35% от локального максимума")
-                forcedExitByStagePullback -> println("🛑 Forced exit: -35% после Stage")
+                forcedExitByStopLoss -> println("🛑 Forced exit: SL по капе/цене")
+                forcedExitByTrailing -> println("🛑 Forced exit: trailing stop от максимума")
+                forcedExitByStagePullback -> println("🛑 Forced exit: pullback после Stage/Aggressive")
             }
         }
 
@@ -1473,7 +1497,19 @@ class TokenMonitor {
         )
 
         if (cached.isNotEmpty()) {
-            val activeOnly = cached.filter { it.status == TokenStatus.MONITORING }
+            val activeOnly = cached
+                .filter { it.status == TokenStatus.MONITORING }
+                .map { token ->
+                    // Если entryPrice=0 (старый кеш без этого поля или повреждённые данные),
+                    // восстанавливаем из currentPrice чтобы P&L не был заморожен на 0$
+                    if (token.entryPrice <= 0.0) {
+                        val fallback = token.currentPrice.toDoubleOrNull() ?: 0.0
+                        if (fallback > 0.0) {
+                            println("⚠️ Токен ${token.tokenPair.baseToken?.symbol}: entryPrice=0, сброс baseline → $fallback")
+                            token.copy(entryPrice = fallback, profitUsd = 0.0, priceChangePercent = 0.0)
+                        } else token
+                    } else token
+                }
             _monitoredTokens.clear()
             _monitoredTokens.addAll(activeOnly)
             allowNewTokenDiscovery =
