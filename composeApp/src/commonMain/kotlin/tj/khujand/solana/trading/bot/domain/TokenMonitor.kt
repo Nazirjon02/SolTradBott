@@ -569,51 +569,115 @@ class TokenMonitor {
         }
     }
     
-    // ✅ НОВЫЙ МЕТОД: Ручное закрытие токена (фиксация прибыли/убытка)
-    suspend fun closeTokenManually(pairAddress: String, isProfit: Boolean = true) {
-        val index = _monitoredTokens.indexOfFirst { it.tokenPair.pairAddress == pairAddress }
-        if (index != -1) {
-            val token = _monitoredTokens[index]
-            if (token.status == TokenStatus.MONITORING) {
-                if (filterSettings.jupiterEnabled && token.tokenAmountRaw > 0L) {
-                    val percentToSell = token.remainingPositionPct.coerceIn(0.0, 100.0)
-                    val sellResult = sellTokenPercent(
-                        token = token,
-                        amountBase = token.tokenAmountRaw,
-                        percent = percentToSell,
-                        marketCap = token.lastMarketCap
-                    )
-                    if (sellResult == null) {
-                        println("⚠️ Ручное закрытие: продажа через Jupiter не удалась, токен остается в мониторинге")
-                        return
-                    }
-                }
+    /** Индекс позиции по адресу пары или mint базового токена (pairAddress иногда пустой в данных API). */
+    private fun monitoredIndexByPairOrBase(address: String): Int {
+        if (address.isBlank()) return -1
+        return _monitoredTokens.indexOfFirst { t ->
+            val p = t.tokenPair.pairAddress
+            val b = t.tokenPair.baseToken?.address
+            (!p.isNullOrBlank() && p == address) || (!b.isNullOrBlank() && b == address)
+        }
+    }
 
-                // Определяем статус на основе текущей прибыли
-                val newStatus = if (isProfit || token.profitUsd >= 0) {
-                    TokenStatus.STOPPED_TP
-                } else {
-                    TokenStatus.STOPPED_SL
-                }
-                
-                // ⭐ Обнуляем позицию полностью при закрытии
-                val updatedToken = token.copy(
-                    status = newStatus,
-                    remainingPositionPct = 0.0,
-                    tokenAmountRaw = 0L
-                )
-                
-                // Сохраняем в историю и помечаем токен как закрытый (без повторного добавления)
-                addClosedToken(updatedToken)
+    // ✅ Ручное закрытие токена (фиксация прибыли/убытка) — всегда пишет историю при успехе
+    suspend fun closeTokenManually(pairOrBaseAddress: String, isProfit: Boolean = true) {
+        if (pairOrBaseAddress.isBlank()) {
+            println("⚠️ Ручное закрытие: пустой адрес пары/токена")
+            return
+        }
 
-                // ✅ Автоматически удаляем из списка мониторинга
-                _monitoredTokens.removeAt(index)
-                checkAndResumeDiscovery() // Проверяем, можно ли возобновить поиск
-
-                saveTokensToCache()
-
-                println("✅ Токен ${token.tokenPair.baseToken?.symbol} закрыт вручную и удален из мониторинга: ${if (isProfit) "Profit" else "Loss"}")
+        val token = listMutex.withLock {
+            val index = monitoredIndexByPairOrBase(pairOrBaseAddress)
+            if (index == -1) {
+                println("⚠️ Ручное закрытие: позиция не найдена ($pairOrBaseAddress)")
+                return@withLock null
             }
+            val t = _monitoredTokens[index]
+            if (t.status != TokenStatus.MONITORING) {
+                println("⚠️ Ручное закрытие: токен уже не в мониторинге")
+                return@withLock null
+            }
+            t
+        } ?: return
+
+        var realizedProfitUsd = token.realizedProfitUsd
+        val finalProfitUsd: Double
+
+        if (filterSettings.jupiterEnabled && token.tokenAmountRaw > 0L) {
+            val percentToSell = token.remainingPositionPct.coerceIn(0.0, 100.0)
+            val sellResult = sellTokenPercent(
+                token = token,
+                amountBase = token.tokenAmountRaw,
+                percent = percentToSell,
+                marketCap = token.lastMarketCap
+            )
+            if (sellResult == null) {
+                println("⚠️ Ручное закрытие: продажа через Jupiter не удалась, токен остается в мониторинге")
+                return
+            }
+            realizedProfitUsd += sellResult.profitUsd
+            finalProfitUsd = realizedProfitUsd
+        } else if (filterSettings.jupiterEnabled) {
+            // Реал без остатка raw (редко) — берём накопленный P&L из последнего тика
+            finalProfitUsd = token.profitUsd
+            realizedProfitUsd = token.realizedProfitUsd
+        } else {
+            // Демо: как в updateTokenPrice — реализованное + нереализованное на остаток позиции
+            val entry = if (token.entryPrice > 0) token.entryPrice else parsePrice(token.currentPrice)
+            val newPrice = parsePrice(token.currentPrice)
+            val priceChangePercent =
+                if (entry > 0) ((newPrice - entry) / entry) * 100 else 0.0
+            val investment = token.investedUsd.coerceAtLeast(0.0)
+            val remainingPct = token.remainingPositionPct.coerceIn(0.0, 100.0)
+            val unrealizedOnRemain =
+                investment * priceChangePercent / 100.0 * (remainingPct / 100.0)
+            realizedProfitUsd = token.realizedProfitUsd + unrealizedOnRemain
+            finalProfitUsd = realizedProfitUsd
+        }
+
+        val newStatus = if (isProfit || finalProfitUsd >= 0) {
+            TokenStatus.STOPPED_TP
+        } else {
+            TokenStatus.STOPPED_SL
+        }
+
+        val exitPct = if (token.entryPrice > 0) {
+            val np = parsePrice(token.currentPrice)
+            ((np - token.entryPrice) / token.entryPrice) * 100
+        } else {
+            token.priceChangePercent
+        }
+
+        val updatedToken = token.copy(
+            status = newStatus,
+            remainingPositionPct = 0.0,
+            tokenAmountRaw = 0L,
+            profitUsd = finalProfitUsd,
+            realizedProfitUsd = realizedProfitUsd,
+            priceChangePercent = exitPct
+        )
+
+        listMutex.withLock {
+            val index = monitoredIndexByPairOrBase(pairOrBaseAddress)
+            if (index == -1) {
+                println("⚠️ Ручное закрытие: токен исчез до записи результата — история не сохранена")
+                return@withLock
+            }
+            val current = _monitoredTokens[index]
+            val same =
+                current.foundTime == token.foundTime &&
+                    (current.tokenPair.pairAddress ?: "") == (token.tokenPair.pairAddress ?: "") &&
+                    (current.tokenPair.baseToken?.address ?: "") == (token.tokenPair.baseToken?.address ?: "")
+            if (!same || current.status != TokenStatus.MONITORING) {
+                println("⚠️ Ручное закрытие: позиция изменилась параллельно, пропуск")
+                return@withLock
+            }
+
+            addClosedToken(updatedToken)
+            _monitoredTokens.removeAt(index)
+            checkAndResumeDiscovery()
+            saveTokensToCache()
+            println("✅ Токен ${token.tokenPair.baseToken?.symbol} закрыт вручную: ${if (newStatus == TokenStatus.STOPPED_TP) "TP" else "SL"}, P&L \$${formatNumber(finalProfitUsd)}")
         }
     }
 

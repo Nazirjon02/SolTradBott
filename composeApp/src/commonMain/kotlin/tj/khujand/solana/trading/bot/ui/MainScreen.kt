@@ -53,6 +53,7 @@ fun MainScreen() {
     var monitoredTokens by remember { mutableStateOf(emptyList<MonitoredToken>()) }
     var showFilterSettings by remember { mutableStateOf(false) }
     var showProfitLoss by remember { mutableStateOf(false) }
+    var profitLossRefresh by remember { mutableIntStateOf(0) }
     var isRequesting by remember { mutableStateOf(false) }
     var demoBalance by remember { mutableStateOf(DemoAccountManager.getBalance()) }
     var clearFailedCount by remember { mutableStateOf<Int?>(null) }
@@ -149,7 +150,10 @@ fun MainScreen() {
     }
 
     when {
-        showProfitLoss -> ProfitLossScreen(onClose = { showProfitLoss = false })
+        showProfitLoss -> ProfitLossScreen(
+            onClose = { showProfitLoss = false },
+            refreshKey = profitLossRefresh
+        )
         showFilterSettings -> FilterScreen(
             currentSettings = currentSettings,
             onSettingsChanged = { currentSettings = it },
@@ -170,7 +174,7 @@ fun MainScreen() {
             onToggleMonitoring  = { toggleMonitoring() },
             onClearTokens       = { clearAllTokens() },
             onOpenSettings      = { showFilterSettings = true },
-            onOpenProfitLoss    = { showProfitLoss = true },
+            onOpenProfitLoss    = { profitLossRefresh++; showProfitLoss = true },
             onCloseToken        = { address, isProfit ->
                 scope.launch {
                     tokenMonitor.closeTokenManually(address, isProfit)

@@ -142,9 +142,18 @@ object TokenHistoryManager {
         val demoHistory = completedTrades.filter { !it.isRealTrade }
         val realHistory = completedTrades.filter { it.isRealTrade }
 
-        val demoNet = demoHistory.sumOf { it.profitUsd }
-        val demoInvested = demoHistory.filter { !it.isPartialExit }.sumOf { it.investedUsd }
-        val demoReturn = demoHistory.filter { !it.isPartialExit }.sumOf { it.exitAmountUsd }
+        // Как и overallNetProfit: прибыль по «сиротским» частичным выходам (нет финальной строки saveToHistory),
+        // иначе блок «Демо» в UI занижался бы при закрытии только по этапам (skipHistory на финале).
+        val demoOrphanPartials = partialExits.filter { exit ->
+            if (exit.isRealTrade) return@filter false
+            val key = exit.tokenPair.baseToken?.address
+                ?: exit.tokenPair.pairAddress
+                ?: "${exit.symbol}_${exit.entryTime}"
+            key !in completedTradeKeys
+        }
+        val demoNet = demoHistory.sumOf { it.profitUsd } + demoOrphanPartials.sumOf { it.profitUsd }
+        val demoInvested = demoHistory.sumOf { it.investedUsd } + demoOrphanPartials.sumOf { it.investedUsd }
+        val demoReturn = demoHistory.sumOf { it.exitAmountUsd } + demoOrphanPartials.sumOf { it.exitAmountUsd }
         val demoReturnPct = if (demoInvested > 0) (demoNet / demoInvested) * 100.0 else 0.0
 
         val realNet = realHistory.sumOf { it.profitUsd }

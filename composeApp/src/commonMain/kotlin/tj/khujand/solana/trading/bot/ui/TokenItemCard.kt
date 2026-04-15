@@ -362,7 +362,13 @@ fun TokenItemCard(
                     Button(
                         onClick = {
                             val profit = token.profitUsd >= 0
-                            token.tokenPair.pairAddress?.let { onCloseToken(it, profit) }
+                            val closeKey = token.tokenPair.pairAddress?.takeIf { it.isNotBlank() }
+                                ?: token.tokenPair.baseToken?.address?.takeIf { it.isNotBlank() }
+                            if (closeKey != null) {
+                                onCloseToken(closeKey, profit)
+                            } else {
+                                println("⚠️ Close: нет pairAddress и base mint — закрытие невозможно")
+                            }
                         },
                         modifier = Modifier.fillMaxWidth(),
                         shape    = RoundedCornerShape(10.dp),

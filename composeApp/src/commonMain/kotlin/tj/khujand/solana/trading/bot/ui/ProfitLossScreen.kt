@@ -39,13 +39,13 @@ import tj.khujand.solana.trading.bot.domain.TokenHistoryManager
 // ─────────────────────────────────────────────────────────────────────────────
 
 @Composable
-fun ProfitLossScreen(onClose: () -> Unit) {
+fun ProfitLossScreen(onClose: () -> Unit, refreshKey: Int = 0) {
     var history    by remember { mutableStateOf(TokenHistoryManager.loadHistory()) }
     var statistics by remember { mutableStateOf(TokenHistoryManager.getStatistics()) }
     var showClearDialog  by remember { mutableStateOf(false) }
     var showHistoryScreen by remember { mutableStateOf(false) }
 
-    LaunchedEffect(Unit) {
+    LaunchedEffect(refreshKey) {
         history    = TokenHistoryManager.loadHistory()
         statistics = TokenHistoryManager.getStatistics()
     }
@@ -83,7 +83,7 @@ fun ProfitLossScreen(onClose: () -> Unit) {
                                 color = Color.White
                             )
                             Text(
-                                closedTradesSubtitle(history.size),
+                                journalRecordsSubtitle(history.size),
                                 fontSize = 13.sp,
                                 color = Color.White.copy(alpha = 0.75f)
                             )
@@ -611,16 +611,17 @@ private fun HistoryItemCard(item: TokenHistory) {
 // Formatters
 // ─────────────────────────────────────────────────────────────────────────────
 
-private fun closedTradesSubtitle(count: Int): String {
+/** Записей в журнале может быть больше, чем «позиций»: одна сделка = до нескольких строк при частичных выходах. */
+private fun journalRecordsSubtitle(count: Int): String {
     val n = count % 100
     val n1 = count % 10
     val word = when {
-        n in 11..14 -> "закрытых сделок"
-        n1 == 1 -> "закрытая сделка"
-        n1 in 2..4 -> "закрытые сделки"
-        else -> "закрытых сделок"
+        n in 11..14 -> "записей"
+        n1 == 1 -> "запись"
+        n1 in 2..4 -> "записи"
+        else -> "записей"
     }
-    return "$count $word"
+    return "В журнале: $count $word (в т.ч. частичные выходы)"
 }
 
 private fun recordsSubtitle(count: Int): String {
