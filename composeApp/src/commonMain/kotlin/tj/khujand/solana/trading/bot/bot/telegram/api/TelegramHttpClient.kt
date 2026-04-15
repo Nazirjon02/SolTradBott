@@ -66,7 +66,7 @@ class TelegramHttpClient(
         val payload = buildJsonObject {
             put("chat_id", chatId)
             put("text", text)
-            put("parse_mode", "Markdown")
+            put("parse_mode", "HTML")
             if (replyMarkup != null) {
                 put("reply_markup", encodeKeyboard(replyMarkup))
             }
@@ -87,7 +87,7 @@ class TelegramHttpClient(
             put("chat_id", chatId)
             put("message_id", messageId)
             put("text", text)
-            put("parse_mode", "Markdown")
+            put("parse_mode", "HTML")
             if (replyMarkup != null) {
                 put("reply_markup", encodeKeyboard(replyMarkup))
             }

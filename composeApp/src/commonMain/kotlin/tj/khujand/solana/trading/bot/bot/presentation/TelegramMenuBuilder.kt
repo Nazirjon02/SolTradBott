@@ -11,11 +11,11 @@ object TelegramMenuBuilder {
     fun mainMenu(): TelegramInlineKeyboard {
         return TelegramInlineKeyboard(
             rows = listOf(
-                listOf(button("▶️ Start", "trade", "start"), button("⏹ Stop", "trade", "stop")),
-                listOf(button("📊 Status", "main", "status"), button("💼 Balance", "main", "balance")),
-                listOf(button("🧾 Deals", "main", "deals"), button("⚙️ Filters", "main", "filters")),
-                listOf(button("📤 Exit Strategy", "main", "exit"), button("👀 Monitoring", "main", "monitoring")),
-                listOf(button("🔁 Mode", "main", "mode"), button("🔄 Refresh", "main", "refresh"))
+                listOf(button("▶️ Старт", "trade", "start"), button("⏹ Стоп", "trade", "stop")),
+                listOf(button("📊 Статус", "main", "status"), button("💰 Баланс", "main", "balance")),
+                listOf(button("📈 Сделки", "main", "deals"), button("🎯 Фильтры", "main", "filters")),
+                listOf(button("📤 Выход", "main", "exit"), button("👁 Мониторинг", "main", "monitoring")),
+                listOf(button("🔐 Режим", "main", "mode"), button("🔄 Обновить", "main", "refresh"))
             )
         )
     }
@@ -23,8 +23,8 @@ object TelegramMenuBuilder {
     fun modeMenu(): TelegramInlineKeyboard {
         return TelegramInlineKeyboard(
             rows = listOf(
-                listOf(button("🟢 DEMO", "mode", "set", "demo"), button("🔴 REAL", "mode", "set", "real")),
-                listOf(button("⬅️ Back", "main", "home"))
+                listOf(button("🟢 Demo", "mode", "set", "demo"), button("🔴 Real", "mode", "set", "real")),
+                listOf(button("⬅️ В меню", "main", "home"))
             )
         )
     }
@@ -32,8 +32,8 @@ object TelegramMenuBuilder {
     fun confirmRealModeMenu(): TelegramInlineKeyboard {
         return TelegramInlineKeyboard(
             rows = listOf(
-                listOf(button("✅ Confirm REAL", "mode", "confirm", "real")),
-                listOf(button("❌ Cancel", "mode", "cancel", "real"))
+                listOf(button("✅ Да, Real", "mode", "confirm", "real")),
+                listOf(button("❌ Отмена", "mode", "cancel", "real"))
             )
         )
     }
@@ -41,8 +41,8 @@ object TelegramMenuBuilder {
     fun balanceMenu(): TelegramInlineKeyboard {
         return TelegramInlineKeyboard(
             rows = listOf(
-                listOf(button("🔄 Refresh", "balance", "refresh")),
-                listOf(button("⬅️ Back", "main", "home"))
+                listOf(button("🔄 Обновить", "balance", "refresh")),
+                listOf(button("⬅️ В меню", "main", "home"))
             )
         )
     }
@@ -50,8 +50,8 @@ object TelegramMenuBuilder {
     fun dealsMenu(): TelegramInlineKeyboard {
         return TelegramInlineKeyboard(
             rows = listOf(
-                listOf(button("🔄 Refresh", "deals", "refresh")),
-                listOf(button("⬅️ Back", "main", "home"))
+                listOf(button("🔄 Обновить", "deals", "refresh")),
+                listOf(button("⬅️ В меню", "main", "home"))
             )
         )
     }
@@ -59,64 +59,119 @@ object TelegramMenuBuilder {
     fun monitoringMenu(): TelegramInlineKeyboard {
         return TelegramInlineKeyboard(
             rows = listOf(
-                listOf(button("🔄 Refresh", "monitoring", "refresh")),
-                listOf(button("⬅️ Back", "main", "home"))
+                listOf(button("🔄 Обновить", "monitoring", "refresh")),
+                listOf(button("⬅️ В меню", "main", "home"))
             )
         )
     }
 
-    fun filtersMenu(view: FilterSettingsView): TelegramInlineKeyboard {
+    fun filtersMenu(view: FilterSettingsView): TelegramInlineKeyboard =
+        filtersMenu(view, 0)
+
+    fun filtersMenu(view: FilterSettingsView, page: Int): TelegramInlineKeyboard {
+        val p = page.coerceIn(0, TelegramUiPages.FILTERS_PAGE_COUNT - 1)
         val rows = mutableListOf<List<TelegramInlineKeyboardButton>>()
-        view.editableFields.forEach { field ->
+        if (TelegramUiPages.FILTERS_PAGE_COUNT > 1) {
             rows += listOf(
-                button("➖ ${field.title}", "filters", "dec", field.key),
-                button("➕ ${field.title}", "filters", "inc", field.key)
+                button(
+                    "◀",
+                    "filters",
+                    "page",
+                    TelegramUiPages.prevPage(p, TelegramUiPages.FILTERS_PAGE_COUNT).toString()
+                ),
+                button(
+                    "▶",
+                    "filters",
+                    "page",
+                    TelegramUiPages.nextPage(p, TelegramUiPages.FILTERS_PAGE_COUNT).toString()
+                )
             )
         }
-        rows += listOf(
-            button("AI ${if (view.settings.useAiAnalysis) "✅" else "❌"}", "filters", "toggle", "useAiAnalysis"),
-            button("Vol5m ${if (view.settings.useVolumeM5) "✅" else "❌"}", "filters", "toggle", "useVolumeM5")
-        )
-        rows += listOf(
-            button("AI fail-closed ${if (view.settings.aiFailClosed) "✅" else "❌"}", "filters", "toggle", "aiFailClosed")
-        )
-        rows += listOf(
-            button("Vol24h ${if (view.settings.useVolumeH24) "✅" else "❌"}", "filters", "toggle", "useVolumeH24")
-        )
-        rows += listOf(
-            button("Socials ${if (view.settings.requireSocials) "✅" else "❌"}", "filters", "toggle", "requireSocials"),
-            button("Website ${if (view.settings.requireWebsite) "✅" else "❌"}", "filters", "toggle", "requireWebsite")
-        )
-        rows += listOf(
-            button("RISK LOW", "filters", "set_risk", "LOW"),
-            button("RISK MED", "filters", "set_risk", "MEDIUM"),
-            button("RISK HIGH", "filters", "set_risk", "HIGH")
-        )
-        rows += listOf(button("🔄 Refresh", "filters", "refresh"))
-        rows += listOf(button("⬅️ Back", "main", "home"))
+        view.editableFields
+            .filter { TelegramUiPages.filterFieldPage(it.key) == p }
+            .forEach { field ->
+                rows += listOf(
+                    button("➖ ${field.title}", "filters", "dec", pp(p, field.key)),
+                    button("➕ ${field.title}", "filters", "inc", pp(p, field.key))
+                )
+            }
+        when (p) {
+            0 -> {
+                rows += listOf(
+                    button("Vol 24h ${if (view.settings.useVolumeH24) "✅" else "❌"}", "filters", "toggle", pp(p, "useVolumeH24")),
+                    button("Vol 5m ${if (view.settings.useVolumeM5) "✅" else "❌"}", "filters", "toggle", pp(p, "useVolumeM5"))
+                )
+                rows += listOf(
+                    button("Соцсети ${if (view.settings.requireSocials) "✅" else "❌"}", "filters", "toggle", pp(p, "requireSocials")),
+                    button("Сайт ${if (view.settings.requireWebsite) "✅" else "❌"}", "filters", "toggle", pp(p, "requireWebsite"))
+                )
+            }
+            1 -> {
+                rows += listOf(
+                    button("AI ${if (view.settings.useAiAnalysis) "✅" else "❌"}", "filters", "toggle", pp(p, "useAiAnalysis")),
+                    button("🔒 AI fail ${if (view.settings.aiFailClosed) "✅" else "❌"}", "filters", "toggle", pp(p, "aiFailClosed"))
+                )
+                rows += listOf(
+                    button("🟢 Риск low", "filters", "set_risk", pp(p, "LOW")),
+                    button("🟡 Риск med", "filters", "set_risk", pp(p, "MEDIUM")),
+                    button("🔴 Риск high", "filters", "set_risk", pp(p, "HIGH"))
+                )
+            }
+        }
+        rows += listOf(button("🔄 Обновить", "filters", "refresh", p.toString()))
+        rows += listOf(button("⬅️ В меню", "main", "home"))
         return TelegramInlineKeyboard(rows = rows)
     }
 
-    fun exitStrategyMenu(view: ExitStrategyView): TelegramInlineKeyboard {
+    fun exitStrategyMenu(view: ExitStrategyView): TelegramInlineKeyboard =
+        exitStrategyMenu(view, 0)
+
+    fun exitStrategyMenu(view: ExitStrategyView, page: Int): TelegramInlineKeyboard {
+        val p = page.coerceIn(0, TelegramUiPages.EXIT_PAGE_COUNT - 1)
         val rows = mutableListOf<List<TelegramInlineKeyboardButton>>()
-        rows += listOf(
-            button("Stages ${if (view.settings.exitStrategy == "stages") "✅" else ""}", "exit", "mode", "stages"),
-            button("Aggressive ${if (view.settings.exitStrategy == "aggressive") "✅" else ""}", "exit", "mode", "aggressive")
-        )
-        view.editableFields.forEach { field ->
+        if (TelegramUiPages.EXIT_PAGE_COUNT > 1) {
             rows += listOf(
-                button("➖ ${field.title}", "exit", "dec", field.key),
-                button("➕ ${field.title}", "exit", "inc", field.key)
+                button(
+                    "◀",
+                    "exit",
+                    "page",
+                    TelegramUiPages.prevPage(p, TelegramUiPages.EXIT_PAGE_COUNT).toString()
+                ),
+                button(
+                    "▶",
+                    "exit",
+                    "page",
+                    TelegramUiPages.nextPage(p, TelegramUiPages.EXIT_PAGE_COUNT).toString()
+                )
             )
         }
-        rows += listOf(
-            button("⏱️ TimedExit ${if (view.settings.useTimeBasedExit) "✅" else "❌"}", "exit", "toggle", "useTimeBasedExit"),
-            button("🕐 TradingHours ${if (view.settings.tradingHoursEnabled) "✅" else "❌"}", "exit", "toggle", "tradingHoursEnabled")
-        )
-        rows += listOf(button("🔄 Refresh", "exit", "refresh"))
-        rows += listOf(button("⬅️ Back", "main", "home"))
+        if (p == 0) {
+            rows += listOf(
+                button("📊 Стадии ${if (view.settings.exitStrategy == "stages") "✅" else "·"}", "exit", "mode", pp(p, "stages")),
+                button("⚡ Агресс. ${if (view.settings.exitStrategy == "aggressive") "✅" else "·"}", "exit", "mode", pp(p, "aggressive"))
+            )
+        }
+        view.editableFields
+            .filter { TelegramUiPages.exitFieldPage(it.key) == p }
+            .forEach { field ->
+                rows += listOf(
+                    button("➖ ${field.title}", "exit", "dec", pp(p, field.key)),
+                    button("➕ ${field.title}", "exit", "inc", pp(p, field.key))
+                )
+            }
+        if (p == 1) {
+            rows += listOf(
+                button("⏱️ По времени ${if (view.settings.useTimeBasedExit) "✅" else "❌"}", "exit", "toggle", pp(p, "useTimeBasedExit")),
+                button("🕐 Часы UTC ${if (view.settings.tradingHoursEnabled) "✅" else "❌"}", "exit", "toggle", pp(p, "tradingHoursEnabled"))
+            )
+        }
+        rows += listOf(button("🔄 Обновить", "exit", "refresh", p.toString()))
+        rows += listOf(button("⬅️ В меню", "main", "home"))
         return TelegramInlineKeyboard(rows = rows)
     }
+
+    /** Сохраняет номер страницы вместе с ключом: {@code page~tail} */
+    private fun pp(page: Int, tail: String): String = "$page~$tail"
 
     private fun button(
         text: String,

@@ -11,6 +11,7 @@ import tj.khujand.solana.trading.bot.bot.application.TradingBotService
 import tj.khujand.solana.trading.bot.bot.application.TradingRuntime
 import tj.khujand.solana.trading.bot.bot.domain.security.AdminAccessPolicy
 import tj.khujand.solana.trading.bot.bot.telegram.api.TelegramHttpClient
+import tj.khujand.solana.trading.bot.bot.presentation.TelegramMessageFormatter
 import tj.khujand.solana.trading.bot.bot.telegram.routing.UpdateRouter
 
 class TelegramBotRunner(
@@ -68,9 +69,9 @@ class TelegramBotRunner(
         tokenFoundSubscriptionId = tradingService.subscribeOnTokenFound { token ->
             scope.launch {
                 val text = buildString {
-                    appendLine("*Найдена и куплена монета*")
-                    appendLine(token.name)
-                    append("`${token.tokenAddress}`")
+                    appendLine("<b>🎯 Сделка: вход выполнен</b>")
+                    appendLine("<b>${TelegramMessageFormatter.escapeHtml(token.name)}</b>")
+                    append("<code>${TelegramMessageFormatter.escapeHtml(token.tokenAddress)}</code>")
                 }
                 runCatching {
                     telegram.sendMessage(adminChatId, text)

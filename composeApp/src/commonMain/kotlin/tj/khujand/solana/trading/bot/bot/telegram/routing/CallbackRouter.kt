@@ -4,6 +4,7 @@ import tj.khujand.solana.trading.bot.bot.application.TradingBotService
 import tj.khujand.solana.trading.bot.bot.domain.model.TradingMode
 import tj.khujand.solana.trading.bot.bot.presentation.TelegramMenuBuilder
 import tj.khujand.solana.trading.bot.bot.presentation.TelegramMessageFormatter
+import tj.khujand.solana.trading.bot.bot.presentation.TelegramUiPages
 import tj.khujand.solana.trading.bot.bot.telegram.api.TelegramHttpClient
 import tj.khujand.solana.trading.bot.bot.telegram.callback.CallbackDataCodec
 
@@ -26,7 +27,7 @@ class CallbackRouter(
             "monitoring" -> showMonitoring(ctx)
             "filters" -> handleFilters(payload.action, payload.param, ctx)
             "exit" -> handleExit(payload.action, payload.param, ctx)
-            else -> ctx.callbackQueryId?.let { telegram.answerCallbackQuery(it, "Unknown action") }
+            else -> ctx.callbackQueryId?.let { telegram.answerCallbackQuery(it, "Неизвестное действие") }
         }
     }
 
@@ -37,8 +38,8 @@ class CallbackRouter(
             "balance" -> showBalance(ctx)
             "deals" -> showDeals(ctx)
             "monitoring" -> showMonitoring(ctx)
-            "filters" -> showFilters(ctx)
-            "exit" -> showExitStrategy(ctx)
+            "filters" -> showFilters(ctx, 0)
+            "exit" -> showExitStrategy(ctx, 0)
             "mode" -> showMode(ctx)
         }
     }
@@ -60,7 +61,7 @@ class CallbackRouter(
                 if (param == "real") {
                     editOrSend(
                         ctx,
-                        text = "⚠️ Подтвердите переход в *REAL* режим",
+                        text = TelegramMessageFormatter.confirmRealModeHtml(),
                         keyboard = TelegramMenuBuilder.confirmRealModeMenu()
                     )
                 } else {
@@ -80,57 +81,74 @@ class CallbackRouter(
 
     private suspend fun handleFilters(action: String, param: String?, ctx: RouterContext) {
         when (action) {
+            "page", "refresh" -> {
+                val page = param?.toIntOrNull()
+                    ?.coerceIn(0, TelegramUiPages.FILTERS_PAGE_COUNT - 1)
+                    ?: 0
+                showFilters(ctx, page)
+            }
             "inc", "dec" -> {
-                if (param != null) {
-                    service.updateFilterValue(param, action)
-                }
-                showFilters(ctx)
+                val (page, field) = parsePageAndKey(param)
+                field?.let { service.updateFilterValue(it, action) }
+                showFilters(ctx, page)
             }
             "toggle" -> {
-                if (param != null) {
-                    service.toggleFilterFlag(param)
-                }
-                showFilters(ctx)
+                val (page, key) = parsePageAndKey(param)
+                key?.let { service.toggleFilterFlag(it) }
+                showFilters(ctx, page)
             }
             "set_risk" -> {
-                if (param != null) {
-                    service.setMaxAiRugRisk(param)
-                }
-                showFilters(ctx)
+                val (page, level) = parsePageAndKey(param)
+                level?.let { service.setMaxAiRugRisk(it) }
+                showFilters(ctx, page)
             }
-            "refresh" -> showFilters(ctx)
         }
     }
 
     private suspend fun handleExit(action: String, param: String?, ctx: RouterContext) {
         when (action) {
+            "page", "refresh" -> {
+                val page = param?.toIntOrNull()
+                    ?.coerceIn(0, TelegramUiPages.EXIT_PAGE_COUNT - 1)
+                    ?: 0
+                showExitStrategy(ctx, page)
+            }
             "inc", "dec" -> {
-                if (param != null) {
-                    service.updateExitStrategyValue(param, action)
-                }
-                showExitStrategy(ctx)
+                val (page, field) = parsePageAndKey(param)
+                field?.let { service.updateExitStrategyValue(it, action) }
+                showExitStrategy(ctx, page)
             }
             "mode" -> {
-                if (param != null) {
-                    service.setExitStrategy(param)
-                }
-                showExitStrategy(ctx)
+                val (page, strategy) = parsePageAndKey(param)
+                strategy?.let { service.setExitStrategy(it) }
+                showExitStrategy(ctx, page)
             }
             "toggle" -> {
-                if (param != null) {
-                    service.toggleFilterFlag(param)
-                }
-                showExitStrategy(ctx)
+                val (page, key) = parsePageAndKey(param)
+                key?.let { service.toggleFilterFlag(it) }
+                showExitStrategy(ctx, page)
             }
-            "refresh" -> showExitStrategy(ctx)
         }
+    }
+
+    /**
+     * Формат {@code page~key}; без {@code ~} — совместимость со старыми callback (страница 0).
+     */
+    private fun parsePageAndKey(param: String?): Pair<Int, String?> {
+        val raw = param?.trim().orEmpty()
+        if (raw.isEmpty()) return 0 to null
+        val idx = raw.indexOf('~')
+        if (idx < 0) return 0 to raw
+        val left = raw.substring(0, idx)
+        val right = raw.substring(idx + 1)
+        val page = left.toIntOrNull() ?: return 0 to raw
+        return page to right.takeIf { it.isNotBlank() }
     }
 
     private suspend fun showMain(ctx: RouterContext, notice: String? = null) {
         val text = buildString {
             if (!notice.isNullOrBlank()) {
-                appendLine("`$notice`")
-                appendLine()
+                append(TelegramMessageFormatter.actionNotice(notice))
             }
             append(TelegramMessageFormatter.mainMenuMessage(service.getSystemSnapshot()))
         }
@@ -145,8 +163,7 @@ class CallbackRouter(
     private suspend fun showMode(ctx: RouterContext, notice: String? = null) {
         val text = buildString {
             if (!notice.isNullOrBlank()) {
-                appendLine("`$notice`")
-                appendLine()
+                append(TelegramMessageFormatter.actionNotice(notice))
             }
             append(TelegramMessageFormatter.modeMessage(service.getMode()))
         }
@@ -171,16 +188,18 @@ class CallbackRouter(
         editOrSend(ctx, text, TelegramMenuBuilder.monitoringMenu())
     }
 
-    private suspend fun showFilters(ctx: RouterContext) {
+    private suspend fun showFilters(ctx: RouterContext, page: Int = 0) {
         val view = service.getFilterSettingsView()
-        val text = TelegramMessageFormatter.filtersMessage(view)
-        editOrSend(ctx, text, TelegramMenuBuilder.filtersMenu(view))
+        val p = page.coerceIn(0, TelegramUiPages.FILTERS_PAGE_COUNT - 1)
+        val text = TelegramMessageFormatter.filtersMessage(view, p)
+        editOrSend(ctx, text, TelegramMenuBuilder.filtersMenu(view, p))
     }
 
-    private suspend fun showExitStrategy(ctx: RouterContext) {
+    private suspend fun showExitStrategy(ctx: RouterContext, page: Int = 0) {
         val view = service.getExitStrategyView()
-        val text = TelegramMessageFormatter.exitStrategyMessage(view)
-        editOrSend(ctx, text, TelegramMenuBuilder.exitStrategyMenu(view))
+        val p = page.coerceIn(0, TelegramUiPages.EXIT_PAGE_COUNT - 1)
+        val text = TelegramMessageFormatter.exitStrategyMessage(view, p)
+        editOrSend(ctx, text, TelegramMenuBuilder.exitStrategyMenu(view, p))
     }
 
     private suspend fun editOrSend(

@@ -52,5 +52,8 @@ data class MonitoredTokenView(
     val tokenAddress: String,
     val profitUsd: Double = 0.0,
     val priceChangePercent: Double = 0.0,
-    val investedUsd: Double = 0.0
+    val investedUsd: Double = 0.0,
+    /** REAL: последняя ошибка выхода через Jupiter (пока сделка не закрыта в блокчейне) */
+    val jupiterSellLastError: String = "",
+    val jupiterSellLastErrorAtMs: Long = 0L
 )

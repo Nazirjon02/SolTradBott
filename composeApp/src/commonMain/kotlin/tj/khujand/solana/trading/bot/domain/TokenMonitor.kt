@@ -58,7 +58,10 @@ data class MonitoredToken(
     var exitStage4Done: Boolean = false,           // Флаг: Stage 4 выполнен (или Aggressive фиксация)
     
     // ──── ДЕМО vs РЕАЛЬНЫЕ СДЕЛКИ ────
-    var demoBuyApplied: Boolean = false            // ⭐ true = демо-покупка (виртуальная), false = реальная через Jupiter
+    var demoBuyApplied: Boolean = false,           // ⭐ true = демо-покупка (виртуальная), false = реальная через Jupiter
+    /** Последняя ошибка продажи Jupiter (пока позиция в мониторинге и выход не прошёл) */
+    var jupiterSellLastError: String = "",
+    var jupiterSellLastErrorAtMs: Long = 0L
 )
 
 // ════════════════════════════════════════════════════════════════════════════════
@@ -505,15 +508,18 @@ class TokenMonitor {
         // Пытаемся продать через Jupiter ДО захвата мьютекса
         if (filterSettings.jupiterEnabled && tokenAmountRaw > 0L) {
             val pct = token.remainingPositionPct.coerceIn(0.0, 100.0)
-            val sellResult = runCatching {
+            val outcome = try {
                 sellTokenPercent(token, tokenAmountRaw, pct, token.lastMarketCap)
-            }.getOrNull()
+            } catch (e: Exception) {
+                JupiterSellOutcome(null, e.message ?: "Ошибка продажи")
+            }
+            val sellResult = outcome.result
             if (sellResult != null) {
                 realizedProfitUsd += sellResult.profitUsd
                 tokenAmountRaw = 0L
                 println("✅ Jupiter sell выполнен при принудительном закрытии ${token.tokenPair.baseToken?.symbol}")
             } else {
-                println("⚠️ Jupiter sell не удался при принудительном закрытии ${token.tokenPair.baseToken?.symbol}, закрываем без продажи")
+                println("⚠️ Jupiter sell не удался при принудительном закрытии ${token.tokenPair.baseToken?.symbol}: ${outcome.failureReason ?: "—"}, закрываем без продажи")
             }
         }
 
@@ -605,14 +611,31 @@ class TokenMonitor {
 
         if (filterSettings.jupiterEnabled && token.tokenAmountRaw > 0L) {
             val percentToSell = token.remainingPositionPct.coerceIn(0.0, 100.0)
-            val sellResult = sellTokenPercent(
-                token = token,
-                amountBase = token.tokenAmountRaw,
-                percent = percentToSell,
-                marketCap = token.lastMarketCap
-            )
+            val outcome = try {
+                sellTokenPercent(
+                    token = token,
+                    amountBase = token.tokenAmountRaw,
+                    percent = percentToSell,
+                    marketCap = token.lastMarketCap
+                )
+            } catch (e: Exception) {
+                JupiterSellOutcome(null, e.message ?: "Ошибка продажи")
+            }
+            val sellResult = outcome.result
             if (sellResult == null) {
-                println("⚠️ Ручное закрытие: продажа через Jupiter не удалась, токен остается в мониторинге")
+                val reason = outcome.failureReason ?: "Продажа Jupiter не выполнена"
+                println("⚠️ Ручное закрытие: $reason, токен остается в мониторинге")
+                listMutex.withLock {
+                    val ix = monitoredIndexByPairOrBase(pairOrBaseAddress)
+                    if (ix != -1) {
+                        val now = Clock.System.now().toEpochMilliseconds()
+                        _monitoredTokens[ix] = _monitoredTokens[ix].copy(
+                            jupiterSellLastError = reason,
+                            jupiterSellLastErrorAtMs = now
+                        )
+                    }
+                }
+                saveTokensToCache()
                 return
             }
             realizedProfitUsd += sellResult.profitUsd
@@ -691,15 +714,27 @@ class TokenMonitor {
         activeTokens.forEach { token ->
             if (filterSettings.jupiterEnabled && token.tokenAmountRaw > 0L) {
                 val percentToSell = token.remainingPositionPct.coerceIn(0.0, 100.0)
-                val sellResult = sellTokenPercent(
-                    token = token,
-                    amountBase = token.tokenAmountRaw,
-                    percent = percentToSell,
-                    marketCap = token.lastMarketCap
-                )
+                val outcome = try {
+                    sellTokenPercent(
+                        token = token,
+                        amountBase = token.tokenAmountRaw,
+                        percent = percentToSell,
+                        marketCap = token.lastMarketCap
+                    )
+                } catch (e: Exception) {
+                    JupiterSellOutcome(null, e.message ?: "Ошибка продажи")
+                }
+                val sellResult = outcome.result
                 if (sellResult == null) {
-                    println("⚠️ Очистка: продажа через Jupiter не удалась, токен остается в мониторинге")
-                    tokensToKeep.add(token)
+                    val reason = outcome.failureReason ?: "Продажа Jupiter не выполнена"
+                    println("⚠️ Очистка: $reason, токен остается в мониторинге")
+                    val now = Clock.System.now().toEpochMilliseconds()
+                    tokensToKeep.add(
+                        token.copy(
+                            jupiterSellLastError = reason,
+                            jupiterSellLastErrorAtMs = now
+                        )
+                    )
                     return@forEach
                 }
                 val realized = token.realizedProfitUsd + sellResult.profitUsd
@@ -979,6 +1014,12 @@ class TokenMonitor {
         val profitUsd: Double
     )
 
+    /** Результат попытки продажи через Jupiter (для UI / Telegram при неудаче) */
+    private data class JupiterSellOutcome(
+        val result: SellResult?,
+        val failureReason: String? = null
+    )
+
     private fun refreshCachedDependencies() {
         val normalizedPhrase = filterSettings.seedPhrase.trim().replace("\\s+".toRegex(), " ")
         val signerKey = normalizedPhrase
@@ -1080,14 +1121,15 @@ class TokenMonitor {
         amountBase: Long,
         percent: Double,
         marketCap: Double
-    ): SellResult? {
-        if (!filterSettings.jupiterEnabled) return null
-        if (percent <= 0) return null
+    ): JupiterSellOutcome {
+        if (!filterSettings.jupiterEnabled) return JupiterSellOutcome(null, null)
+        if (percent <= 0) return JupiterSellOutcome(null, null)
         val signer = getSigner() ?: run {
             println("❌ Jupiter sell: seed phrase empty or invalid")
-            return null
+            return JupiterSellOutcome(null, "Кошелёк недоступен (seed)")
         }
-        val inputMint = token.tokenPair.baseToken?.address ?: return null
+        val inputMint = token.tokenPair.baseToken?.address
+            ?: return JupiterSellOutcome(null, "Нет mint токена")
         val sellAmount = (amountBase * (percent / 100.0)).toLong().coerceAtLeast(1L)
 
         val quote = jupiterApi.getQuote(
@@ -1096,20 +1138,20 @@ class TokenMonitor {
             amount = sellAmount,
             slippageBps = filterSettings.slippageBps,
             apiKey = filterSettings.jupiterApiKey
-        ) ?: return null
+        ) ?: return JupiterSellOutcome(null, "Нет quote (ликвидность/slippage)")
 
         val swap = jupiterApi.getSwap(
             quote = quote,
             userPublicKey = signer.publicKeyBase58(),
             apiKey = filterSettings.jupiterApiKey,
             priorityFeeMode = filterSettings.jupiterPriorityFeeMode
-        ) ?: return null
-        val unsignedTx = swap.swapTransaction ?: return null
-        val signedTx = signTransactionBase64(unsignedTx, signer) ?: return null
-        val txId = getRpcClient().sendTransaction(signedTx) ?: return null
+        ) ?: return JupiterSellOutcome(null, "Ошибка сборки swap")
+        val unsignedTx = swap.swapTransaction ?: return JupiterSellOutcome(null, "Пустая транзакция swap")
+        val signedTx = signTransactionBase64(unsignedTx, signer) ?: return JupiterSellOutcome(null, "Подпись транзакции")
+        val txId = getRpcClient().sendTransaction(signedTx) ?: return JupiterSellOutcome(null, "Отправка в сеть")
         if (!getRpcClient().confirmTransaction(txId)) {
             println("⚠️ Jupiter sell tx not confirmed: $txId")
-            return null
+            return JupiterSellOutcome(null, "Транзакция не подтверждена")
         }
 
         val outAmountStr = quote["outAmount"]?.jsonPrimitive?.content
@@ -1119,7 +1161,7 @@ class TokenMonitor {
         val profitUsd = ((outAmount - costLamports).toDouble() / 1_000_000_000.0) * solPrice
 
         println("✅ Jupiter sell: in=${sellAmount} raw, out=${outAmount} lamports, tx=$txId (${percent.toInt()}%)")
-        return SellResult(outLamports = outAmount, profitUsd = profitUsd)
+        return JupiterSellOutcome(SellResult(outLamports = outAmount, profitUsd = profitUsd), null)
     }
 
     suspend fun testSwap(): String {
@@ -1287,15 +1329,41 @@ class TokenMonitor {
 
         val isAggressive = filterSettings.exitStrategy == "aggressive"
 
+        var jupiterSellLastError = token.jupiterSellLastError
+        var jupiterSellLastErrorAtMs = token.jupiterSellLastErrorAtMs
+        fun applyJupiterSellOutcome(outcome: JupiterSellOutcome) {
+            if (!filterSettings.jupiterEnabled) return
+            when {
+                outcome.result != null -> {
+                    jupiterSellLastError = ""
+                    jupiterSellLastErrorAtMs = 0L
+                }
+                outcome.failureReason != null -> {
+                    jupiterSellLastError = outcome.failureReason
+                    jupiterSellLastErrorAtMs = Clock.System.now().toEpochMilliseconds()
+                }
+            }
+        }
+        suspend fun tryJupiterSell(amountBase: Long, percent: Double, mc: Double): JupiterSellOutcome =
+            try {
+                sellTokenPercent(token, amountBase, percent, mc)
+            } catch (e: Exception) {
+                JupiterSellOutcome(null, e.message ?: "Ошибка Jupiter")
+            }
+
         // ════════════════════════════════════════════════════════════════════════════════
         // 🔥 AGGRESSIVE MODE: одна фиксация по % прибыли, остальное trailing
         // ════════════════════════════════════════════════════════════════════════════════
         // Срабатывает ОДИН РАЗ при достижении заданного % прибыли по цене
         if (isAggressive && !stage1Done && priceChangePercent >= filterSettings.aggressiveTakeProfitPct) {
             val pct = filterSettings.aggressiveSellPct.coerceIn(1.0, 100.0)
-            val sellResult = if (filterSettings.jupiterEnabled) {
-                sellTokenPercent(token, tokenAmountRaw, pct, marketCap)
-            } else null
+            val jupiterOutcome = if (filterSettings.jupiterEnabled) {
+                tryJupiterSell(tokenAmountRaw, pct, marketCap)
+            } else {
+                JupiterSellOutcome(null, null)
+            }
+            if (filterSettings.jupiterEnabled) applyJupiterSellOutcome(jupiterOutcome)
+            val sellResult = jupiterOutcome.result
             if (!filterSettings.jupiterEnabled || sellResult != null) {
                 remainingPct -= pct
                 tokenAmountRaw = (tokenAmountRaw - (tokenAmountRaw * (pct / 100.0)).toLong()).coerceAtLeast(0L)
@@ -1320,9 +1388,13 @@ class TokenMonitor {
 
         if (!isAggressive && !stage1Done && marketCap >= filterSettings.exitStage1Cap) {
             val pct = filterSettings.exitStage1Pct
-            val sellResult = if (filterSettings.jupiterEnabled) {
-                sellTokenPercent(token, tokenAmountRaw, pct, marketCap)
-            } else null
+            val jupiterOutcome = if (filterSettings.jupiterEnabled) {
+                tryJupiterSell(tokenAmountRaw, pct, marketCap)
+            } else {
+                JupiterSellOutcome(null, null)
+            }
+            if (filterSettings.jupiterEnabled) applyJupiterSellOutcome(jupiterOutcome)
+            val sellResult = jupiterOutcome.result
             if (!filterSettings.jupiterEnabled || sellResult != null) {
                 remainingPct -= pct
                 tokenAmountRaw = (tokenAmountRaw - (tokenAmountRaw * (pct / 100.0)).toLong()).coerceAtLeast(0L)
@@ -1346,9 +1418,13 @@ class TokenMonitor {
         }
         if (!isAggressive && !stage2Done && marketCap >= filterSettings.exitStage2Cap) {
             val pct = filterSettings.exitStage2Pct
-            val sellResult = if (filterSettings.jupiterEnabled) {
-                sellTokenPercent(token, tokenAmountRaw, pct, marketCap)
-            } else null
+            val jupiterOutcome = if (filterSettings.jupiterEnabled) {
+                tryJupiterSell(tokenAmountRaw, pct, marketCap)
+            } else {
+                JupiterSellOutcome(null, null)
+            }
+            if (filterSettings.jupiterEnabled) applyJupiterSellOutcome(jupiterOutcome)
+            val sellResult = jupiterOutcome.result
             if (!filterSettings.jupiterEnabled || sellResult != null) {
                 remainingPct -= pct
                 tokenAmountRaw = (tokenAmountRaw - (tokenAmountRaw * (pct / 100.0)).toLong()).coerceAtLeast(0L)
@@ -1372,9 +1448,13 @@ class TokenMonitor {
         }
         if (!isAggressive && !stage3Done && marketCap >= filterSettings.exitStage3Cap) {
             val pct = filterSettings.exitStage3Pct
-            val sellResult = if (filterSettings.jupiterEnabled) {
-                sellTokenPercent(token, tokenAmountRaw, pct, marketCap)
-            } else null
+            val jupiterOutcome = if (filterSettings.jupiterEnabled) {
+                tryJupiterSell(tokenAmountRaw, pct, marketCap)
+            } else {
+                JupiterSellOutcome(null, null)
+            }
+            if (filterSettings.jupiterEnabled) applyJupiterSellOutcome(jupiterOutcome)
+            val sellResult = jupiterOutcome.result
             if (!filterSettings.jupiterEnabled || sellResult != null) {
                 remainingPct -= pct
                 tokenAmountRaw = (tokenAmountRaw - (tokenAmountRaw * (pct / 100.0)).toLong()).coerceAtLeast(0L)
@@ -1398,9 +1478,13 @@ class TokenMonitor {
         }
         if (!isAggressive && !stage4Done && marketCap >= filterSettings.exitStage4Cap) {
             val pct = filterSettings.exitStage4Pct
-            val sellResult = if (filterSettings.jupiterEnabled) {
-                sellTokenPercent(token, tokenAmountRaw, pct, marketCap)
-            } else null
+            val jupiterOutcome = if (filterSettings.jupiterEnabled) {
+                tryJupiterSell(tokenAmountRaw, pct, marketCap)
+            } else {
+                JupiterSellOutcome(null, null)
+            }
+            if (filterSettings.jupiterEnabled) applyJupiterSellOutcome(jupiterOutcome)
+            val sellResult = jupiterOutcome.result
             if (!filterSettings.jupiterEnabled || sellResult != null) {
                 remainingPct -= pct
                 tokenAmountRaw = (tokenAmountRaw - (tokenAmountRaw * (pct / 100.0)).toLong()).coerceAtLeast(0L)
@@ -1424,6 +1508,13 @@ class TokenMonitor {
         }
 
         if (remainingPct < 0) remainingPct = 0.0
+        // Числовая «пыль» в % позиции: иначе позиция может остаться MONITORING без записи в историю
+        if (remainingPct > 0 && remainingPct < 1e-6) remainingPct = 0.0
+
+        // Остаток после частичных выходов (Aggressive / Stages), до принудительного выхода.
+        // Нужен для skipFinalHistory: не смешивать с forcedExit — SL/trailing/time могут быть true
+        // на том же тике, когда позиция уже полностью распродана стадиями.
+        val remainingAfterStages = remainingPct
 
         // ════════════════════════════════════════════════════════════════════════════════
         // 🛡️ ЗАЩИТНЫЕ МЕХАНИЗМЫ (Stop Loss, Trailing Stop, Pullback)
@@ -1479,7 +1570,9 @@ class TokenMonitor {
                     forcedExitExecuted = true
                 }
                 filterSettings.jupiterEnabled && tokenAmountRaw > 0 -> {
-                    val sellResult = sellTokenPercent(token, tokenAmountRaw, percentToSell, marketCap)
+                    val forcedOutcome = tryJupiterSell(tokenAmountRaw, percentToSell, marketCap)
+                    applyJupiterSellOutcome(forcedOutcome)
+                    val sellResult = forcedOutcome.result
                     if (sellResult != null) {
                         realizedProfitUsd += sellResult.profitUsd
                         tokenAmountRaw = 0L
@@ -1505,7 +1598,7 @@ class TokenMonitor {
             }
         }
 
-        val positionFullyClosed = remainingPct <= 0.0
+        val positionFullyClosed = remainingPct <= 1e-6
 
         // ──── ВЫЧИСЛЯЕМ ФИНАЛЬНЫЙ ПРОФИТ ────
         val finalProfitUsd = if (filterSettings.jupiterEnabled) {
@@ -1540,7 +1633,9 @@ class TokenMonitor {
             exitStage1Done = stage1Done,
             exitStage2Done = stage2Done,
             exitStage3Done = stage3Done,
-            exitStage4Done = stage4Done
+            exitStage4Done = stage4Done,
+            jupiterSellLastError = jupiterSellLastError,
+            jupiterSellLastErrorAtMs = jupiterSellLastErrorAtMs
         )
 
         listMutex.withLock {
@@ -1551,7 +1646,10 @@ class TokenMonitor {
             if (index != -1) {
                 // 💾 Сохраняем в историю если достигнут TP или SL
                 if (newStatus != TokenStatus.MONITORING) {
-                    val skipFinalHistory = closedByFullStageExit && !forcedExit
+                    // Пропускаем финальную строку saveToHistory, только если весь объём уже ушёл
+                    // частичными записями (savePartialExit); иначе — одна полная запись по сделке.
+                    val skipFinalHistory =
+                        closedByFullStageExit && remainingAfterStages <= 1e-6
                     addClosedToken(updatedToken, skipHistory = skipFinalHistory)
                     // ✅ Автоматически удаляем из списка мониторинга
                     _monitoredTokens.removeAt(index)

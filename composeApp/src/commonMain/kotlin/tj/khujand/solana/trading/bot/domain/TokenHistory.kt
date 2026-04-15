@@ -35,8 +35,7 @@ data class TokenHistory(
  * Менеджер для сохранения и загрузки истории токенов
  */
 object TokenHistoryManager {
-    private const val KEY_HISTORY = "token_history_v1"
-    
+
     /**
      * Сохранить токен в историю
      */
@@ -67,26 +66,21 @@ object TokenHistoryManager {
         
         val existingHistory = loadHistory()
         val updatedHistory = existingHistory + history
-        
-        tj.khujand.solana.trading.bot.util.AppSettings.putObject(KEY_HISTORY, updatedHistory)
+
+        TokenHistoryPersistence.save(updatedHistory)
         println("💾 Токен ${token.tokenPair.baseToken?.symbol} сохранен в историю: ${token.status}")
     }
     
     /**
      * Загрузить всю историю
      */
-    fun loadHistory(): List<TokenHistory> {
-        return tj.khujand.solana.trading.bot.util.AppSettings.getObjectSafe(
-            KEY_HISTORY,
-            emptyList<TokenHistory>()
-        )
-    }
+    fun loadHistory(): List<TokenHistory> = TokenHistoryPersistence.load()
     
     /**
      * Очистить историю
      */
     fun clearHistory() {
-        tj.khujand.solana.trading.bot.util.AppSettings.remove(KEY_HISTORY)
+        TokenHistoryPersistence.clear()
     }
     
     /**
@@ -104,7 +98,8 @@ object TokenHistoryManager {
             .groupBy { it.tokenPair.baseToken?.address ?: it.tokenPair.pairAddress ?: "${it.symbol}_${it.entryTime}" }
         val fullyClosedByPartials = partialGroups
             .filter { (tradeKey, exits) ->
-                tradeKey !in completedTradeKeys && exits.sumOf { it.partialExitPct.coerceAtLeast(0.0) } >= 99.0
+                // 98%: запас от округления сумм стадий; иначе «полная» сделка не попадала в totalTrades
+                tradeKey !in completedTradeKeys && exits.sumOf { it.partialExitPct.coerceAtLeast(0.0) } >= 98.0
             }
             .values
         val fullyClosedByPartialsCount = fullyClosedByPartials.size
@@ -248,7 +243,7 @@ object TokenHistoryManager {
 
         val existingHistory = loadHistory()
         val updatedHistory = existingHistory + history
-        tj.khujand.solana.trading.bot.util.AppSettings.putObject(KEY_HISTORY, updatedHistory)
+        TokenHistoryPersistence.save(updatedHistory)
         println("💾 Частичный выход сохранен: $stageLabel (${percent.toInt()}%)")
     }
 }

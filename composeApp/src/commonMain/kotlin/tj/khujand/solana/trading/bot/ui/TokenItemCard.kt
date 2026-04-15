@@ -155,6 +155,17 @@ fun TokenItemCard(
                     }
                 }
 
+                if (isLive && !token.demoBuyApplied && token.jupiterSellLastError.isNotBlank()) {
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text(
+                        "Jupiter: ${token.jupiterSellLastError}",
+                        fontSize = 11.sp,
+                        color = MaterialTheme.colorScheme.error,
+                        maxLines = 3,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+
                 Spacer(modifier = Modifier.height(14.dp))
 
                 // ── Token Address ──────────────────────────────────────────

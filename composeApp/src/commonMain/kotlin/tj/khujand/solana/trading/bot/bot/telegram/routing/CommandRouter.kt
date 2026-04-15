@@ -19,11 +19,21 @@ class CommandRouter(
             }
             "/monitor_start" -> {
                 val result = service.startTrading()
-                telegram.sendMessage(ctx.chatId, result.message, TelegramMenuBuilder.mainMenu())
+                telegram.sendMessage(
+                    ctx.chatId,
+                    TelegramMessageFormatter.actionNotice(result.message) +
+                        TelegramMessageFormatter.mainMenuMessage(service.getSystemSnapshot()),
+                    TelegramMenuBuilder.mainMenu()
+                )
             }
             "/monitor_stop" -> {
                 val result = service.stopTrading()
-                telegram.sendMessage(ctx.chatId, result.message, TelegramMenuBuilder.mainMenu())
+                telegram.sendMessage(
+                    ctx.chatId,
+                    TelegramMessageFormatter.actionNotice(result.message) +
+                        TelegramMessageFormatter.mainMenuMessage(service.getSystemSnapshot()),
+                    TelegramMenuBuilder.mainMenu()
+                )
             }
             "/mode" -> {
                 telegram.sendMessage(
@@ -81,19 +91,6 @@ class CommandRouter(
     }
 
     private suspend fun sendHelp(chatId: Long) {
-        val text = buildString {
-            appendLine("*Commands*")
-            appendLine("/start")
-            appendLine("/status")
-            appendLine("/monitor_start")
-            appendLine("/monitor_stop")
-            appendLine("/mode")
-            appendLine("/balance")
-            appendLine("/deals")
-            appendLine("/monitoring")
-            appendLine("/filters")
-            appendLine("/exit")
-        }
-        telegram.sendMessage(chatId, text, TelegramMenuBuilder.mainMenu())
+        telegram.sendMessage(chatId, TelegramMessageFormatter.helpMessage(), TelegramMenuBuilder.mainMenu())
     }
 }

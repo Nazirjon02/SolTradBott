@@ -478,7 +478,9 @@ class TradingBotService(
             tokenAddress = rawAddress,
             profitUsd = token.profitUsd,
             priceChangePercent = token.priceChangePercent,
-            investedUsd = token.investedUsd
+            investedUsd = token.investedUsd,
+            jupiterSellLastError = token.jupiterSellLastError,
+            jupiterSellLastErrorAtMs = token.jupiterSellLastErrorAtMs
         )
     }
 

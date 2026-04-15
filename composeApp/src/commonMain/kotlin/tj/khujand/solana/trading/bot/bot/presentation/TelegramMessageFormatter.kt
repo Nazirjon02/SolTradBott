@@ -9,165 +9,288 @@ import tj.khujand.solana.trading.bot.bot.domain.model.TradingMode
 import kotlin.math.absoluteValue
 
 object TelegramMessageFormatter {
+
+    fun escapeHtml(text: String): String =
+        text
+            .replace("&", "&amp;")
+            .replace("<", "&lt;")
+            .replace(">", "&gt;")
+
+    /** Короткое уведомление о результате действия (старт/стоп, смена режима и т.д.) */
+    fun actionNotice(message: String): String =
+        "<blockquote>${escapeHtml(message)}</blockquote>\n\n"
+
+    fun helpMessage(): String = buildString {
+        appendLine(bold("📖 Команды"))
+        appendLine("${cmd("/start")} — главное меню")
+        appendLine("${cmd("/status")} — статус системы")
+        appendLine("${cmd("/monitor_start")} — запуск мониторинга")
+        appendLine("${cmd("/monitor_stop")} — остановка")
+        appendLine("${cmd("/mode")} — режим demo / real")
+        appendLine("${cmd("/balance")} — баланс")
+        appendLine("${cmd("/deals")} — сводка по сделкам")
+        appendLine("${cmd("/monitoring")} — открытые позиции")
+        appendLine("${cmd("/filters")} — фильтры входа")
+        appendLine("${cmd("/exit")} — стратегия выхода")
+        appendLine()
+        appendLine(italic("Удобнее пользоваться кнопками меню под сообщением."))
+    }
+
     fun mainMenuMessage(snapshot: SystemSnapshot): String {
         return buildString {
-            appendLine("*SolTradBot Control Panel*")
+            appendLine(bold("⚡ SolTradBot"))
+            appendLine(italic("Панель управления"))
             appendLine()
-            appendLine("• Мониторинг: ${if (snapshot.isMonitoring) "🟢 active" else "⚪ stopped"}")
-            appendLine("• Режим: ${formatMode(snapshot.mode)}")
-            appendLine("• Demo balance: `$${formatUsd(snapshot.demoBalanceUsd)}`")
+            appendLine(sectionLabel("Сводка"))
+            appendLine(row("Мониторинг", monitoringLabel(snapshot.isMonitoring)))
+            appendLine(row("Режим", formatMode(snapshot.mode)))
+            appendLine(row("Баланс (demo)", codeUsd(snapshot.demoBalanceUsd)))
             appendLine(
-                "• Сделки: `${snapshot.dealsSummary.totalTrades}` " +
-                    "(profit `${snapshot.dealsSummary.profitableTrades}` / " +
-                    "sl `${snapshot.dealsSummary.losingTrades}` / " +
-                    "tp-trigger `${snapshot.dealsSummary.tpTriggerHits}`)"
+                row(
+                    "Сделки",
+                    "${code(snapshot.dealsSummary.totalTrades.toString())} · " +
+                        "✅${snapshot.dealsSummary.profitableTrades} · " +
+                        "✖${snapshot.dealsSummary.losingTrades} · " +
+                        "TP ${snapshot.dealsSummary.tpTriggerHits}"
+                )
             )
+            appendLine()
+            appendLine(italic("Выберите действие ниже ↓"))
         }
     }
 
     fun statusMessage(snapshot: SystemSnapshot): String {
         return buildString {
-            appendLine("*System Status*")
-            appendLine("Мониторинг: ${if (snapshot.isMonitoring) "🟢 работает" else "⚪ остановлен"}")
-            appendLine("Режим: ${formatMode(snapshot.mode)}")
-            appendLine("Баланс: `$${formatUsd(snapshot.demoBalanceUsd)}`")
+            appendLine(bold("📊 Статус системы"))
             appendLine()
-            appendLine("*Сделки*")
-            appendLine(formatDealsSummary(snapshot.dealsSummary))
+            appendLine(sectionLabel("Работа"))
+            appendLine(row("Мониторинг", monitoringLabel(snapshot.isMonitoring)))
+            appendLine(row("Режим", formatMode(snapshot.mode)))
+            appendLine(row("Баланс", codeUsd(snapshot.demoBalanceUsd)))
             appendLine()
-            appendLine("*Ключевые параметры*")
+            appendLine(sectionLabel("Сделки"))
+            appendLine(formatDealsSummaryHtml(snapshot.dealsSummary))
+            appendLine()
+            appendLine(sectionLabel("Ключевые параметры"))
             snapshot.keyParameters.forEach { (k, v) ->
-                appendLine("• `$k`: `$v`")
+                appendLine("• ${escapeHtml(k)} → ${code(v)}")
             }
         }
     }
 
     fun balanceMessage(balanceUsd: Double, mode: TradingMode): String {
         return buildString {
-            appendLine("*Balance*")
-            appendLine("Режим: ${formatMode(mode)}")
-            appendLine("Текущий demo баланс: `$${formatUsd(balanceUsd)}`")
-            appendLine("_Нажмите Refresh для обновления_")
+            appendLine(bold("💰 Баланс"))
+            appendLine()
+            appendLine(row("Режим", formatMode(mode)))
+            appendLine(row("Сумма (demo)", codeUsd(balanceUsd)))
+            appendLine()
+            appendLine(italic("🔄 Обновить — актуальные цифры"))
         }
     }
 
     fun dealsSummaryMessage(summary: DealsSummary): String {
         return buildString {
-            appendLine("*Deals Summary*")
-            appendLine(formatDealsSummary(summary))
+            appendLine(bold("📈 Сделки"))
+            appendLine()
+            appendLine(formatDealsSummaryHtml(summary))
         }
     }
 
     fun monitoringMessage(tokens: List<MonitoredTokenView>): String {
         return buildString {
-            appendLine("*Monitoring Tokens*")
+            appendLine(bold("👁 Мониторинг позиций"))
             appendLine()
             if (tokens.isEmpty()) {
-                appendLine("Сейчас нет монет в мониторинге.")
+                appendLine(italic("Сейчас нет открытых позиций."))
             } else {
                 tokens.forEachIndexed { index, token ->
                     val pnlSign = if (token.profitUsd >= 0) "+" else ""
                     val pctSign = if (token.priceChangePercent >= 0) "+" else ""
-                    appendLine("${index + 1}. *${token.name}*")
-                    appendLine("`${token.tokenAddress}`")
-                    appendLine("P&L: `${pnlSign}$${formatUsd(token.profitUsd)}` (`${pctSign}${token.priceChangePercent.toInt()}%`)")
+                    appendLine(bold("${index + 1}. ${escapeHtml(token.name)}"))
+                    appendLine(code(token.tokenAddress))
+                    val pnlText = "${pnlSign}$$${formatUsd(token.profitUsd)}"
+                    appendLine(
+                        "P&amp;L: ${bold(pnlText)} (${pctSign}${token.priceChangePercent.toInt()}%)"
+                    )
+                    if (token.jupiterSellLastError.isNotBlank()) {
+                        appendLine(
+                            "⚠️ Jupiter: ${italic(escapeHtml(token.jupiterSellLastError))}"
+                        )
+                    }
                     appendLine()
                 }
-                appendLine("_Адрес токена можно скопировать как code-текст_")
+                appendLine(italic("Адрес токена можно скопировать из блока выше."))
+                if (tokens.any { it.jupiterSellLastError.isNotBlank() }) {
+                    appendLine()
+                    appendLine(
+                        italic("Пока продажа Jupiter не прошла, позиция остаётся здесь; запись в сделках появится после успешного выхода.")
+                    )
+                }
             }
         }
     }
 
-    fun filtersMessage(view: FilterSettingsView): String {
+    fun filtersMessage(view: FilterSettingsView): String =
+        filtersMessage(view, 0)
+
+    fun filtersMessage(view: FilterSettingsView, page: Int): String {
         val s = view.settings
+        val p = page.coerceIn(0, TelegramUiPages.FILTERS_PAGE_COUNT - 1)
         return buildString {
-            appendLine("*Filter Settings*")
-            appendLine("• maxTokensToMonitor: `${s.maxTokensToMonitor}`")
-            appendLine("• entryMaxAgeMinutes: `${s.entryMaxAgeMinutes}`")
-            appendLine("• entryMinMarketCap: `${s.entryMinMarketCap.toInt()}`")
-            appendLine("• entryMaxMarketCap: `${s.entryMaxMarketCap.toInt()}`")
-            appendLine("• entryMinLiquidity: `${s.entryMinLiquidity.toInt()}`")
-            appendLine("• entryMinVolume24h: `${s.entryMinVolume.toInt()}`")
-            appendLine("• entryMinVolumeM5: `${s.entryMinVolumeM5.toInt()}`")
-            appendLine("• useVolumeH24: `${s.useVolumeH24}`")
-            appendLine("• useVolumeM5: `${s.useVolumeM5}`")
-            appendLine("• requireSocials: `${s.requireSocials}`")
-            appendLine("• requireWebsite: `${s.requireWebsite}`")
+            appendLine(bold("🎯 Фильтры входа") + " " + pageIndicator(p + 1, TelegramUiPages.FILTERS_PAGE_COUNT))
             appendLine()
-            appendLine("*AI checks*")
-            appendLine("• useAiAnalysis: `${s.useAiAnalysis}`")
-            appendLine("• aiFailClosed: `${s.aiFailClosed}`")
-            appendLine("• minAiScore: `${s.minAiScore}`")
-            appendLine("• maxAiRugRisk: `${s.maxAiRugRisk}`")
+            when (p) {
+                0 -> {
+                    appendLine(sectionLabel("Пороги входа"))
+                    appendLine(row("Макс. токенов", code(s.maxTokensToMonitor.toString())))
+                    appendLine(row("Макс. возраст (мин)", code(s.entryMaxAgeMinutes.toString())))
+                    appendLine(
+                        row(
+                            "Капитализация",
+                            "${code(s.entryMinMarketCap.toInt().toString())} — ${code(s.entryMaxMarketCap.toInt().toString())}"
+                        )
+                    )
+                    appendLine(row("Ликвидность ≥", code(s.entryMinLiquidity.toInt().toString())))
+                    appendLine(row("Объём 24h ≥", code(s.entryMinVolume.toInt().toString())))
+                    appendLine(row("Объём 5m ≥", code(s.entryMinVolumeM5.toInt().toString())))
+                    appendLine()
+                    appendLine(sectionLabel("Объёмы и соцсети"))
+                    appendLine(rowToggle("Vol 24h", s.useVolumeH24))
+                    appendLine(rowToggle("Vol 5m", s.useVolumeM5))
+                    appendLine(rowToggle("Соцсети", s.requireSocials))
+                    appendLine(rowToggle("Сайт", s.requireWebsite))
+                }
+                1 -> {
+                    appendLine(sectionLabel("AI"))
+                    appendLine(rowToggle("Анализ AI", s.useAiAnalysis))
+                    appendLine(rowToggle("Закрывать при сбое AI", s.aiFailClosed))
+                    appendLine(row("Min AI score", code(s.minAiScore.toString())))
+                    appendLine(row("Max rug risk", code(s.maxAiRugRisk.toString())))
+                }
+                else -> {
+                    appendLine(sectionLabel("Риски и стопы"))
+                    appendLine(row("Max дневной убыток ($)", code(s.maxDailyLossUsd.toInt().toString())))
+                    appendLine(row("Max экспозиция ($)", code(s.maxTotalExposureUsd.toInt().toString())))
+                    appendLine(row("Серия убытков", code(s.maxConsecutiveLosses.toString())))
+                    appendLine(row("SL по цене", code("${s.stopLossByPricePct.toInt()}%")))
+                    appendLine(row("SL по капе", code("${s.stopLossByMarketCapPct.toInt()}%")))
+                    appendLine(row("Трейлинг", code("${s.trailingStopPct.toInt()}%")))
+                    appendLine(row("Откат стадии", code("${s.stagePullbackPct.toInt()}%")))
+                }
+            }
             appendLine()
-            appendLine("*Risk limits*")
-            appendLine("• maxDailyLossUsd: `${s.maxDailyLossUsd.toInt()}`")
-            appendLine("• maxTotalExposureUsd: `${s.maxTotalExposureUsd.toInt()}`")
-            appendLine("• maxConsecutiveLosses: `${s.maxConsecutiveLosses}`")
-            appendLine("• stopLossByPricePct: `${s.stopLossByPricePct.toInt()}%`")
-            appendLine("• stopLossByMarketCapPct: `${s.stopLossByMarketCapPct.toInt()}%`")
-            appendLine("• trailingStopPct: `${s.trailingStopPct.toInt()}%`")
-            appendLine("• stagePullbackPct: `${s.stagePullbackPct.toInt()}%`")
-            appendLine()
-            appendLine("_Изменение параметров доступно через кнопки ниже_")
+            appendLine(italic(filtersFooterHint(p)))
         }
     }
 
-    fun exitStrategyMessage(view: ExitStrategyView): String {
+    fun exitStrategyMessage(view: ExitStrategyView): String =
+        exitStrategyMessage(view, 0)
+
+    fun exitStrategyMessage(view: ExitStrategyView, page: Int): String {
         val s = view.settings
+        val p = page.coerceIn(0, TelegramUiPages.EXIT_PAGE_COUNT - 1)
         return buildString {
-            appendLine("*Exit Strategy*")
-            appendLine("• strategy: `${s.exitStrategy}`")
-            appendLine("• aggressiveTakeProfitPct: `${s.aggressiveTakeProfitPct.toInt()}%`")
-            appendLine("• aggressiveSellPct: `${s.aggressiveSellPct.toInt()}%`")
+            appendLine(bold("📤 Стратегия выхода") + " " + pageIndicator(p + 1, TelegramUiPages.EXIT_PAGE_COUNT))
             appendLine()
-            appendLine("*Stages*")
-            appendLine("• stage1: `${s.exitStage1Cap.toInt()}` / `${s.exitStage1Pct.toInt()}%`")
-            appendLine("• stage2: `${s.exitStage2Cap.toInt()}` / `${s.exitStage2Pct.toInt()}%`")
-            appendLine("• stage3: `${s.exitStage3Cap.toInt()}` / `${s.exitStage3Pct.toInt()}%`")
-            appendLine("• stage4: `${s.exitStage4Cap.toInt()}` / `${s.exitStage4Pct.toInt()}%`")
-            appendLine()
-            appendLine("*⏱️ Time-based Exit*")
-            appendLine("• useTimeBasedExit: `${s.useTimeBasedExit}`")
-            appendLine("• timeBasedExitMinutes: `${s.timeBasedExitMinutes} мин`")
-            appendLine()
-            appendLine("*🕐 Trading Hours*")
-            val hoursStatus = if (s.tradingHoursEnabled) "ON" else "OFF"
-            appendLine("• tradingHours: `$hoursStatus`")
-            if (s.tradingHoursEnabled) {
-                appendLine("• window: `${s.tradingHoursStartUtcHour}:00 – ${s.tradingHoursEndUtcHour}:00 UTC`")
+            when (p) {
+                0 -> {
+                    appendLine(sectionLabel("Режим"))
+                    appendLine(row("Тип", code(s.exitStrategy)))
+                    appendLine(row("Aggressive TP", code("${s.aggressiveTakeProfitPct.toInt()}%")))
+                    appendLine(row("Aggressive sell", code("${s.aggressiveSellPct.toInt()}%")))
+                    appendLine()
+                    appendLine(sectionLabel("Стадии (кап / %)"))
+                    appendLine(row("1", "${code(s.exitStage1Cap.toInt().toString())} / ${code("${s.exitStage1Pct.toInt()}%")}"))
+                    appendLine(row("2", "${code(s.exitStage2Cap.toInt().toString())} / ${code("${s.exitStage2Pct.toInt()}%")}"))
+                    appendLine(row("3", "${code(s.exitStage3Cap.toInt().toString())} / ${code("${s.exitStage3Pct.toInt()}%")}"))
+                    appendLine(row("4", "${code(s.exitStage4Cap.toInt().toString())} / ${code("${s.exitStage4Pct.toInt()}%")}"))
+                }
+                else -> {
+                    appendLine(sectionLabel("Время"))
+                    appendLine(rowToggle("Выход по таймеру", s.useTimeBasedExit))
+                    appendLine(row("Минуты", code(s.timeBasedExitMinutes.toString())))
+                    appendLine()
+                    appendLine(sectionLabel("Торговые часы (UTC)"))
+                    appendLine(rowToggle("Ограничение по часам", s.tradingHoursEnabled))
+                    if (s.tradingHoursEnabled) {
+                        appendLine(row("Окно", code("${s.tradingHoursStartUtcHour}:00 – ${s.tradingHoursEndUtcHour}:00")))
+                    }
+                }
             }
             appendLine()
-            appendLine("_Изменение параметров доступно через кнопки ниже_")
+            appendLine(italic(exitFooterHint(p)))
         }
+    }
+
+    private fun pageIndicator(current: Int, total: Int): String =
+        italic("($current/$total)")
+
+    private fun filtersFooterHint(page: Int): String = when (page) {
+        0 -> "◀ ▶ — страницы. Пороги и переключатели объёмов — кнопками ниже."
+        1 -> "AI-пороги и риск-профиль — кнопками ± и рядом риска."
+        else -> "Стопы и лимиты — кнопками ± ниже."
+    }
+
+    private fun exitFooterHint(page: Int): String = when (page) {
+        0 -> "◀ ▶ — вторая страница: таймер и торговые часы."
+        else -> "Таймер и часы — кнопками ниже."
     }
 
     fun modeMessage(mode: TradingMode): String {
         return buildString {
-            appendLine("*Trading Mode*")
-            appendLine("Текущий режим: ${formatMode(mode)}")
+            appendLine(bold("🔐 Режим торговли"))
             appendLine()
-            appendLine("⚠️ `real` режим использует реальные сделки через Jupiter.")
+            appendLine(row("Сейчас", formatMode(mode)))
+            appendLine()
+            appendLine("⚠️ ${bold("REAL")}: реальные сделки через Jupiter.")
         }
     }
 
-    private fun formatDealsSummary(summary: DealsSummary): String {
-        val pnlPrefix = if (summary.netProfitUsd >= 0) "+" else "-"
+    fun confirmRealModeHtml(): String =
+        buildString {
+            appendLine(bold("⚠️ Подтверждение"))
+            appendLine()
+            appendLine("Перейти в режим ${code("REAL")}?")
+            appendLine(italic("Реальные средства и исполнение на бирже."))
+        }
+
+    private fun formatDealsSummaryHtml(summary: DealsSummary): String {
+        val pnlPrefix = if (summary.netProfitUsd >= 0) "+" else "−"
+        val pnlVal = formatUsd(summary.netProfitUsd.absoluteValue)
         return buildString {
-            appendLine("• Всего: `${summary.totalTrades}`")
-            appendLine("• Profitable closes: `+${summary.profitableTrades}`")
-            appendLine("• TP trigger hits: `${summary.tpTriggerHits}`")
-            appendLine("• Убыточные: `-${summary.losingTrades}`")
-            appendLine("• Win rate: `${summary.winRatePct.toInt()}%`")
-            appendLine("• Итог PnL: `${pnlPrefix}$${formatUsd(summary.netProfitUsd.absoluteValue)}`")
+            appendLine(row("Всего", code(summary.totalTrades.toString())))
+            appendLine(row("В плюс", code("+${summary.profitableTrades}")))
+            appendLine(row("TP сработало", code(summary.tpTriggerHits.toString())))
+            appendLine(row("В минус", code("−${summary.losingTrades}")))
+            appendLine(row("Win rate", code("${summary.winRatePct.toInt()}%")))
+            appendLine(row("Итог P&amp;L", bold("${pnlPrefix}$$${pnlVal}")))
         }
     }
 
-    private fun formatMode(mode: TradingMode): String {
-        return if (mode == TradingMode.REAL) "🔴 real" else "🟢 demo"
-    }
+    private fun monitoringLabel(active: Boolean): String =
+        if (active) "🟢 активен" else "⚪ выкл"
 
-    private fun formatUsd(value: Double): String {
-        return (kotlin.math.round(value * 100.0) / 100.0).toString()
-    }
+    private fun formatMode(mode: TradingMode): String =
+        if (mode == TradingMode.REAL) "🔴 real" else "🟢 demo"
+
+    private fun formatUsd(value: Double): String =
+        (kotlin.math.round(value * 100.0) / 100.0).toString()
+
+    private fun bold(s: String) = "<b>$s</b>"
+
+    private fun italic(s: String) = "<i>$s</i>"
+
+    private fun code(s: String) = "<code>${escapeHtml(s)}</code>"
+
+    private fun codeUsd(value: Double) = "<code>\$${escapeHtml(formatUsd(value))}</code>"
+
+    private fun cmd(s: String) = "<code>${escapeHtml(s)}</code>"
+
+    private fun sectionLabel(title: String) = "▸ ${bold(escapeHtml(title))}"
+
+    private fun row(label: String, value: String) = "• ${escapeHtml(label)}: $value"
+
+    private fun rowToggle(label: String, on: Boolean) =
+        "• ${escapeHtml(label)}: ${if (on) "✅" else "❌"}"
 }
