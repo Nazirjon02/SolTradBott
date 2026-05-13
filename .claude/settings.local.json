@@ -6,7 +6,8 @@
       "Bash(xargs grep -l \"^data class FilterSettings\\\\|^class FilterSettings\")",
       "WebSearch",
       "Bash(xargs grep -l \"data class FilterSettings\")",
-      "Bash(xargs grep -l \"FilterSettings\")"
+      "Bash(xargs grep -l \"FilterSettings\")",
+      "Bash(./gradlew :composeApp:compileKotlinJvm --quiet)"
     ]
   }
 }

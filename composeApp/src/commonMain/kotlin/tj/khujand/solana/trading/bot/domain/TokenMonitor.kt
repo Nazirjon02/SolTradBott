@@ -114,8 +114,11 @@ class TokenMonitor {
     private val _monitoredTokens = mutableStateListOf<MonitoredToken>()
     val monitoredTokens: List<MonitoredToken> get() = _monitoredTokens
 
+    // Callbacks
+    private var onTokenClosedCallback: (MonitoredToken) -> Unit = {}
+
     // Настройки по умолчанию
-    var filterSettings = FilterSettings() 
+    var filterSettings = FilterSettings()
         set(value) {
             field = value
             refreshCachedDependencies()
@@ -146,6 +149,7 @@ class TokenMonitor {
         intervalSeconds: Int = 30,                 // ⭐ Интервал обновления в секундах (30 сек по умолчанию)
         onNewTokenFound: (MonitoredToken) -> Unit = {},   // Callback: новый токен найден и добавлен
         onTokenUpdated: (MonitoredToken) -> Unit = {},    // Callback: токен обновлён (цена/прибыль изменились)
+        onTokenClosed: (MonitoredToken) -> Unit = {},     // Callback: токен закрыт (TP или SL)
         onRequestStateChanged: (Boolean) -> Unit = {},    // Callback: статус запроса к API (true=загрузка)
         onError: (String) -> Unit = {}             // Callback: произошла ошибка
     ) {
@@ -155,7 +159,8 @@ class TokenMonitor {
         }
 
         isMonitoring = true
-        allowNewTokenDiscovery = true  // 🔴 Сбрасываем флаг
+        allowNewTokenDiscovery = true
+        onTokenClosedCallback = onTokenClosed
         println("🚀 Запуск мониторинга с фильтрами:")
         println("   - Возраст токена: <= ${filterSettings.entryMaxAgeMinutes} мин")
         println("   - Market Cap: ${filterSettings.entryMinMarketCap.toInt()} - ${filterSettings.entryMaxMarketCap.toInt()} USD")
@@ -1057,6 +1062,7 @@ class TokenMonitor {
             closedTokenAddresses.add(tokenKey)
             saveClosedTokens()
         }
+        runCatching { onTokenClosedCallback(token) }
     }
 
     private fun saveClosedTokens() {

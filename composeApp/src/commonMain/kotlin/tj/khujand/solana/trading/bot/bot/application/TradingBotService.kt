@@ -389,27 +389,39 @@ class TradingBotService(
             "aggressiveSellPct" -> settings.copy(
                 aggressiveSellPct = (settings.aggressiveSellPct + delta).coerceIn(field.min, field.max)
             )
-            "exitStage1Cap" -> settings.copy(
-                exitStage1Cap = (settings.exitStage1Cap + delta).coerceIn(field.min, field.max)
-            )
+            "exitStage1Cap" -> {
+                // Cap1 не может быть >= Cap2
+                val v = (settings.exitStage1Cap + delta).coerceIn(field.min, settings.exitStage2Cap - field.step)
+                settings.copy(exitStage1Cap = v)
+            }
             "exitStage1Pct" -> settings.copy(
                 exitStage1Pct = (settings.exitStage1Pct + delta).coerceIn(field.min, field.max)
             )
-            "exitStage2Cap" -> settings.copy(
-                exitStage2Cap = (settings.exitStage2Cap + delta).coerceIn(field.min, field.max)
-            )
+            "exitStage2Cap" -> {
+                // Cap2 должен быть между Cap1 и Cap3
+                val v = (settings.exitStage2Cap + delta).coerceIn(
+                    settings.exitStage1Cap + field.step, settings.exitStage3Cap - field.step
+                )
+                settings.copy(exitStage2Cap = v)
+            }
             "exitStage2Pct" -> settings.copy(
                 exitStage2Pct = (settings.exitStage2Pct + delta).coerceIn(field.min, field.max)
             )
-            "exitStage3Cap" -> settings.copy(
-                exitStage3Cap = (settings.exitStage3Cap + delta).coerceIn(field.min, field.max)
-            )
+            "exitStage3Cap" -> {
+                // Cap3 должен быть между Cap2 и Cap4
+                val v = (settings.exitStage3Cap + delta).coerceIn(
+                    settings.exitStage2Cap + field.step, settings.exitStage4Cap - field.step
+                )
+                settings.copy(exitStage3Cap = v)
+            }
             "exitStage3Pct" -> settings.copy(
                 exitStage3Pct = (settings.exitStage3Pct + delta).coerceIn(field.min, field.max)
             )
-            "exitStage4Cap" -> settings.copy(
-                exitStage4Cap = (settings.exitStage4Cap + delta).coerceIn(field.min, field.max)
-            )
+            "exitStage4Cap" -> {
+                // Cap4 не может быть <= Cap3
+                val v = (settings.exitStage4Cap + delta).coerceIn(settings.exitStage3Cap + field.step, field.max)
+                settings.copy(exitStage4Cap = v)
+            }
             "exitStage4Pct" -> settings.copy(
                 exitStage4Pct = (settings.exitStage4Pct + delta).coerceIn(field.min, field.max)
             )
@@ -426,6 +438,52 @@ class TradingBotService(
         }
         FilterSettingsManager.saveSettings(updated)
         return ActionResult(success = true, message = "Параметр ${field.title} обновлен")
+    }
+
+    fun applyExitPreset(preset: String): ActionResult {
+        val settings = FilterSettingsManager.loadSettings()
+        val updated = when (preset.lowercase()) {
+            "conservative" -> settings.copy(
+                exitStrategy = "stages",
+                exitStage1Cap = 100_000.0, exitStage1Pct = 40.0,
+                exitStage2Cap = 200_000.0, exitStage2Pct = 30.0,
+                exitStage3Cap = 350_000.0, exitStage3Pct = 20.0,
+                exitStage4Cap = 500_000.0, exitStage4Pct = 10.0,
+                trailingStopPct = 25.0, stagePullbackPct = 25.0,
+                stopLossByPricePct = 20.0, stopLossByMarketCapPct = 20.0,
+                timeBasedExitMinutes = 20, useTimeBasedExit = true
+            )
+            "balanced" -> settings.copy(
+                exitStrategy = "stages",
+                exitStage1Cap = 200_000.0, exitStage1Pct = 30.0,
+                exitStage2Cap = 350_000.0, exitStage2Pct = 30.0,
+                exitStage3Cap = 500_000.0, exitStage3Pct = 20.0,
+                exitStage4Cap = 750_000.0, exitStage4Pct = 20.0,
+                trailingStopPct = 35.0, stagePullbackPct = 35.0,
+                stopLossByPricePct = 25.0, stopLossByMarketCapPct = 30.0,
+                timeBasedExitMinutes = 30, useTimeBasedExit = true
+            )
+            "moon" -> settings.copy(
+                exitStrategy = "aggressive",
+                aggressiveTakeProfitPct = 200.0, aggressiveSellPct = 30.0,
+                exitStage1Cap = 200_000.0, exitStage1Pct = 30.0,
+                exitStage2Cap = 350_000.0, exitStage2Pct = 30.0,
+                exitStage3Cap = 500_000.0, exitStage3Pct = 20.0,
+                exitStage4Cap = 750_000.0, exitStage4Pct = 20.0,
+                trailingStopPct = 45.0, stagePullbackPct = 45.0,
+                stopLossByPricePct = 30.0, stopLossByMarketCapPct = 35.0,
+                timeBasedExitMinutes = 45, useTimeBasedExit = true
+            )
+            else -> return ActionResult(success = false, message = "Пресет не найден")
+        }
+        FilterSettingsManager.saveSettings(updated)
+        val name = when (preset.lowercase()) {
+            "conservative" -> "🛡️ Консервативный"
+            "balanced" -> "⚖️ Сбалансированный"
+            "moon" -> "🚀 Мун"
+            else -> preset
+        }
+        return ActionResult(success = true, message = "Пресет применён: $name")
     }
 
     fun setExitStrategy(mode: String): ActionResult {
@@ -472,6 +530,16 @@ class TradingBotService(
 
     fun unsubscribeOnTokenFound(id: Long) {
         engineController.unsubscribeOnTokenFound(id)
+    }
+
+    fun subscribeOnTokenClosed(listener: (MonitoredTokenView) -> Unit): Long {
+        return engineController.subscribeOnTokenClosed { token ->
+            listener(toMonitoredTokenView(token))
+        }
+    }
+
+    fun unsubscribeOnTokenClosed(id: Long) {
+        engineController.unsubscribeOnTokenClosed(id)
     }
 
     private fun toMonitoredTokenView(token: MonitoredToken): MonitoredTokenView {

@@ -129,42 +129,61 @@ object TelegramMenuBuilder {
     fun exitStrategyMenu(view: ExitStrategyView, page: Int): TelegramInlineKeyboard {
         val p = page.coerceIn(0, TelegramUiPages.EXIT_PAGE_COUNT - 1)
         val rows = mutableListOf<List<TelegramInlineKeyboardButton>>()
-        if (TelegramUiPages.EXIT_PAGE_COUNT > 1) {
-            rows += listOf(
-                button(
-                    "◀",
-                    "exit",
-                    "page",
-                    TelegramUiPages.prevPage(p, TelegramUiPages.EXIT_PAGE_COUNT).toString()
-                ),
-                button(
-                    "▶",
-                    "exit",
-                    "page",
-                    TelegramUiPages.nextPage(p, TelegramUiPages.EXIT_PAGE_COUNT).toString()
-                )
-            )
-        }
-        if (p == 0) {
-            rows += listOf(
-                button("📊 Стадии ${if (view.settings.exitStrategy == "stages") "✅" else "·"}", "exit", "mode", pp(p, "stages")),
-                button("⚡ Агресс. ${if (view.settings.exitStrategy == "aggressive") "✅" else "·"}", "exit", "mode", pp(p, "aggressive"))
-            )
-        }
-        view.editableFields
-            .filter { TelegramUiPages.exitFieldPage(it.key) == p }
-            .forEach { field ->
+        val isAggressive = view.settings.exitStrategy == "aggressive"
+
+        rows += listOf(
+            button("◀", "exit", "page", TelegramUiPages.prevPage(p, TelegramUiPages.EXIT_PAGE_COUNT).toString()),
+            button("▶", "exit", "page", TelegramUiPages.nextPage(p, TelegramUiPages.EXIT_PAGE_COUNT).toString())
+        )
+
+        when (p) {
+            0 -> {
+                // Выбор режима
                 rows += listOf(
-                    button("➖ ${field.title}", "exit", "dec", pp(p, field.key)),
-                    button("➕ ${field.title}", "exit", "inc", pp(p, field.key))
+                    button("📊 Стадии ${if (!isAggressive) "✅" else "·"}", "exit", "mode", pp(p, "stages")),
+                    button("⚡ Агресс. ${if (isAggressive) "✅" else "·"}", "exit", "mode", pp(p, "aggressive"))
+                )
+                // Пресеты одной строкой
+                rows += listOf(
+                    button("🛡️ Консерв.", "exit", "preset", pp(p, "conservative")),
+                    button("⚖️ Баланс", "exit", "preset", pp(p, "balanced")),
+                    button("🚀 Мун", "exit", "preset", pp(p, "moon"))
+                )
+                // Только поля активного режима
+                val modeKeys = if (isAggressive) {
+                    listOf("aggressiveTakeProfitPct", "aggressiveSellPct")
+                } else {
+                    listOf(
+                        "exitStage1Cap", "exitStage1Pct",
+                        "exitStage2Cap", "exitStage2Pct",
+                        "exitStage3Cap", "exitStage3Pct",
+                        "exitStage4Cap", "exitStage4Pct"
+                    )
+                }
+                view.editableFields.filter { it.key in modeKeys }.forEach { field ->
+                    rows += listOf(
+                        button("➖ ${field.title}", "exit", "dec", pp(p, field.key)),
+                        button("➕ ${field.title}", "exit", "inc", pp(p, field.key))
+                    )
+                }
+            }
+            1 -> {
+                // Временные настройки
+                view.editableFields
+                    .filter { TelegramUiPages.exitFieldPage(it.key) == 1 }
+                    .forEach { field ->
+                        rows += listOf(
+                            button("➖ ${field.title}", "exit", "dec", pp(p, field.key)),
+                            button("➕ ${field.title}", "exit", "inc", pp(p, field.key))
+                        )
+                    }
+                rows += listOf(
+                    button("⏱️ Таймер ${if (view.settings.useTimeBasedExit) "✅" else "❌"}", "exit", "toggle", pp(p, "useTimeBasedExit")),
+                    button("🕐 Часы UTC ${if (view.settings.tradingHoursEnabled) "✅" else "❌"}", "exit", "toggle", pp(p, "tradingHoursEnabled"))
                 )
             }
-        if (p == 1) {
-            rows += listOf(
-                button("⏱️ По времени ${if (view.settings.useTimeBasedExit) "✅" else "❌"}", "exit", "toggle", pp(p, "useTimeBasedExit")),
-                button("🕐 Часы UTC ${if (view.settings.tradingHoursEnabled) "✅" else "❌"}", "exit", "toggle", pp(p, "tradingHoursEnabled"))
-            )
         }
+
         rows += listOf(button("🔄 Обновить", "exit", "refresh", p.toString()))
         rows += listOf(button("⬅️ В меню", "main", "home"))
         return TelegramInlineKeyboard(rows = rows)

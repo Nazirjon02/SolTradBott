@@ -128,6 +128,11 @@ class CallbackRouter(
                 key?.let { service.toggleFilterFlag(it) }
                 showExitStrategy(ctx, page)
             }
+            "preset" -> {
+                val (page, presetName) = parsePageAndKey(param)
+                val result = presetName?.let { service.applyExitPreset(it) }
+                showExitStrategy(ctx, page, notice = result?.message)
+            }
         }
     }
 
@@ -195,10 +200,13 @@ class CallbackRouter(
         editOrSend(ctx, text, TelegramMenuBuilder.filtersMenu(view, p))
     }
 
-    private suspend fun showExitStrategy(ctx: RouterContext, page: Int = 0) {
+    private suspend fun showExitStrategy(ctx: RouterContext, page: Int = 0, notice: String? = null) {
         val view = service.getExitStrategyView()
         val p = page.coerceIn(0, TelegramUiPages.EXIT_PAGE_COUNT - 1)
-        val text = TelegramMessageFormatter.exitStrategyMessage(view, p)
+        val text = buildString {
+            if (!notice.isNullOrBlank()) append(TelegramMessageFormatter.actionNotice(notice))
+            append(TelegramMessageFormatter.exitStrategyMessage(view, p))
+        }
         editOrSend(ctx, text, TelegramMenuBuilder.exitStrategyMenu(view, p))
     }
 

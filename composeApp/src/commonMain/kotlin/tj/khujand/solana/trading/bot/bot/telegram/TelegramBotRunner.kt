@@ -34,6 +34,7 @@ class TelegramBotRunner(
     private var pollingJob: Job? = null
     private var healthCheckJob: Job? = null
     private var tokenFoundSubscriptionId: Long? = null
+    private var tokenClosedSubscriptionId: Long? = null
     private var offset: Long? = null
 
     // Health check sends a ping every 5 minutes; only alerts if state changed or error
@@ -43,6 +44,7 @@ class TelegramBotRunner(
     fun start() {
         if (pollingJob?.isActive == true) return
         subscribeTokenFoundNotifications()
+        subscribeTokenClosedNotifications()
         startHealthCheck()
         pollingJob = scope.launch {
             println("Telegram bot polling started")
@@ -64,6 +66,8 @@ class TelegramBotRunner(
     suspend fun stop() {
         tokenFoundSubscriptionId?.let { tradingService.unsubscribeOnTokenFound(it) }
         tokenFoundSubscriptionId = null
+        tokenClosedSubscriptionId?.let { tradingService.unsubscribeOnTokenClosed(it) }
+        tokenClosedSubscriptionId = null
         healthCheckJob?.cancel()
         healthCheckJob = null
         pollingJob?.cancel()
@@ -111,15 +115,36 @@ class TelegramBotRunner(
         tokenFoundSubscriptionId = tradingService.subscribeOnTokenFound { token ->
             scope.launch {
                 val text = buildString {
-                    appendLine("<b>🎯 Сделка: вход выполнен</b>")
-                    appendLine("<b>${TelegramMessageFormatter.escapeHtml(token.name)}</b>")
+                    appendLine("<b>🎯 Вход: ${TelegramMessageFormatter.escapeHtml(token.name)}</b>")
+                    appendLine("Вложено: <b>$${token.investedUsd}</b>")
                     append("<code>${TelegramMessageFormatter.escapeHtml(token.tokenAddress)}</code>")
                 }
-                runCatching {
-                    telegram.sendMessage(adminChatId, text)
-                }.onFailure { e ->
-                    println("Telegram notify error: ${e.message}")
+                runCatching { telegram.sendMessage(adminChatId, text) }
+                    .onFailure { println("Telegram notify error: ${it.message}") }
+            }
+        }
+    }
+
+    private fun subscribeTokenClosedNotifications() {
+        if (tokenClosedSubscriptionId != null || adminChatId == null) return
+        tokenClosedSubscriptionId = tradingService.subscribeOnTokenClosed { token ->
+            scope.launch {
+                val isProfit = token.profitUsd >= 0
+                val icon     = if (isProfit) "✅" else "❌"
+                val pnlSign  = if (isProfit) "+" else ""
+                val pnlStr   = "$pnlSign${"%.2f".format(token.profitUsd)}"
+                val pctStr   = "$pnlSign${"%.1f".format(token.priceChangePercent)}%"
+                val text = buildString {
+                    appendLine("<b>$icon Выход: ${TelegramMessageFormatter.escapeHtml(token.name)}</b>")
+                    appendLine("PnL: <b>$${pnlStr}</b>  ($pctStr)")
+                    appendLine("Вложено: \$${token.investedUsd}")
+                    if (token.jupiterSellLastError.isNotBlank()) {
+                        appendLine("⚠️ ${TelegramMessageFormatter.escapeHtml(token.jupiterSellLastError.take(100))}")
+                    }
+                    append("<code>${TelegramMessageFormatter.escapeHtml(token.tokenAddress)}</code>")
                 }
+                runCatching { telegram.sendMessage(adminChatId, text) }
+                    .onFailure { println("Telegram close notify error: ${it.message}") }
             }
         }
     }

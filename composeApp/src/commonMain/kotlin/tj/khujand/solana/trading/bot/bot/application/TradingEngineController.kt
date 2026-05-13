@@ -17,30 +17,32 @@ class TradingEngineController(
     private val tokenMonitor: TokenMonitor = TokenMonitor(),
     private val scope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
 ) {
-    private val tokenFoundListeners = mutableMapOf<Long, (MonitoredToken) -> Unit>()
-    private var nextTokenFoundListenerId: Long = 1L
+    private val tokenFoundListeners  = mutableMapOf<Long, (MonitoredToken) -> Unit>()
+    private val tokenClosedListeners = mutableMapOf<Long, (MonitoredToken) -> Unit>()
+    private var nextListenerId: Long = 1L
     private var watchdogJob: Job? = null
     private val WATCHDOG_CHECK_INTERVAL_MS = 60_000L
 
     fun tokenMonitor(): TokenMonitor = tokenMonitor
 
-    @Synchronized
-    fun subscribeOnTokenFound(listener: (MonitoredToken) -> Unit): Long {
-        val id = nextTokenFoundListenerId++
-        tokenFoundListeners[id] = listener
-        return id
+    @Synchronized fun subscribeOnTokenFound(listener: (MonitoredToken) -> Unit): Long {
+        val id = nextListenerId++; tokenFoundListeners[id] = listener; return id
     }
+    @Synchronized fun unsubscribeOnTokenFound(id: Long) { tokenFoundListeners.remove(id) }
 
-    @Synchronized
-    fun unsubscribeOnTokenFound(id: Long) {
-        tokenFoundListeners.remove(id)
+    @Synchronized fun subscribeOnTokenClosed(listener: (MonitoredToken) -> Unit): Long {
+        val id = nextListenerId++; tokenClosedListeners[id] = listener; return id
     }
+    @Synchronized fun unsubscribeOnTokenClosed(id: Long) { tokenClosedListeners.remove(id) }
 
     private fun notifyTokenFound(token: MonitoredToken) {
         val listeners = synchronized(this) { tokenFoundListeners.values.toList() }
-        listeners.forEach { listener ->
-            runCatching { listener(token) }
-        }
+        listeners.forEach { runCatching { it(token) } }
+    }
+
+    private fun notifyTokenClosed(token: MonitoredToken) {
+        val listeners = synchronized(this) { tokenClosedListeners.values.toList() }
+        listeners.forEach { runCatching { it(token) } }
     }
 
     fun isMonitoring(): Boolean {
@@ -60,9 +62,8 @@ class TradingEngineController(
         tokenMonitor.restoreFromCache()
         tokenMonitor.startMonitoring(
             intervalSeconds = intervalSeconds,
-            onNewTokenFound = { token ->
-                notifyTokenFound(token)
-            },
+            onNewTokenFound = { token -> notifyTokenFound(token) },
+            onTokenClosed   = { token -> notifyTokenClosed(token) },
             onRequestStateChanged = { inProgress ->
                 AppSettings.putBoolean(AppSettings.KEY_REQUEST_IN_PROGRESS, inProgress)
             },

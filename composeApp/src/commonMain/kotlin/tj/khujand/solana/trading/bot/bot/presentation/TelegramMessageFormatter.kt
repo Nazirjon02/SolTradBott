@@ -191,29 +191,53 @@ object TelegramMessageFormatter {
     fun exitStrategyMessage(view: ExitStrategyView, page: Int): String {
         val s = view.settings
         val p = page.coerceIn(0, TelegramUiPages.EXIT_PAGE_COUNT - 1)
+        val isAggressive = s.exitStrategy == "aggressive"
         return buildString {
             appendLine(bold("📤 Стратегия выхода") + " " + pageIndicator(p + 1, TelegramUiPages.EXIT_PAGE_COUNT))
             appendLine()
             when (p) {
                 0 -> {
-                    appendLine(sectionLabel("Режим"))
-                    appendLine(row("Тип", code(s.exitStrategy)))
-                    appendLine(row("Aggressive TP", code("${s.aggressiveTakeProfitPct.toInt()}%")))
-                    appendLine(row("Aggressive sell", code("${s.aggressiveSellPct.toInt()}%")))
+                    if (isAggressive) {
+                        appendLine(sectionLabel("⚡ Агрессивный режим"))
+                        appendLine()
+                        val holdPct = (100.0 - s.aggressiveSellPct).coerceAtLeast(0.0)
+                        appendLine("💥 При прибыли ${bold("+${s.aggressiveTakeProfitPct.toInt()}%")} → продать ${bold("${s.aggressiveSellPct.toInt()}%")} позиции")
+                        appendLine("📉 Остаток ${code("${holdPct.toInt()}%")} удерживается до trailing stop")
+                    } else {
+                        appendLine(sectionLabel("📊 Стадии по Market Cap"))
+                        appendLine()
+                        var cumSold = 0.0
+                        listOf(
+                            Triple(s.exitStage1Cap, s.exitStage1Pct, "1️⃣"),
+                            Triple(s.exitStage2Cap, s.exitStage2Pct, "2️⃣"),
+                            Triple(s.exitStage3Cap, s.exitStage3Pct, "3️⃣"),
+                            Triple(s.exitStage4Cap, s.exitStage4Pct, "4️⃣")
+                        ).forEach { (cap, pct, num) ->
+                            cumSold += pct
+                            val remaining = (100.0 - cumSold).coerceAtLeast(0.0)
+                            appendLine("$num ${code(formatCapShort(cap))} → ${bold("${pct.toInt()}%")} · остаток ${remaining.toInt()}%")
+                        }
+                        appendLine()
+                        val totalSold = s.exitStage1Pct + s.exitStage2Pct + s.exitStage3Pct + s.exitStage4Pct
+                        if (totalSold.toInt() != 100) {
+                            appendLine("⚠️ ${italic("Итого: ${totalSold.toInt()}% — не 100%!")}")
+                        } else {
+                            appendLine(italic("Итого: 100% ✅"))
+                        }
+                    }
                     appendLine()
-                    appendLine(sectionLabel("Стадии (кап / %)"))
-                    appendLine(row("1", "${code(s.exitStage1Cap.toInt().toString())} / ${code("${s.exitStage1Pct.toInt()}%")}"))
-                    appendLine(row("2", "${code(s.exitStage2Cap.toInt().toString())} / ${code("${s.exitStage2Pct.toInt()}%")}"))
-                    appendLine(row("3", "${code(s.exitStage3Cap.toInt().toString())} / ${code("${s.exitStage3Pct.toInt()}%")}"))
-                    appendLine(row("4", "${code(s.exitStage4Cap.toInt().toString())} / ${code("${s.exitStage4Pct.toInt()}%")}"))
+                    appendLine(sectionLabel("Пресеты"))
+                    appendLine(italic("🛡️ Консерв. · ⚖️ Баланс · 🚀 Мун — кнопками ниже"))
                 }
                 else -> {
-                    appendLine(sectionLabel("Время"))
-                    appendLine(rowToggle("Выход по таймеру", s.useTimeBasedExit))
-                    appendLine(row("Минуты", code(s.timeBasedExitMinutes.toString())))
+                    appendLine(sectionLabel("⏱️ Выход без прогресса"))
+                    appendLine(rowToggle("Таймер", s.useTimeBasedExit))
+                    if (s.useTimeBasedExit) {
+                        appendLine(row("Минут без первой цели", code(s.timeBasedExitMinutes.toString())))
+                    }
                     appendLine()
-                    appendLine(sectionLabel("Торговые часы (UTC)"))
-                    appendLine(rowToggle("Ограничение по часам", s.tradingHoursEnabled))
+                    appendLine(sectionLabel("🕐 Торговые часы (UTC)"))
+                    appendLine(rowToggle("Ограничение", s.tradingHoursEnabled))
                     if (s.tradingHoursEnabled) {
                         appendLine(row("Окно", code("${s.tradingHoursStartUtcHour}:00 – ${s.tradingHoursEndUtcHour}:00")))
                     }
@@ -221,6 +245,14 @@ object TelegramMessageFormatter {
             }
             appendLine()
             appendLine(italic(exitFooterHint(p)))
+        }
+    }
+
+    private fun formatCapShort(cap: Double): String {
+        return when {
+            cap >= 1_000_000.0 -> "\$${(cap / 1_000_000.0).let { if (it == it.toLong().toDouble()) it.toLong().toString() else it.toString() }}M"
+            cap >= 1_000.0 -> "\$${(cap / 1_000.0).toInt()}K"
+            else -> "\$${cap.toInt()}"
         }
     }
 
