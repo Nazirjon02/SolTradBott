@@ -21,6 +21,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import tj.khujand.solana.trading.bot.bot.application.TradingRuntime
 import tj.khujand.solana.trading.bot.domain.DemoAccountManager
 import tj.khujand.solana.trading.bot.domain.MonitoredToken
@@ -34,6 +35,9 @@ fun PortfolioScreen() {
     val tokenMonitor = remember { TradingRuntime.tokenMonitor() }
     var tokens by remember { mutableStateOf(emptyList<MonitoredToken>()) }
     var demoBalance by remember { mutableStateOf(DemoAccountManager.getBalance()) }
+    var showPanicDialog by remember { mutableStateOf(false) }
+    var panicMessage by remember { mutableStateOf<String?>(null) }
+    val scope = rememberCoroutineScope()
 
     LaunchedEffect(Unit) {
         while (true) {
@@ -49,16 +53,51 @@ fun PortfolioScreen() {
             .background(DarkBg)
             .padding(horizontal = 16.dp, vertical = 12.dp)
     ) {
-        Text(
-            "Портфель",
-            style = MaterialTheme.typography.headlineMedium,
-            color = TextOnDark,
-        )
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text("Портфель", style = MaterialTheme.typography.headlineMedium, color = TextOnDark)
+            if (tokens.isNotEmpty()) {
+                Button(
+                    onClick = { showPanicDialog = true },
+                    colors = ButtonDefaults.buttonColors(containerColor = DangerRed),
+                    shape = RoundedCornerShape(8.dp),
+                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+                ) {
+                    Icon(Icons.Default.Warning, contentDescription = null, modifier = Modifier.size(14.dp))
+                    Spacer(Modifier.width(4.dp))
+                    Text("PANIC", style = MaterialTheme.typography.labelLarge)
+                }
+            }
+        }
         Spacer(Modifier.height(4.dp))
+
+        panicMessage?.let { msg ->
+            Spacer(Modifier.height(4.dp))
+            Text(msg, style = MaterialTheme.typography.bodySmall, color = DangerRed)
+        }
 
         // Balance header
         PortfolioBalanceCard(demoBalance = demoBalance, tokens = tokens)
         Spacer(Modifier.height(12.dp))
+
+        if (showPanicDialog) {
+            PanicSellDialog(
+                tokenCount = tokens.size,
+                onConfirm = {
+                    showPanicDialog = false
+                    scope.launch {
+                        tokenMonitor.clearAllTokens()
+                        tokens = emptyList()
+                        demoBalance = DemoAccountManager.getBalance()
+                        panicMessage = "🚨 Все позиции закрыты"
+                    }
+                },
+                onDismiss = { showPanicDialog = false },
+            )
+        }
 
         if (tokens.isEmpty()) {
             EmptyPortfolioPlaceholder()
@@ -268,6 +307,39 @@ private fun PortfolioTokenCard(token: MonitoredToken, onCloseRequest: () -> Unit
             }
         )
     }
+}
+
+@Composable
+private fun PanicSellDialog(
+    tokenCount: Int,
+    onConfirm: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        containerColor   = DarkSurface,
+        title = {
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Icon(Icons.Default.Warning, contentDescription = null, tint = DangerRed, modifier = Modifier.size(20.dp))
+                Text("PANIC SELL", color = DangerRed, style = MaterialTheme.typography.titleMedium)
+            }
+        },
+        text = {
+            Text(
+                "Все $tokenCount открытых позиций будут немедленно закрыты по текущей цене.\n\nЭто действие нельзя отменить.",
+                color = TextOnDarkMuted,
+            )
+        },
+        confirmButton = {
+            Button(
+                onClick = onConfirm,
+                colors = ButtonDefaults.buttonColors(containerColor = DangerRed),
+            ) { Text("Закрыть всё", color = androidx.compose.ui.graphics.Color.White) }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text("Отмена", color = TextOnDarkMuted) }
+        }
+    )
 }
 
 @Composable

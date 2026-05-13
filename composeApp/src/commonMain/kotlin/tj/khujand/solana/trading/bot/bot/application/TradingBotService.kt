@@ -224,6 +224,14 @@ class TradingBotService(
 
     fun stopTrading(): ActionResult = engineController.stopMonitoring()
 
+    suspend fun panicSellAll(): ActionResult {
+        val monitor = engineController.tokenMonitor()
+        val count = monitor.monitoredTokens.count { it.status == tj.khujand.solana.trading.bot.domain.TokenStatus.MONITORING }
+        if (count == 0) return ActionResult(success = true, message = "Нет открытых позиций")
+        monitor.clearAllTokens()
+        return ActionResult(success = true, message = "🚨 PANIC: закрыто $count позиций")
+    }
+
     fun getMode(): TradingMode {
         val settings = FilterSettingsManager.loadSettings()
         return if (settings.jupiterEnabled) TradingMode.REAL else TradingMode.DEMO

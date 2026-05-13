@@ -32,6 +32,7 @@ object TelegramMessageFormatter {
         appendLine("${cmd("/monitoring")} — открытые позиции")
         appendLine("${cmd("/filters")} — фильтры входа")
         appendLine("${cmd("/exit")} — стратегия выхода")
+        appendLine("${cmd("/panic")} — 🚨 закрыть ВСЕ позиции немедленно")
         appendLine()
         appendLine(italic("Удобнее пользоваться кнопками меню под сообщением."))
     }

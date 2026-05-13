@@ -271,7 +271,22 @@ data class FilterSettings(
     // ─────────────────────────────────────────────────────────────────────────────
     val tradingHoursEnabled: Boolean = false,       // ⭐ OFF по умолчанию — включить для торговли по расписанию
     val tradingHoursStartUtcHour: Int = 22,         // ⭐ Начало торговли UTC (22 = 18:00 EST / 21:00 MSK)
-    val tradingHoursEndUtcHour: Int = 6             // ⭐ Конец торговли UTC (6 = 02:00 EST / 09:00 MSK)
+    val tradingHoursEndUtcHour: Int = 6,            // ⭐ Конец торговли UTC (6 = 02:00 EST / 09:00 MSK)
+
+    // ─────────────────────────────────────────────────────────────────────────────
+    // 🛡 RUG-CHECK (проверка контракта через rugcheck.xyz перед входом)
+    // ─────────────────────────────────────────────────────────────────────────────
+    val rugCheckEnabled: Boolean = false,           // ⭐ Включить проверку через rugcheck.xyz
+    val rugCheckMaxScore: Int = 5000,               // ⭐ Макс. допустимый score (0 = идеал, >8000 = опасно)
+    val rugCheckFailClosed: Boolean = true,         // Если true: при ошибке API токен отклоняется
+
+    // ─────────────────────────────────────────────────────────────────────────────
+    // 🎯 SNIPER MODE (ультра-быстрый вход в новые токены)
+    // ─────────────────────────────────────────────────────────────────────────────
+    val sniperEnabled: Boolean = false,             // ⭐ Включить sniper режим
+    val sniperMaxAgeSeconds: Int = 120,             // ⭐ Макс. возраст токена для sniper (секунды)
+    val sniperMinLiquidityUsd: Double = 1000.0,     // Мин. ликвидность для sniper входа
+    val sniperIntervalMs: Long = 3_000L             // Интервал опроса sniper (мс)
 )
 // ════════════════════════════════════════════════════════════════════════════════
 

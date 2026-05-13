@@ -68,6 +68,7 @@ object TokenHistoryManager {
         val updatedHistory = existingHistory + history
 
         TokenHistoryPersistence.save(updatedHistory)
+        EquityManager.addSnapshot(DemoAccountManager.getBalance())
         println("💾 Токен ${token.tokenPair.baseToken?.symbol} сохранен в историю: ${token.status}")
     }
     

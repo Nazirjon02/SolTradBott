@@ -163,6 +163,7 @@ class TokenMonitor {
         println("   - Объем 24ч: >= ${filterSettings.entryMinVolume.toInt()} USD")
         println("   - Соц. сети и сайт: обязательны")
 
+        startSniperIfEnabled(onNewTokenFound)
         monitorJob = CoroutineScope(Dispatchers.Default).launch {
             var cycleCount = 0
             while (isMonitoring) {
@@ -325,7 +326,26 @@ class TokenMonitor {
                                     continue
                                 }
 
-                                // 5. Добавляем токен
+                                // 5а. Rug-check (опционально)
+                                if (filterSettings.rugCheckEnabled) {
+                                    val mintAddr = token.baseToken?.address
+                                    if (mintAddr != null) {
+                                        val rugResult = RugCheckApi.check(
+                                            mintAddress    = mintAddr,
+                                            maxScoreAllowed = filterSettings.rugCheckMaxScore,
+                                            failClosed     = filterSettings.rugCheckFailClosed,
+                                        )
+                                        if (!rugResult.passed) {
+                                            println("🛑 RugCheck FAIL ${token.baseToken?.symbol}: score=${rugResult.score} risks=${rugResult.topRisks}")
+                                            continue
+                                        }
+                                        if (rugResult.level == tj.khujand.solana.trading.bot.network.RugRiskLevel.WARN) {
+                                            println("⚠️ RugCheck WARN ${token.baseToken?.symbol}: score=${rugResult.score} risks=${rugResult.topRisks}")
+                                        }
+                                    }
+                                }
+
+                                // 5б. Добавляем токен
                                 val price = parsePrice(token.priceUsd)
                                 if (price > 0) {
                                     val entryCap = token.marketCap ?: 0.0
@@ -812,12 +832,77 @@ class TokenMonitor {
     fun stopMonitoring() {
         println("⏹️ Остановка мониторинга...")
         isMonitoring = false
+        sniperJob?.cancel()
+        sniperJob = null
         monitorJob?.cancel()
         monitorJob = null
         println("✅ Мониторинг остановлен")
     }
 
     fun isMonitoringActive(): Boolean = isMonitoring
+
+    // ─── Sniper Mode — отдельный быстрый цикл поиска ультра-новых токенов ────
+    private var sniperJob: Job? = null
+
+    private fun startSniperIfEnabled(onNewTokenFound: (MonitoredToken) -> Unit) {
+        if (!filterSettings.sniperEnabled) return
+        sniperJob?.cancel()
+        sniperJob = CoroutineScope(Dispatchers.Default).launch {
+            println("🎯 Sniper Mode запущен (maxAge=${filterSettings.sniperMaxAgeSeconds}с)")
+            while (isMonitoring) {
+                try {
+                    if (!allowNewTokenDiscovery) { delay(filterSettings.sniperIntervalMs); continue }
+                    val maxAgeMinutes = filterSettings.sniperMaxAgeSeconds / 60.0
+                    val sniperSettings = filterSettings.copy(
+                        entryMaxAgeMinutes  = maxOf(1, filterSettings.sniperMaxAgeSeconds / 60),
+                        entryMinLiquidity   = filterSettings.sniperMinLiquidityUsd,
+                        entryMinVolume      = 0.0,
+                        entryMinVolumeM5    = 0.0,
+                        requireSocials      = false,
+                        requireWebsite      = false,
+                        discoveryEveryNCycles = 1,
+                    )
+                    val tokens = api.getNewTokens(sniperSettings)
+                    val nowMs = Clock.System.now().toEpochMilliseconds()
+                    val fresh = tokens.filter { t ->
+                        val createdAt = t.pairCreatedAt ?: return@filter false
+                        val ageMs = nowMs - (if (createdAt < 1_000_000_000_000L) createdAt * 1000L else createdAt)
+                        ageMs in 0..(filterSettings.sniperMaxAgeSeconds * 1000L)
+                    }
+                    fresh.forEach { token ->
+                        val alreadyMonitored = _monitoredTokens.any {
+                            it.tokenPair.pairAddress == token.pairAddress
+                        }
+                        val alreadyClosed = closedTokenAddresses.contains(token.pairAddress)
+                        val hasSlot = _monitoredTokens.size < filterSettings.maxTokensToMonitor
+                        if (!alreadyMonitored && !alreadyClosed && hasSlot) {
+                            val price = parsePrice(token.priceUsd)
+                            if (price > 0) {
+                                val monitoredToken = MonitoredToken(
+                                    tokenPair            = token,
+                                    entryPrice           = price,
+                                    currentPrice         = token.priceUsd.toString(),
+                                    sessionHighPrice     = price,
+                                    entryMarketCap       = token.marketCap ?: 0.0,
+                                    peakMarketCap        = token.marketCap ?: 0.0,
+                                    lastMarketCap        = token.marketCap ?: 0.0,
+                                    investedUsd          = DemoAccountManager.DEMO_TRADE_AMOUNT,
+                                    remainingPositionPct = 100.0,
+                                    demoBuyApplied       = true,
+                                )
+                                if (!filterSettings.jupiterEnabled) DemoAccountManager.applyDemoBuy()
+                                _monitoredTokens.add(monitoredToken)
+                                onNewTokenFound(monitoredToken)
+                                println("🎯 Sniper: ${token.baseToken?.symbol} age=${(nowMs - (token.pairCreatedAt?.let { if (it < 1_000_000_000_000L) it * 1000L else it } ?: nowMs)) / 1000}с")
+                            }
+                        }
+                    }
+                } catch (e: CancellationException) { throw e }
+                  catch (e: Exception) { println("🎯 Sniper ошибка: ${e.message}") }
+                delay(filterSettings.sniperIntervalMs)
+            }
+        }
+    }
 
     fun manualClose(token: MonitoredToken) {
         val idx = _monitoredTokens.indexOfFirst {

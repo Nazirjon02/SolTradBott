@@ -79,6 +79,16 @@ class CommandRouter(
                     TelegramMenuBuilder.exitStrategyMenu(view)
                 )
             }
+            "/panic" -> {
+                telegram.sendMessage(ctx.chatId, "🚨 Закрываю все позиции...")
+                val result = service.panicSellAll()
+                telegram.sendMessage(
+                    ctx.chatId,
+                    TelegramMessageFormatter.actionNotice(result.message) +
+                        TelegramMessageFormatter.mainMenuMessage(service.getSystemSnapshot()),
+                    TelegramMenuBuilder.mainMenu()
+                )
+            }
             else -> {
                 sendHelp(ctx.chatId)
             }

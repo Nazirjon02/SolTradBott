@@ -3,7 +3,10 @@
     "allow": [
       "PowerShell(Get-ChildItem \"C:\\\\Users\\\\Virtual\\\\AndroidStudioProjects\\\\SolTradBot\\\\composeApp\\\\src\\\\commonMain\" -Recurse | Where-Object { !$_.PSIsContainer } | Select-Object -ExpandProperty FullName | Out-String -Width 300)",
       "Bash(Remove-Item \"C:\\\\Users\\\\Virtual\\\\AndroidStudioProjects\\\\SolTradBot\\\\composeApp\\\\src\\\\commonMain\\\\kotlin\\\\tj\\\\khujand\\\\solana\\\\trading\\\\bot\\\\ui\\\\ProfitLossScreen.kt\")",
-      "Bash(xargs grep -l \"^data class FilterSettings\\\\|^class FilterSettings\")"
+      "Bash(xargs grep -l \"^data class FilterSettings\\\\|^class FilterSettings\")",
+      "WebSearch",
+      "Bash(xargs grep -l \"data class FilterSettings\")",
+      "Bash(xargs grep -l \"FilterSettings\")"
     ]
   }
 }
