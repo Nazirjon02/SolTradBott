@@ -2,83 +2,92 @@ package tj.khujand.solana.trading.bot.ui
 
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Typography
-import androidx.compose.material3.lightColorScheme
+import androidx.compose.material3.darkColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.sp
 
-// ─── Brand Palette ────────────────────────────────────────────────────────────
-val BrandIndigo        = Color(0xFF5B61F5)
-val BrandIndigoLight   = Color(0xFFEEF0FF)
-val BrandIndigoDark    = Color(0xFF312E81)
+// ─── Dark Brand Palette ───────────────────────────────────────────────────────
+val CyanAccent        = Color(0xFF00E5FF)
+val CyanAccentDim     = Color(0xFF0097A7)
+val CyanAccentBg      = Color(0xFF001F26)
 
-val BrandTeal          = Color(0xFF00BFA5)
-val BrandTealLight     = Color(0xFFE0F7F4)
-val BrandTealDark      = Color(0xFF00695C)
+val DarkBg            = Color(0xFF0D1117)   // page background per spec
+val DarkSurface       = Color(0xFF161B22)   // card background
+val DarkSurfaceVar    = Color(0xFF1C2128)   // elevated card
+val DarkBorder        = Color(0xFF30363D)
 
-val BrandPurple        = Color(0xFF9747FF)
-val BrandPurpleLight   = Color(0xFFF3E8FF)
-val BrandPurpleDark    = Color(0xFF6B21A8)
+val TextOnDark        = Color(0xFFE6EDF3)   // primary text
+val TextOnDarkMuted   = Color(0xFF8B949E)   // secondary text
+val TextOnDarkFaint   = Color(0xFF484F58)   // disabled / placeholder
 
 // ─── Semantic Colors ──────────────────────────────────────────────────────────
-val SuccessGreen       = Color(0xFF22C55E)
-val SuccessGreenBg     = Color(0xFFF0FDF4)
-val SuccessGreenDark   = Color(0xFF15803D)
+val SuccessGreen      = Color(0xFF3FB950)
+val SuccessGreenBg    = Color(0xFF0D1F12)
 
-val DangerRed          = Color(0xFFEF4444)
-val DangerRedBg        = Color(0xFFFEF2F2)
-val DangerRedDark      = Color(0xFFB91C1C)
+val DangerRed         = Color(0xFFF85149)
+val DangerRedBg       = Color(0xFF1F0D0D)
 
-val WarnAmber          = Color(0xFFF59E0B)
-val WarnAmberBg        = Color(0xFFFFFBEB)
+val WarnAmber         = Color(0xFFD29922)
+val WarnAmberBg       = Color(0xFF1C1600)
 
-// ─── Neutral Surfaces ─────────────────────────────────────────────────────────
-val NeutralBg          = Color(0xFFF7F8FF)   // page background – very subtle blue tint
-val NeutralCard        = Color(0xFFFFFFFF)
-val NeutralBorder      = Color(0xFFE4E7F5)
+// ─── Legacy aliases kept for compatibility ────────────────────────────────────
+val BrandIndigo       = CyanAccent
+val BrandIndigoLight  = CyanAccentBg
+val BrandIndigoDark   = CyanAccentDim
+val BrandTeal         = CyanAccent
+val BrandTealLight    = CyanAccentBg
+val BrandTealDark     = CyanAccentDim
+val BrandPurple       = Color(0xFF9747FF)
+val BrandPurpleLight  = Color(0xFF1A0D2E)
+val BrandPurpleDark   = Color(0xFF6B21A8)
+val NeutralBg         = DarkBg
+val NeutralCard       = DarkSurface
+val NeutralBorder     = DarkBorder
+val TextPrimary       = TextOnDark
+val TextSecondary     = TextOnDarkMuted
+val TextMuted         = TextOnDarkFaint
+val SuccessGreenDark  = SuccessGreen
+val DangerRedDark     = DangerRed
 
-val TextPrimary        = Color(0xFF1A1D4E)
-val TextSecondary      = Color(0xFF5C6080)
-val TextMuted          = Color(0xFF9CA3AF)
+// ─── Dark Color Scheme ────────────────────────────────────────────────────────
+private val AppColorScheme = darkColorScheme(
+    primary              = CyanAccent,
+    onPrimary            = Color(0xFF002023),
+    primaryContainer     = CyanAccentBg,
+    onPrimaryContainer   = CyanAccent,
 
-// ─── Color Scheme ─────────────────────────────────────────────────────────────
-private val AppColorScheme = lightColorScheme(
-    primary              = BrandIndigo,
-    onPrimary            = Color.White,
-    primaryContainer     = BrandIndigoLight,
-    onPrimaryContainer   = BrandIndigoDark,
-
-    secondary            = BrandTeal,
-    onSecondary          = Color.White,
-    secondaryContainer   = BrandTealLight,
-    onSecondaryContainer = BrandTealDark,
+    secondary            = Color(0xFF58A6FF),
+    onSecondary          = Color(0xFF001B3E),
+    secondaryContainer   = Color(0xFF001B3E),
+    onSecondaryContainer = Color(0xFF58A6FF),
 
     tertiary             = BrandPurple,
-    onTertiary           = Color.White,
+    onTertiary           = Color(0xFF1A0D2E),
     tertiaryContainer    = BrandPurpleLight,
-    onTertiaryContainer  = BrandPurpleDark,
+    onTertiaryContainer  = Color(0xFFCFB8FF),
 
     error                = DangerRed,
     errorContainer       = DangerRedBg,
     onError              = Color.White,
-    onErrorContainer     = DangerRedDark,
+    onErrorContainer     = Color(0xFFFFB4AB),
 
-    background           = NeutralBg,
-    onBackground         = TextPrimary,
+    background           = DarkBg,
+    onBackground         = TextOnDark,
 
-    surface              = NeutralCard,
-    onSurface            = TextPrimary,
-    surfaceVariant       = BrandIndigoLight,
-    onSurfaceVariant     = TextSecondary,
+    surface              = DarkSurface,
+    onSurface            = TextOnDark,
+    surfaceVariant       = DarkSurfaceVar,
+    onSurfaceVariant     = TextOnDarkMuted,
 
-    outline              = NeutralBorder,
-    outlineVariant       = Color(0xFFF0F2FF),
+    outline              = DarkBorder,
+    outlineVariant       = Color(0xFF21262D),
 
-    inverseSurface       = TextPrimary,
-    inverseOnSurface     = Color.White,
-    inversePrimary       = Color(0xFFBBBEFF),
+    inverseSurface       = TextOnDark,
+    inverseOnSurface     = DarkBg,
+    inversePrimary       = CyanAccentDim,
 )
 
 // ─── Typography ───────────────────────────────────────────────────────────────

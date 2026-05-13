@@ -101,6 +101,12 @@ class TokenMonitor {
     private val MAX_UPDATE_FAILURES = 3
     private var dailyPnlEpochDay: String = currentUtcDateId()
     private var peakTrackedEquityUsd: Double = 0.0
+
+    // ─── Circuit breaker ──────────────────────────────────────────────────────
+    private var apiErrorStreak = 0
+    private val CIRCUIT_BREAKER_THRESHOLD = 5
+    private val CIRCUIT_BREAKER_PAUSE_MS = 5 * 60 * 1_000L
+    private var circuitBreakerOpenUntilMs = 0L
     private var cooldownUntilEpochMs: Long = 0L
     private val usdcMint = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"
 
@@ -163,6 +169,15 @@ class TokenMonitor {
                 var requestedThisCycle = false
                 try {
                     cycleCount++
+
+                    // ── Circuit breaker check ──────────────────────────────────
+                    val nowMs = Clock.System.now().toEpochMilliseconds()
+                    if (circuitBreakerOpenUntilMs > nowMs) {
+                        val remainSec = (circuitBreakerOpenUntilMs - nowMs) / 1000
+                        println("⛔ Circuit breaker открыт, ждём ${remainSec}с...")
+                        delay(10_000)
+                        continue
+                    }
                     // 🕐 Проверяем торговые часы: если не в активном окне — поиск новых токенов запрещён
                     val withinTradingHours = isWithinTradingHours()
                     if (filterSettings.tradingHoursEnabled && !withinTradingHours) {
@@ -393,6 +408,9 @@ class TokenMonitor {
 
                     refreshDiscoveryFlag()
 
+                    // Успешный цикл — сбрасываем streak
+                    apiErrorStreak = 0
+
                     // Ожидание перед следующим циклом
                     println("⏳ Ожидание $intervalSeconds сек...")
                     delay(intervalSeconds * 1000L)
@@ -404,7 +422,15 @@ class TokenMonitor {
                     val isNetworkError = errorMsg.contains("Unable to resolve", ignoreCase = true) ||
                             errorMsg.contains("No address associated", ignoreCase = true) ||
                             errorMsg.contains("Network", ignoreCase = true)
-                    
+
+                    apiErrorStreak++
+                    if (apiErrorStreak >= CIRCUIT_BREAKER_THRESHOLD) {
+                        circuitBreakerOpenUntilMs = Clock.System.now().toEpochMilliseconds() + CIRCUIT_BREAKER_PAUSE_MS
+                        apiErrorStreak = 0
+                        println("⛔ Circuit breaker: $CIRCUIT_BREAKER_THRESHOLD ошибок подряд → пауза 5 мин")
+                        onError("Circuit breaker: слишком много ошибок API, пауза 5 мин")
+                    }
+
                     if (isNetworkError) {
                         println("🌐 Сетевая ошибка в цикле мониторинга: $errorMsg")
                         onError("Проблема с подключением к интернету. Проверьте соединение.")
@@ -412,7 +438,7 @@ class TokenMonitor {
                         println("❌ Ошибка мониторинга: $errorMsg")
                         onError("Ошибка мониторинга: $errorMsg")
                     }
-                    
+
                     // Увеличиваем задержку при сетевых ошибках
                     delay(if (isNetworkError) 30000 else 15000)
                 } finally {
@@ -791,8 +817,19 @@ class TokenMonitor {
         println("✅ Мониторинг остановлен")
     }
 
-    fun isMonitoringActive(): Boolean {
-        return isMonitoring
+    fun isMonitoringActive(): Boolean = isMonitoring
+
+    fun manualClose(token: MonitoredToken) {
+        val idx = _monitoredTokens.indexOfFirst {
+            it.tokenPair.pairAddress == token.tokenPair.pairAddress
+        }
+        if (idx == -1) return
+        val closed = _monitoredTokens[idx].copy(status = TokenStatus.STOPPED_SL)
+        _monitoredTokens[idx] = closed
+        addClosedToken(closed)
+        _monitoredTokens.removeAt(idx)
+        refreshDiscoveryFlag()
+        println("🛑 Ручное закрытие: ${token.tokenPair.baseToken?.symbol}")
     }
 
     // 🔍 Фильтрация токенов по условиям входа

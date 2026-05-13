@@ -9,7 +9,6 @@ import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -30,7 +29,6 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
-import tj.khujand.solana.trading.bot.ServiceController
 import tj.khujand.solana.trading.bot.bot.application.TradingRuntime
 import tj.khujand.solana.trading.bot.createServiceController
 import tj.khujand.solana.trading.bot.data.FilterSettingsManager
@@ -51,9 +49,6 @@ fun MainScreen() {
     val serviceController = remember { createServiceController() }
     var isMonitoring by remember { mutableStateOf(false) }
     var monitoredTokens by remember { mutableStateOf(emptyList<MonitoredToken>()) }
-    var showFilterSettings by remember { mutableStateOf(false) }
-    var showProfitLoss by remember { mutableStateOf(false) }
-    var profitLossRefresh by remember { mutableIntStateOf(0) }
     var isRequesting by remember { mutableStateOf(false) }
     var demoBalance by remember { mutableStateOf(DemoAccountManager.getBalance()) }
     var clearFailedCount by remember { mutableStateOf<Int?>(null) }
@@ -149,41 +144,23 @@ fun MainScreen() {
         }
     }
 
-    when {
-        showProfitLoss -> ProfitLossScreen(
-            onClose = { showProfitLoss = false },
-            refreshKey = profitLossRefresh
-        )
-        showFilterSettings -> FilterScreen(
-            currentSettings = currentSettings,
-            onSettingsChanged = { currentSettings = it },
-            onTestSwap = { tokenMonitor.testSwap() },
-            onClose = {
-                showFilterSettings = false
-                updateSettings(currentSettings)
+    MainContent(
+        isMonitoring       = isMonitoring,
+        isRequesting       = isRequesting,
+        monitoredTokens    = monitoredTokens,
+        currentSettings    = currentSettings,
+        demoBalance        = demoBalance,
+        clearFailedCount   = clearFailedCount,
+        onToggleMonitoring = { toggleMonitoring() },
+        onClearTokens      = { clearAllTokens() },
+        onCloseToken       = { address, isProfit ->
+            scope.launch {
+                tokenMonitor.closeTokenManually(address, isProfit)
+                monitoredTokens = tokenMonitor.monitoredTokens.toList()
                 refreshDemoBalance()
             }
-        )
-        else -> MainContent(
-            isMonitoring        = isMonitoring,
-            isRequesting        = isRequesting,
-            monitoredTokens     = monitoredTokens,
-            currentSettings     = currentSettings,
-            demoBalance         = demoBalance,
-            clearFailedCount    = clearFailedCount,
-            onToggleMonitoring  = { toggleMonitoring() },
-            onClearTokens       = { clearAllTokens() },
-            onOpenSettings      = { showFilterSettings = true },
-            onOpenProfitLoss    = { profitLossRefresh++; showProfitLoss = true },
-            onCloseToken        = { address, isProfit ->
-                scope.launch {
-                    tokenMonitor.closeTokenManually(address, isProfit)
-                    monitoredTokens = tokenMonitor.monitoredTokens.toList()
-                    refreshDemoBalance()
-                }
-            }
-        )
-    }
+        }
+    )
 }
 
 // ─── Main Content ─────────────────────────────────────────────────────────────
@@ -198,8 +175,6 @@ private fun MainContent(
     clearFailedCount: Int?,
     onToggleMonitoring: () -> Unit,
     onClearTokens: () -> Unit,
-    onOpenSettings: () -> Unit,
-    onOpenProfitLoss: () -> Unit,
     onCloseToken: (String, Boolean) -> Unit,
 ) {
     Box(
@@ -227,12 +202,10 @@ private fun MainContent(
 
             // ── Controls ────────────────────────────────────────────────────
             ControlPanel(
-                isMonitoring     = isMonitoring,
-                hasTokens        = monitoredTokens.isNotEmpty(),
-                onToggle         = onToggleMonitoring,
-                onClear          = onClearTokens,
-                onOpenSettings   = onOpenSettings,
-                onOpenProfitLoss = onOpenProfitLoss,
+                isMonitoring = isMonitoring,
+                hasTokens    = monitoredTokens.isNotEmpty(),
+                onToggle     = onToggleMonitoring,
+                onClear      = onClearTokens,
             )
 
             Spacer(modifier = Modifier.height(14.dp))
@@ -396,8 +369,6 @@ private fun ControlPanel(
     hasTokens: Boolean,
     onToggle: () -> Unit,
     onClear: () -> Unit,
-    onOpenSettings: () -> Unit,
-    onOpenProfitLoss: () -> Unit,
 ) {
     Card(
         modifier  = Modifier.fillMaxWidth(),
@@ -405,87 +376,48 @@ private fun ControlPanel(
         colors    = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
         elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)
     ) {
-        Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            // Row 1 — Settings & P&L
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
+        Row(
+            modifier = Modifier.padding(12.dp).fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            Button(
+                onClick = onToggle,
+                modifier = Modifier.weight(1f),
+                shape = RoundedCornerShape(10.dp),
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = if (isMonitoring) DangerRed else CyanAccent,
+                    contentColor   = if (isMonitoring) Color.White else Color(0xFF001A1F)
+                )
             ) {
-                OutlinedButton(
-                    onClick = onOpenSettings,
-                    modifier = Modifier.weight(1f),
-                    shape    = RoundedCornerShape(10.dp),
-                    colors   = ButtonDefaults.outlinedButtonColors(
-                        contentColor = MaterialTheme.colorScheme.primary
-                    ),
-                    border   = ButtonDefaults.outlinedButtonBorder(enabled = true)
-                ) {
-                    Icon(Icons.Default.Settings, contentDescription = null, modifier = Modifier.size(16.dp))
-                    Spacer(modifier = Modifier.width(6.dp))
-                    Text("Settings", fontSize = 13.sp, fontWeight = FontWeight.Medium)
-                }
-
-                OutlinedButton(
-                    onClick = onOpenProfitLoss,
-                    modifier = Modifier.weight(1f),
-                    shape    = RoundedCornerShape(10.dp),
-                    colors   = ButtonDefaults.outlinedButtonColors(
-                        contentColor = BrandPurple
-                    ),
-                    border = ButtonDefaults.outlinedButtonBorder(enabled = true).let {
-                        androidx.compose.foundation.BorderStroke(1.dp, BrandPurple.copy(alpha = 0.4f))
-                    }
-                ) {
-                    Icon(Icons.Default.Assessment, contentDescription = null, modifier = Modifier.size(16.dp))
-                    Spacer(modifier = Modifier.width(6.dp))
-                    Text("Прибыль / убытки", fontSize = 12.sp, fontWeight = FontWeight.Medium)
-                }
+                Icon(
+                    if (isMonitoring) Icons.Default.Stop else Icons.Default.PlayArrow,
+                    contentDescription = null,
+                    modifier = Modifier.size(18.dp)
+                )
+                Spacer(modifier = Modifier.width(6.dp))
+                Text(
+                    if (isMonitoring) "STOP" else "START",
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.Bold,
+                    letterSpacing = 0.5.sp
+                )
             }
 
-            // Row 2 — Start/Stop & Clear
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            Button(
+                onClick  = onClear,
+                enabled  = hasTokens,
+                modifier = Modifier.weight(1f),
+                shape    = RoundedCornerShape(10.dp),
+                colors   = ButtonDefaults.buttonColors(
+                    containerColor = DangerRedBg,
+                    contentColor   = DangerRed,
+                    disabledContainerColor = MaterialTheme.colorScheme.surfaceVariant,
+                    disabledContentColor   = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f)
+                )
             ) {
-                Button(
-                    onClick = onToggle,
-                    modifier = Modifier.weight(1f),
-                    shape = RoundedCornerShape(10.dp),
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = if (isMonitoring) DangerRed else BrandIndigo,
-                        contentColor   = Color.White
-                    )
-                ) {
-                    Icon(
-                        if (isMonitoring) Icons.Default.Stop else Icons.Default.PlayArrow,
-                        contentDescription = null,
-                        modifier = Modifier.size(18.dp)
-                    )
-                    Spacer(modifier = Modifier.width(6.dp))
-                    Text(
-                        if (isMonitoring) "STOP" else "START",
-                        fontSize = 13.sp,
-                        fontWeight = FontWeight.Bold,
-                        letterSpacing = 0.5.sp
-                    )
-                }
-
-                Button(
-                    onClick  = onClear,
-                    enabled  = hasTokens,
-                    modifier = Modifier.weight(1f),
-                    shape    = RoundedCornerShape(10.dp),
-                    colors   = ButtonDefaults.buttonColors(
-                        containerColor = DangerRedBg,
-                        contentColor   = DangerRed,
-                        disabledContainerColor = MaterialTheme.colorScheme.surfaceVariant,
-                        disabledContentColor   = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f)
-                    )
-                ) {
-                    Icon(Icons.Default.Delete, contentDescription = null, modifier = Modifier.size(18.dp))
-                    Spacer(modifier = Modifier.width(6.dp))
-                    Text("Clear", fontSize = 13.sp, fontWeight = FontWeight.Medium)
-                }
+                Icon(Icons.Default.Delete, contentDescription = null, modifier = Modifier.size(18.dp))
+                Spacer(modifier = Modifier.width(6.dp))
+                Text("Clear", fontSize = 13.sp, fontWeight = FontWeight.Medium)
             }
         }
     }

@@ -27,6 +27,8 @@ fun initServiceController(context: Context) {
     appContext = context.applicationContext
 }
 
+fun getAppContext(): Context = appContext
+
 actual fun createServiceController(): ServiceController {
     return ServiceController(appContext)
 }

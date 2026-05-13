@@ -2,7 +2,10 @@ package tj.khujand.solana.trading.bot.bot.application
 
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import tj.khujand.solana.trading.bot.bot.domain.model.ActionResult
 import tj.khujand.solana.trading.bot.data.FilterSettingsManager
@@ -16,6 +19,8 @@ class TradingEngineController(
 ) {
     private val tokenFoundListeners = mutableMapOf<Long, (MonitoredToken) -> Unit>()
     private var nextTokenFoundListenerId: Long = 1L
+    private var watchdogJob: Job? = null
+    private val WATCHDOG_CHECK_INTERVAL_MS = 60_000L
 
     fun tokenMonitor(): TokenMonitor = tokenMonitor
 
@@ -64,6 +69,7 @@ class TradingEngineController(
             onError = { println("Bot monitor error: $it") }
         )
         AppSettings.putBoolean(AppSettings.KEY_MONITORING_ACTIVE, true)
+        startWatchdog(intervalSeconds)
         return ActionResult(
             success = true,
             message = "Мониторинг запущен"
@@ -71,26 +77,34 @@ class TradingEngineController(
     }
 
     fun startMonitoringAsync(intervalSeconds: Int = 10) {
-        scope.launch {
-            startMonitoring(intervalSeconds)
+        scope.launch { startMonitoring(intervalSeconds) }
+    }
+
+    private fun startWatchdog(intervalSeconds: Int) {
+        watchdogJob?.cancel()
+        watchdogJob = scope.launch {
+            while (isActive) {
+                delay(WATCHDOG_CHECK_INTERVAL_MS)
+                val shouldBeRunning = AppSettings.getBooleanSafe(AppSettings.KEY_MONITORING_ACTIVE, false)
+                if (shouldBeRunning && !tokenMonitor.isMonitoringActive()) {
+                    println("🐕 Watchdog: мониторинг завис или упал — перезапускаем")
+                    startMonitoring(intervalSeconds)
+                }
+            }
         }
     }
 
     fun stopMonitoring(): ActionResult {
+        watchdogJob?.cancel()
+        watchdogJob = null
         if (!tokenMonitor.isMonitoringActive()) {
             AppSettings.putBoolean(AppSettings.KEY_MONITORING_ACTIVE, false)
             AppSettings.putBoolean(AppSettings.KEY_REQUEST_IN_PROGRESS, false)
-            return ActionResult(
-                success = true,
-                message = "Мониторинг уже остановлен"
-            )
+            return ActionResult(success = true, message = "Мониторинг уже остановлен")
         }
         tokenMonitor.stopMonitoring()
         AppSettings.putBoolean(AppSettings.KEY_MONITORING_ACTIVE, false)
         AppSettings.putBoolean(AppSettings.KEY_REQUEST_IN_PROGRESS, false)
-        return ActionResult(
-            success = true,
-            message = "Мониторинг остановлен"
-        )
+        return ActionResult(success = true, message = "Мониторинг остановлен")
     }
 }
