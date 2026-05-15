@@ -4,6 +4,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
@@ -19,7 +20,13 @@ class TelegramBotRunner(
     service: TradingBotService = TradingRuntime.tradingBotService()
 ) {
     private val adminChatId = config.adminChatId
-    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+
+    // Отдельный scope для polling — закрывается при stop()
+    private var pollingScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+
+    // Отдельный scope для уведомлений о сделках — живёт до явного cancel
+    private var notifyScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+
     private val telegram = TelegramHttpClient(config)
     private val tradingService = service
     private val router = UpdateRouter(
@@ -37,7 +44,6 @@ class TelegramBotRunner(
     private var tokenClosedSubscriptionId: Long? = null
     private var offset: Long? = null
 
-    // Health check sends a ping every 5 minutes; only alerts if state changed or error
     private val HEALTH_CHECK_INTERVAL_MS = 5 * 60 * 1_000L
     private var lastMonitoringState: Boolean? = null
 
@@ -46,7 +52,7 @@ class TelegramBotRunner(
         subscribeTokenFoundNotifications()
         subscribeTokenClosedNotifications()
         startHealthCheck()
-        pollingJob = scope.launch {
+        pollingJob = pollingScope.launch {
             println("Telegram bot polling started")
             while (isActive) {
                 try {
@@ -64,6 +70,7 @@ class TelegramBotRunner(
     }
 
     suspend fun stop() {
+        // Сначала отписываемся от событий — новые уведомления не будут ставиться в очередь
         tokenFoundSubscriptionId?.let { tradingService.unsubscribeOnTokenFound(it) }
         tokenFoundSubscriptionId = null
         tokenClosedSubscriptionId?.let { tradingService.unsubscribeOnTokenClosed(it) }
@@ -72,6 +79,13 @@ class TelegramBotRunner(
         healthCheckJob = null
         pollingJob?.cancel()
         pollingJob = null
+        // Даём время завершить уведомления, уже стоящие в очереди (макс 3 сек)
+        delay(300)
+        pollingScope.cancel()
+        notifyScope.cancel()
+        // Пересоздаём scope для возможного перезапуска без создания нового Runner
+        pollingScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+        notifyScope  = CoroutineScope(SupervisorJob() + Dispatchers.Default)
         telegram.close()
         println("Telegram bot stopped")
     }
@@ -79,7 +93,7 @@ class TelegramBotRunner(
     private fun startHealthCheck() {
         if (adminChatId == null) return
         healthCheckJob?.cancel()
-        healthCheckJob = scope.launch {
+        healthCheckJob = pollingScope.launch {
             while (isActive) {
                 delay(HEALTH_CHECK_INTERVAL_MS)
                 try {
@@ -87,21 +101,17 @@ class TelegramBotRunner(
                     val isMonitoring = snapshot.isMonitoring
                     val stateChanged = lastMonitoringState != null && lastMonitoringState != isMonitoring
                     lastMonitoringState = isMonitoring
-
-                    // Send alert only when state changes (started/stopped unexpectedly)
                     if (stateChanged) {
                         val icon = if (isMonitoring) "🟢" else "🔴"
                         val msg = "$icon Health: мониторинг ${if (isMonitoring) "запущен" else "остановлен"}\n" +
                                 "Баланс: $${snapshot.demoBalanceUsd}\n" +
                                 "Сделок: ${snapshot.dealsSummary.totalTrades} | Win: ${snapshot.dealsSummary.winRatePct.toInt()}%"
-                        runCatching { telegram.sendMessage(adminChatId, msg) }
+                        sendWithRetry(adminChatId, msg)
                     } else {
-                        // Periodic silent check — log only
                         println("💚 Health OK | monitoring=$isMonitoring | balance=$${snapshot.demoBalanceUsd}")
                     }
                 } catch (e: Exception) {
                     println("⚠️ Health check error: ${e.message}")
-                    // Alert on repeated failures
                     runCatching {
                         telegram.sendMessage(adminChatId, "⚠️ Health check ошибка: ${e.message?.take(200)}")
                     }
@@ -113,14 +123,13 @@ class TelegramBotRunner(
     private fun subscribeTokenFoundNotifications() {
         if (tokenFoundSubscriptionId != null || adminChatId == null) return
         tokenFoundSubscriptionId = tradingService.subscribeOnTokenFound { token ->
-            scope.launch {
+            notifyScope.launch {
                 val text = buildString {
                     appendLine("<b>🎯 Вход: ${TelegramMessageFormatter.escapeHtml(token.name)}</b>")
                     appendLine("Вложено: <b>$${token.investedUsd}</b>")
                     append("<code>${TelegramMessageFormatter.escapeHtml(token.tokenAddress)}</code>")
                 }
-                runCatching { telegram.sendMessage(adminChatId, text) }
-                    .onFailure { println("Telegram notify error: ${it.message}") }
+                sendWithRetry(adminChatId, text)
             }
         }
     }
@@ -128,24 +137,34 @@ class TelegramBotRunner(
     private fun subscribeTokenClosedNotifications() {
         if (tokenClosedSubscriptionId != null || adminChatId == null) return
         tokenClosedSubscriptionId = tradingService.subscribeOnTokenClosed { token ->
-            scope.launch {
+            notifyScope.launch {
                 val isProfit = token.profitUsd >= 0
-                val icon     = if (isProfit) "✅" else "❌"
-                val pnlSign  = if (isProfit) "+" else ""
-                val pnlStr   = "$pnlSign${"%.2f".format(token.profitUsd)}"
-                val pctStr   = "$pnlSign${"%.1f".format(token.priceChangePercent)}%"
+                val icon    = if (isProfit) "✅" else "❌"
+                val sign    = if (isProfit) "+" else ""
+                val pnlStr  = "$sign${"%.2f".format(token.profitUsd)}"
+                val pctStr  = "$sign${"%.1f".format(token.priceChangePercent)}%"
                 val text = buildString {
                     appendLine("<b>$icon Выход: ${TelegramMessageFormatter.escapeHtml(token.name)}</b>")
-                    appendLine("PnL: <b>$${pnlStr}</b>  ($pctStr)")
+                    appendLine("PnL: <b>$$pnlStr</b>  ($pctStr)")
                     appendLine("Вложено: \$${token.investedUsd}")
                     if (token.jupiterSellLastError.isNotBlank()) {
                         appendLine("⚠️ ${TelegramMessageFormatter.escapeHtml(token.jupiterSellLastError.take(100))}")
                     }
                     append("<code>${TelegramMessageFormatter.escapeHtml(token.tokenAddress)}</code>")
                 }
-                runCatching { telegram.sendMessage(adminChatId, text) }
-                    .onFailure { println("Telegram close notify error: ${it.message}") }
+                sendWithRetry(adminChatId, text)
             }
+        }
+    }
+
+    /** Отправка с повтором до 3 раз при сетевых ошибках. */
+    private suspend fun sendWithRetry(chatId: Long, text: String, maxAttempts: Int = 3) {
+        repeat(maxAttempts) { attempt ->
+            val result = runCatching { telegram.sendMessage(chatId, text) }
+            if (result.isSuccess) return
+            val err = result.exceptionOrNull()
+            println("Telegram send attempt ${attempt + 1}/$maxAttempts failed: ${err?.message}")
+            if (attempt < maxAttempts - 1) delay(2_000L * (attempt + 1))
         }
     }
 }

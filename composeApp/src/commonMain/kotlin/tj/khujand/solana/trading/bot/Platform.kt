@@ -11,7 +11,12 @@ expect class ServiceController {
     fun stopMonitoring()
 }
 
-// Фабричная функция для создания ServiceController
 expect fun createServiceController(): ServiceController
 
 expect fun isAndroid(): Boolean
+
+/** Записывает JSON-строку в файл настроек. Возвращает путь к файлу или сообщение об ошибке. */
+expect fun writeSettingsFile(json: String): String
+
+/** Читает содержимое файла настроек. Возвращает JSON-строку или null если файл не найден. */
+expect fun readSettingsFile(): String?

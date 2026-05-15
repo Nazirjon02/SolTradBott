@@ -70,6 +70,7 @@ class TradingEngineController(
             onError = { println("Bot monitor error: $it") }
         )
         AppSettings.putBoolean(AppSettings.KEY_MONITORING_ACTIVE, true)
+        TradingRuntime.setMonitoringActive(true)
         startWatchdog(intervalSeconds)
         return ActionResult(
             success = true,
@@ -98,14 +99,13 @@ class TradingEngineController(
     fun stopMonitoring(): ActionResult {
         watchdogJob?.cancel()
         watchdogJob = null
+        AppSettings.putBoolean(AppSettings.KEY_MONITORING_ACTIVE, false)
+        AppSettings.putBoolean(AppSettings.KEY_REQUEST_IN_PROGRESS, false)
+        TradingRuntime.setMonitoringActive(false)
         if (!tokenMonitor.isMonitoringActive()) {
-            AppSettings.putBoolean(AppSettings.KEY_MONITORING_ACTIVE, false)
-            AppSettings.putBoolean(AppSettings.KEY_REQUEST_IN_PROGRESS, false)
             return ActionResult(success = true, message = "Мониторинг уже остановлен")
         }
         tokenMonitor.stopMonitoring()
-        AppSettings.putBoolean(AppSettings.KEY_MONITORING_ACTIVE, false)
-        AppSettings.putBoolean(AppSettings.KEY_REQUEST_IN_PROGRESS, false)
         return ActionResult(success = true, message = "Мониторинг остановлен")
     }
 }

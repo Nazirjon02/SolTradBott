@@ -1,7 +1,9 @@
 package tj.khujand.solana.trading.bot.data
 
+import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
+import tj.khujand.solana.trading.bot.bot.telegram.TelegramBotSettings
 import tj.khujand.solana.trading.bot.network.FilterSettings
 import tj.khujand.solana.trading.bot.util.AppSettings
 
@@ -193,4 +195,55 @@ object FilterSettingsManager {
     private fun loadSecret(key: String): String {
         return AppSettings.getStringSafe(key, "")
     }
+
+    // ─── Экспорт / Импорт ────────────────────────────────────────────────────
+
+    /** Сериализует все настройки (включая секреты и Telegram) в JSON-строку. */
+    fun exportToJson(): String {
+        val filter = loadSettings()
+        val tgEnabled = AppSettings.getBooleanSafe(TelegramBotSettings.KEY_ENABLED, false)
+        val tgToken   = AppSettings.getStringSafe(TelegramBotSettings.KEY_TOKEN, "")
+        val tgChatId  = AppSettings.getStringSafe(TelegramBotSettings.KEY_ADMIN_CHAT_ID, "")
+        val tgUserId  = AppSettings.getStringSafe(TelegramBotSettings.KEY_ADMIN_USER_ID, "")
+        val snapshot = BotSettingsSnapshot(
+            version = 2,
+            filterSettings = filter,
+            telegramEnabled = tgEnabled,
+            telegramToken   = tgToken,
+            telegramChatId  = tgChatId,
+            telegramUserId  = tgUserId,
+        )
+        return json.encodeToString(snapshot)
+    }
+
+    /**
+     * Применяет настройки из JSON-строки.
+     * Возвращает null при успехе или сообщение об ошибке.
+     */
+    fun importFromJson(jsonString: String): String? {
+        return try {
+            val snapshot = json.decodeFromString<BotSettingsSnapshot>(jsonString)
+            saveSettings(snapshot.filterSettings)
+            AppSettings.putBoolean(TelegramBotSettings.KEY_ENABLED, snapshot.telegramEnabled)
+            if (snapshot.telegramToken.isNotBlank())
+                AppSettings.putString(TelegramBotSettings.KEY_TOKEN, snapshot.telegramToken)
+            if (snapshot.telegramChatId.isNotBlank())
+                AppSettings.putString(TelegramBotSettings.KEY_ADMIN_CHAT_ID, snapshot.telegramChatId)
+            if (snapshot.telegramUserId.isNotBlank())
+                AppSettings.putString(TelegramBotSettings.KEY_ADMIN_USER_ID, snapshot.telegramUserId)
+            null
+        } catch (e: Exception) {
+            "Ошибка импорта: ${e.message}"
+        }
+    }
 }
+
+@Serializable
+data class BotSettingsSnapshot(
+    val version: Int = 2,
+    val filterSettings: FilterSettings,
+    val telegramEnabled: Boolean = false,
+    val telegramToken: String = "",
+    val telegramChatId: String = "",
+    val telegramUserId: String = "",
+)

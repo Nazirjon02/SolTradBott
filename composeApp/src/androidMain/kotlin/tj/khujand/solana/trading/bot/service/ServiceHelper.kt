@@ -22,6 +22,10 @@ object ServiceHelper {
         val intent = Intent(context, TokenMonitorService::class.java).apply {
             action = TokenMonitorService.ACTION_STOP
         }
-        context.startService(intent)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            context.startForegroundService(intent)
+        } else {
+            context.startService(intent)
+        }
     }
 }

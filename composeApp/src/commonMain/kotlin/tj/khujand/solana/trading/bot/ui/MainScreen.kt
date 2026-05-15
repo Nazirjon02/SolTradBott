@@ -47,10 +47,13 @@ fun MainScreen() {
 
     var currentSettings by remember { mutableStateOf(FilterSettingsManager.loadSettings()) }
     val serviceController = remember { createServiceController() }
-    var isMonitoring by remember { mutableStateOf(false) }
+
+    // isMonitoring теперь из процессного StateFlow — не теряется при смене табов
+    val isMonitoring by TradingRuntime.isMonitoringFlow.collectAsState()
+
     var monitoredTokens by remember { mutableStateOf(emptyList<MonitoredToken>()) }
-    var isRequesting by remember { mutableStateOf(false) }
-    var demoBalance by remember { mutableStateOf(DemoAccountManager.getBalance()) }
+    var isRequesting   by remember { mutableStateOf(false) }
+    var demoBalance    by remember { mutableStateOf(DemoAccountManager.getBalance()) }
     var clearFailedCount by remember { mutableStateOf<Int?>(null) }
     val scope = rememberCoroutineScope()
 
@@ -58,62 +61,55 @@ fun MainScreen() {
 
     LaunchedEffect(currentSettings) { tokenMonitor.filterSettings = currentSettings }
 
+    // Восстанавливаем токены из кеша при первом входе на экран (после смены таба)
     LaunchedEffect(Unit) {
         tokenMonitor.restoreFromCache()
         monitoredTokens = tokenMonitor.monitoredTokens.toList()
         refreshDemoBalance()
-        if (isAndroid()) {
-            isMonitoring = AppSettings.getBooleanSafe(AppSettings.KEY_MONITORING_ACTIVE, false)
-        } else {
-            if (monitoredTokens.isNotEmpty()) {
-                tokenMonitor.startMonitoring(
-                    intervalSeconds = 10,
-                    onNewTokenFound = { monitoredTokens = tokenMonitor.monitoredTokens.toList(); refreshDemoBalance() },
-                    onTokenUpdated  = { monitoredTokens = tokenMonitor.monitoredTokens.toList(); refreshDemoBalance() },
-                    onRequestStateChanged = { isRequesting = it },
-                    onError = { println("Ошибка: $it") }
-                )
-                isMonitoring = true
-            }
+        if (!isAndroid() && monitoredTokens.isNotEmpty() && !isMonitoring) {
+            TradingRuntime.engineController().startMonitoringAsync(10)
         }
     }
 
-    LaunchedEffect(isMonitoring, isAndroid()) {
-        if (!isAndroid() || !isMonitoring) return@LaunchedEffect
+    // Polling UI-данных (токены, баланс) — только пока мониторинг активен
+    LaunchedEffect(isMonitoring) {
+        if (!isMonitoring) return@LaunchedEffect
         while (true) {
-            delay(2000)
-            tokenMonitor.restoreFromCache()
+            delay(2_000)
+            if (isAndroid()) tokenMonitor.restoreFromCache()
+            isRequesting = AppSettings.getBooleanSafe(AppSettings.KEY_REQUEST_IN_PROGRESS, false)
             monitoredTokens = tokenMonitor.monitoredTokens.toList()
             refreshDemoBalance()
-            isRequesting = AppSettings.getBooleanSafe(AppSettings.KEY_REQUEST_IN_PROGRESS, false)
         }
     }
 
     fun toggleMonitoring() {
         if (isAndroid()) {
-            if (isMonitoring) { serviceController?.stopMonitoring(); isMonitoring = false; isRequesting = false }
-            else { serviceController?.startMonitoring(); isMonitoring = true; isRequesting = AppSettings.getBooleanSafe(AppSettings.KEY_REQUEST_IN_PROGRESS, false) }
+            if (isMonitoring) {
+                // Немедленно обновляем StateFlow, не ждём обработки Intent сервисом
+                TradingRuntime.setMonitoringActive(false)
+                isRequesting = false
+                serviceController?.stopMonitoring()
+            } else {
+                TradingRuntime.setMonitoringActive(true)
+                serviceController?.startMonitoring()
+            }
             return
         }
         if (isMonitoring) {
-            tokenMonitor.stopMonitoring(); isMonitoring = false; isRequesting = false
+            TradingRuntime.engineController().stopMonitoring()
+            isRequesting = false
         } else {
-            tokenMonitor.filterSettings = currentSettings
-            scope.launch {
-                tokenMonitor.startMonitoring(
-                    intervalSeconds = 10,
-                    onNewTokenFound = { monitoredTokens = tokenMonitor.monitoredTokens.toList(); refreshDemoBalance() },
-                    onTokenUpdated  = { monitoredTokens = tokenMonitor.monitoredTokens.toList(); refreshDemoBalance() },
-                    onRequestStateChanged = { isRequesting = it },
-                    onError = { println("Ошибка: $it") }
-                )
-                isMonitoring = true
-            }
+            TradingRuntime.engineController().startMonitoringAsync(10)
         }
     }
 
     fun clearAllTokens() {
-        if (isAndroid() && isMonitoring) { serviceController?.stopMonitoring(); isMonitoring = false }
+        if (isAndroid() && isMonitoring) {
+            TradingRuntime.setMonitoringActive(false)
+            isRequesting = false
+            serviceController?.stopMonitoring()
+        }
         scope.launch {
             val failedCount = tokenMonitor.clearAllTokens()
             monitoredTokens = tokenMonitor.monitoredTokens.toList()
@@ -126,7 +122,8 @@ fun MainScreen() {
         currentSettings = newSettings
         if (isMonitoring) {
             if (isAndroid()) {
-                serviceController?.stopMonitoring(); serviceController?.startMonitoring()
+                serviceController?.stopMonitoring()
+                serviceController?.startMonitoring()
             } else {
                 tokenMonitor.stopMonitoring()
                 scope.launch {
@@ -138,7 +135,6 @@ fun MainScreen() {
                         onRequestStateChanged = { isRequesting = it },
                         onError = { println("Ошибка: $it") }
                     )
-                    isMonitoring = true
                 }
             }
         }

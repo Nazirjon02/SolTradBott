@@ -7,7 +7,10 @@
       "WebSearch",
       "Bash(xargs grep -l \"data class FilterSettings\")",
       "Bash(xargs grep -l \"FilterSettings\")",
-      "Bash(./gradlew :composeApp:compileKotlinJvm --quiet)"
+      "Bash(./gradlew :composeApp:compileKotlinJvm --quiet)",
+      "Bash(Get-ChildItem -Path \"C:\\\\Users\\\\Virtual\\\\AndroidStudioProjects\\\\SolTradBot\" -Recurse -Include \"*.kt\",\"*.swift\",\"*.java\",\"*.xml\")",
+      "Bash(Select-Object -ExpandProperty FullName)",
+      "Bash(Sort-Object)"
     ]
   }
 }

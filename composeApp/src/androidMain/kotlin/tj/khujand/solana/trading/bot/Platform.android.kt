@@ -3,6 +3,7 @@ package tj.khujand.solana.trading.bot
 import android.content.Context
 import android.os.Build
 import tj.khujand.solana.trading.bot.service.ServiceHelper
+import java.io.File
 
 class AndroidPlatform : Platform {
     override val name: String = "Android ${Build.VERSION.SDK_INT}"
@@ -12,10 +13,8 @@ actual fun getPlatform(): Platform = AndroidPlatform()
 
 actual class ServiceController(private val context: Context) {
     actual fun startMonitoring() {
-        // Android - запускаем ФОНОВЫЙ сервис
         ServiceHelper.startMonitoringService(context)
     }
-
     actual fun stopMonitoring() {
         ServiceHelper.stopMonitoringService(context)
     }
@@ -29,7 +28,26 @@ fun initServiceController(context: Context) {
 
 fun getAppContext(): Context = appContext
 
-actual fun createServiceController(): ServiceController {
-    return ServiceController(appContext)
-}
+actual fun createServiceController(): ServiceController = ServiceController(appContext)
+
 actual fun isAndroid(): Boolean = true
+
+actual fun writeSettingsFile(json: String): String {
+    return try {
+        val dir  = File(appContext.filesDir, "SolTradBot").also { it.mkdirs() }
+        val file = File(dir, "bot_settings.json")
+        file.writeText(json, Charsets.UTF_8)
+        file.absolutePath
+    } catch (e: Exception) {
+        "ERROR:${e.message}"
+    }
+}
+
+actual fun readSettingsFile(): String? {
+    return try {
+        val file = File(appContext.filesDir, "SolTradBot/bot_settings.json")
+        if (file.exists()) file.readText(Charsets.UTF_8) else null
+    } catch (e: Exception) {
+        null
+    }
+}

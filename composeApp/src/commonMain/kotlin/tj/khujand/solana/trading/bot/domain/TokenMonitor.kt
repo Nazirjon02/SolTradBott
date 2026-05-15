@@ -87,7 +87,9 @@ class TokenMonitor {
     private val jupiterApi = JupiterApi()
     private var aiAnalyzer: AiAnalyzer? = null  // ⭐ AI-анализатор (создаётся при необходимости)
     private var monitorJob: Job? = null
-    private var isMonitoring = false
+    // @Volatile — изменение видно всем потокам немедленно (loop-check + cancel из другого потока)
+    @Volatile private var isMonitoring = false
+    private var monitorScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private var updateSemaphore = Semaphore(FilterSettings().maxParallelUpdates.coerceAtLeast(1))
     private val listMutex = Mutex()
     private val closedTokenAddresses = mutableSetOf<String>()
@@ -168,8 +170,10 @@ class TokenMonitor {
         println("   - Объем 24ч: >= ${filterSettings.entryMinVolume.toInt()} USD")
         println("   - Соц. сети и сайт: обязательны")
 
+        monitorScope.cancel()
+        monitorScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
         startSniperIfEnabled(onNewTokenFound)
-        monitorJob = CoroutineScope(Dispatchers.Default).launch {
+        monitorJob = monitorScope.launch {
             var cycleCount = 0
             while (isMonitoring) {
                 var requestedThisCycle = false
@@ -837,9 +841,9 @@ class TokenMonitor {
     fun stopMonitoring() {
         println("⏹️ Остановка мониторинга...")
         isMonitoring = false
-        sniperJob?.cancel()
+        monitorScope.cancel()
+        monitorScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
         sniperJob = null
-        monitorJob?.cancel()
         monitorJob = null
         println("✅ Мониторинг остановлен")
     }
@@ -852,7 +856,7 @@ class TokenMonitor {
     private fun startSniperIfEnabled(onNewTokenFound: (MonitoredToken) -> Unit) {
         if (!filterSettings.sniperEnabled) return
         sniperJob?.cancel()
-        sniperJob = CoroutineScope(Dispatchers.Default).launch {
+        sniperJob = monitorScope.launch {
             println("🎯 Sniper Mode запущен (maxAge=${filterSettings.sniperMaxAgeSeconds}с)")
             while (isMonitoring) {
                 try {
