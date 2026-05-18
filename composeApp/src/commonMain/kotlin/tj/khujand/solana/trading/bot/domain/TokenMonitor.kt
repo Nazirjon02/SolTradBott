@@ -848,6 +848,25 @@ class TokenMonitor {
         println("✅ Мониторинг остановлен")
     }
 
+    // 🗑️ Полный сброс бота: очищает все данные кроме настроек фильтров и ключей
+    fun fullReset() {
+        // In-memory state
+        _monitoredTokens.clear()
+        closedTokenAddresses.clear()
+        consecutiveLosses = 0
+        dailyRealizedPnlUsd = 0.0
+        tokenUpdateFailureCount.clear()
+        apiErrorStreak = 0
+        cooldownUntilEpochMs = 0L
+        circuitBreakerOpenUntilMs = 0L
+        peakTrackedEquityUsd = 0.0
+        allowNewTokenDiscovery = true
+        // Persisted state
+        AppSettings.remove(CACHE_KEY_TOKENS)
+        AppSettings.remove(CLOSED_TOKENS_KEY)
+        println("🗑️ TokenMonitor: полный сброс выполнен")
+    }
+
     fun isMonitoringActive(): Boolean = isMonitoring
 
     // ─── Sniper Mode — отдельный быстрый цикл поиска ультра-новых токенов ────

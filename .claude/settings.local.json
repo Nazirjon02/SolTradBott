@@ -10,7 +10,11 @@
       "Bash(./gradlew :composeApp:compileKotlinJvm --quiet)",
       "Bash(Get-ChildItem -Path \"C:\\\\Users\\\\Virtual\\\\AndroidStudioProjects\\\\SolTradBot\" -Recurse -Include \"*.kt\",\"*.swift\",\"*.java\",\"*.xml\")",
       "Bash(Select-Object -ExpandProperty FullName)",
-      "Bash(Sort-Object)"
+      "Bash(Sort-Object)",
+      "Bash(xargs grep -l \"clearHistory\\\\|resetBalance\\\\|clear\\(\\)\\\\|clearAll\\(\\)\")",
+      "Bash(xargs grep -h \"const val KEY_\\\\|private const val KEY\")",
+      "Bash(xargs grep -l \"ViewModel\\\\|CoroutineScope\\\\|LaunchedEffect\")",
+      "Bash(xargs grep -l \"cached_monitored_tokens\\\\|CACHE_KEY_TOKENS\\\\|CLOSED_TOKENS\")"
     ]
   }
 }
