@@ -79,6 +79,22 @@ class CommandRouter(
                     TelegramMenuBuilder.exitStrategyMenu(view)
                 )
             }
+            "/strategy" -> {
+                val snapshot    = service.getSystemSnapshot()
+                val slots       = service.getStrategySlots()
+                val activeId    = service.getActiveStrategyId()
+                val runningIds  = service.getRunningStrategyIds()
+                val text = TelegramMessageFormatter.strategiesMessage(
+                    slots       = slots,
+                    activeId    = activeId,
+                    runningIds  = runningIds,
+                    isMonitoring = snapshot.isMonitoring,
+                )
+                telegram.sendMessage(
+                    ctx.chatId, text,
+                    TelegramMenuBuilder.strategiesMenu(slots, activeId, runningIds, snapshot.isMonitoring)
+                )
+            }
             "/panic" -> {
                 telegram.sendMessage(ctx.chatId, "🚨 Закрываю все позиции...")
                 val result = service.panicSellAll()

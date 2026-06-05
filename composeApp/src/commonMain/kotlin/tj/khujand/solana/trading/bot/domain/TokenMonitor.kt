@@ -77,9 +77,14 @@ enum class TokenStatus {
 // ════════════════════════════════════════════════════════════════════════════════
 // МОНИТОР ТОКЕНОВ - центральный класс для управления позициями
 // ════════════════════════════════════════════════════════════════════════════════
-class TokenMonitor {
-    private  val CACHE_KEY_TOKENS = "cached_monitored_tokens"
-    private val CLOSED_TOKENS_KEY = "closed_tokens_v1"
+class TokenMonitor(
+    /** Namespaces persisted state so several monitors can run in parallel without clobbering each other. */
+    private val instanceId: String = "default"
+) {
+    private val CACHE_KEY_TOKENS =
+        if (instanceId == "default") "cached_monitored_tokens" else "cached_monitored_tokens_$instanceId"
+    private val CLOSED_TOKENS_KEY =
+        if (instanceId == "default") "closed_tokens_v1" else "closed_tokens_v1_$instanceId"
 
     private var allowNewTokenDiscovery = true  // ⭐ Флаг: разрешён ли поиск новых токенов
 

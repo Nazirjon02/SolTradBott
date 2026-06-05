@@ -6,6 +6,7 @@ import tj.khujand.solana.trading.bot.bot.domain.model.FilterSettingsView
 import tj.khujand.solana.trading.bot.bot.domain.model.MonitoredTokenView
 import tj.khujand.solana.trading.bot.bot.domain.model.SystemSnapshot
 import tj.khujand.solana.trading.bot.bot.domain.model.TradingMode
+import tj.khujand.solana.trading.bot.data.StrategySlot
 import kotlin.math.absoluteValue
 
 object TelegramMessageFormatter {
@@ -26,6 +27,7 @@ object TelegramMessageFormatter {
         appendLine("${cmd("/status")} — статус системы")
         appendLine("${cmd("/monitor_start")} — запуск мониторинга")
         appendLine("${cmd("/monitor_stop")} — остановка")
+        appendLine("${cmd("/strategy")} — выбор стратегии")
         appendLine("${cmd("/mode")} — режим demo / real")
         appendLine("${cmd("/balance")} — баланс")
         appendLine("${cmd("/deals")} — сводка по сделкам")
@@ -35,6 +37,40 @@ object TelegramMessageFormatter {
         appendLine("${cmd("/panic")} — 🚨 закрыть ВСЕ позиции немедленно")
         appendLine()
         appendLine(italic("Удобнее пользоваться кнопками меню под сообщением."))
+    }
+
+    fun strategiesMessage(
+        slots: List<StrategySlot>,
+        activeId: String?,
+        runningIds: Set<String>,
+        isMonitoring: Boolean,
+    ): String = buildString {
+        val runningCount = slots.count { runningIds.contains(it.id) }
+        appendLine(bold("🎯 Стратегии") + "  " + italic("запущено: $runningCount"))
+        appendLine()
+        slots.forEach { slot ->
+            val isActive  = slot.id == activeId
+            val isRunning = runningIds.contains(slot.id)
+            val status = when {
+                isRunning -> "🟢 Запущена"
+                isActive  -> "⚪ Активна (не запущена)"
+                else      -> "⚫ Не активна"
+            }
+            val s = slot.settings
+            appendLine("${slot.emoji} ${bold(escapeHtml(slot.name))}  $status")
+            appendLine("  MC \$${escapeHtml(formatK(s.entryMinMarketCap))}–${escapeHtml(formatK(s.entryMaxMarketCap))} " +
+                    "• Liq ≥\$${escapeHtml(formatK(s.entryMinLiquidity))} " +
+                    "• Age ≤${s.entryMaxAgeMinutes}m" +
+                    " • Exit: ${escapeHtml(s.exitStrategy)}")
+            appendLine()
+        }
+        appendLine(italic("Нажмите кнопку, чтобы запустить или остановить стратегию (можно несколько одновременно)."))
+    }
+
+    private fun formatK(v: Double): String {
+        return if (v >= 1_000_000) "${"%.1f".format(v / 1_000_000)}M"
+        else if (v >= 1_000) "${"%.0f".format(v / 1_000)}K"
+        else v.toInt().toString()
     }
 
     fun mainMenuMessage(snapshot: SystemSnapshot): String {

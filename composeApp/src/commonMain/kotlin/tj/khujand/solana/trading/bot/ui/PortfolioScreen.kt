@@ -32,16 +32,29 @@ import tj.khujand.solana.trading.bot.util.formatNumber
 
 @Composable
 fun PortfolioScreen() {
-    val tokenMonitor = remember { TradingRuntime.tokenMonitor() }
     var tokens by remember { mutableStateOf(emptyList<MonitoredToken>()) }
     var demoBalance by remember { mutableStateOf(DemoAccountManager.getBalance()) }
     var showPanicDialog by remember { mutableStateOf(false) }
     var panicMessage by remember { mutableStateOf<String?>(null) }
     val scope = rememberCoroutineScope()
 
+    fun aggregateOpenTokens(): List<MonitoredToken> =
+        TradingRuntime.activeMonitors()
+            .flatMap { it.monitoredTokens }
+            .filter { it.status == TokenStatus.MONITORING }
+
+    // Routes a manual close to the monitor that actually owns the token.
+    fun closeToken(token: MonitoredToken) {
+        val addr = token.tokenPair.baseToken?.address ?: token.tokenPair.pairAddress
+        val owner = TradingRuntime.activeMonitors().firstOrNull { m ->
+            m.monitoredTokens.any { (it.tokenPair.baseToken?.address ?: it.tokenPair.pairAddress) == addr }
+        } ?: TradingRuntime.tokenMonitor()
+        owner.manualClose(token)
+    }
+
     LaunchedEffect(Unit) {
         while (true) {
-            tokens = tokenMonitor.monitoredTokens.filter { it.status == TokenStatus.MONITORING }
+            tokens = aggregateOpenTokens()
             demoBalance = DemoAccountManager.getBalance()
             delay(3_000)
         }
@@ -89,7 +102,7 @@ fun PortfolioScreen() {
                 onConfirm = {
                     showPanicDialog = false
                     scope.launch {
-                        tokenMonitor.clearAllTokens()
+                        TradingRuntime.activeMonitors().forEach { it.clearAllTokens() }
                         tokens = emptyList()
                         demoBalance = DemoAccountManager.getBalance()
                         panicMessage = "🚨 Все позиции закрыты"
@@ -111,7 +124,7 @@ fun PortfolioScreen() {
             LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 items(tokens, key = { it.tokenPair.pairAddress ?: it.tokenPair.baseToken?.address ?: "" }) { token ->
                     PortfolioTokenCard(token = token, onCloseRequest = {
-                        tokenMonitor.manualClose(token)
+                        closeToken(token)
                     })
                 }
             }

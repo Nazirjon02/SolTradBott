@@ -11,6 +11,8 @@ import tj.khujand.solana.trading.bot.bot.domain.model.TradingMode
 import tj.khujand.solana.trading.bot.domain.MonitoredToken
 import tj.khujand.solana.trading.bot.domain.TokenStatus
 import tj.khujand.solana.trading.bot.data.FilterSettingsManager
+import tj.khujand.solana.trading.bot.data.StrategySlot
+import tj.khujand.solana.trading.bot.data.StrategySlotsManager
 import tj.khujand.solana.trading.bot.domain.DemoAccountManager
 import tj.khujand.solana.trading.bot.domain.TokenHistoryManager
 import tj.khujand.solana.trading.bot.network.FilterSettings
@@ -225,10 +227,13 @@ class TradingBotService(
     fun stopTrading(): ActionResult = engineController.stopMonitoring()
 
     suspend fun panicSellAll(): ActionResult {
-        val monitor = engineController.tokenMonitor()
-        val count = monitor.monitoredTokens.count { it.status == tj.khujand.solana.trading.bot.domain.TokenStatus.MONITORING }
+        val monitors = TradingRuntime.activeMonitors().ifEmpty { listOf(engineController.tokenMonitor()) }
+        var count = 0
+        monitors.forEach { monitor ->
+            count += monitor.monitoredTokens.count { it.status == TokenStatus.MONITORING }
+            monitor.clearAllTokens()
+        }
         if (count == 0) return ActionResult(success = true, message = "Нет открытых позиций")
-        monitor.clearAllTokens()
         return ActionResult(success = true, message = "🚨 PANIC: закрыто $count позиций")
     }
 
@@ -513,33 +518,33 @@ class TradingBotService(
     }
 
     fun getMonitoredTokensView(): List<MonitoredTokenView> {
-        return engineController
-            .tokenMonitor()
-            .monitoredTokens
+        val monitors = TradingRuntime.activeMonitors().ifEmpty { listOf(engineController.tokenMonitor()) }
+        return monitors
             .asSequence()
+            .flatMap { it.monitoredTokens.asSequence() }
             .filter { it.status == TokenStatus.MONITORING }
             .map(::toMonitoredTokenView)
             .toList()
     }
 
     fun subscribeOnTokenFound(listener: (MonitoredTokenView) -> Unit): Long {
-        return engineController.subscribeOnTokenFound { token ->
+        return TradingNotifications.subscribeFound { token ->
             listener(toMonitoredTokenView(token))
         }
     }
 
     fun unsubscribeOnTokenFound(id: Long) {
-        engineController.unsubscribeOnTokenFound(id)
+        TradingNotifications.unsubscribe(id)
     }
 
     fun subscribeOnTokenClosed(listener: (MonitoredTokenView) -> Unit): Long {
-        return engineController.subscribeOnTokenClosed { token ->
+        return TradingNotifications.subscribeClosed { token ->
             listener(toMonitoredTokenView(token))
         }
     }
 
     fun unsubscribeOnTokenClosed(id: Long) {
-        engineController.unsubscribeOnTokenClosed(id)
+        TradingNotifications.unsubscribe(id)
     }
 
     private fun toMonitoredTokenView(token: MonitoredToken): MonitoredTokenView {
@@ -560,11 +565,81 @@ class TradingBotService(
         )
     }
 
+    fun getStrategySlots(): List<StrategySlot> = StrategySlotsManager.getSlots()
+
+    fun getActiveStrategyId(): String = StrategySlotsManager.getActiveId()
+
+    /** Single running id (back-compat). */
+    fun getRunningStrategyId(): String? = StrategySlotsManager.getRunningId()
+
+    /** All strategies currently running in parallel. */
+    fun getRunningStrategyIds(): Set<String> = StrategySlotsManager.getRunningIds()
+
+    /**
+     * Sets a slot as the "active" one for editing in the global FilterScreen,
+     * loading its settings (with secrets) into FilterSettingsManager.
+     * Does NOT start or stop monitoring — parallel strategies each run on their own settings.
+     */
+    fun activateStrategy(slotId: String): ActionResult {
+        val slot = StrategySlotsManager.getSlotById(slotId)
+            ?: return ActionResult(success = false, message = "Стратегия не найдена")
+        val global = FilterSettingsManager.loadSettings()
+        val merged = StrategySlotsManager.applySlot(slot, global)
+        FilterSettingsManager.saveSettings(merged)
+        StrategySlotsManager.setActiveId(slotId)
+        return ActionResult(success = true, message = "${slot.emoji} Стратегия «${slot.name}» активирована")
+    }
+
+    /** Starts one strategy on its own monitor — runs alongside any other running strategies. */
+    fun startStrategy(slotId: String): ActionResult {
+        val slot = StrategySlotsManager.getSlotById(slotId)
+            ?: return ActionResult(success = false, message = "Стратегия не найдена")
+        StrategySlotsManager.setActiveId(slotId)
+        val result = TradingRuntime.controllerFor(slotId).startMonitoring()
+        if (result.success) StrategySlotsManager.addRunningId(slotId)
+        return ActionResult(success = result.success, message = "${slot.emoji} «${slot.name}»: ${result.message}")
+    }
+
+    /** Stops one strategy without affecting the others. */
+    fun stopStrategy(slotId: String): ActionResult {
+        val slot = StrategySlotsManager.getSlotById(slotId)
+        val result = TradingRuntime.controllerFor(slotId).stopMonitoring()
+        StrategySlotsManager.removeRunningId(slotId)
+        val label = slot?.let { "${it.emoji} «${it.name}»" } ?: slotId
+        return ActionResult(success = result.success, message = "$label: ${result.message}")
+    }
+
+    /** Toggles one strategy between running and stopped. */
+    fun toggleStrategy(slotId: String): ActionResult {
+        return if (StrategySlotsManager.isRunning(slotId)) stopStrategy(slotId) else startStrategy(slotId)
+    }
+
+    /** Stops every running strategy (used on app/service shutdown). */
+    fun stopAllStrategies(): ActionResult {
+        val running = StrategySlotsManager.getRunningIds()
+        running.forEach { TradingRuntime.controllerFor(it).stopMonitoring() }
+        StrategySlotsManager.clearRunningIds()
+        engineController.stopMonitoring()
+        return ActionResult(success = true, message = "Остановлено стратегий: ${running.size}")
+    }
+
+    /** Re-starts all persisted running strategies (used on process/service restore). */
+    fun syncRunningStrategies(): ActionResult {
+        val ids = StrategySlotsManager.getRunningIds()
+        if (ids.isEmpty()) return startTrading()
+        ids.forEach { TradingRuntime.controllerFor(it).startMonitoring() }
+        return ActionResult(success = true, message = "Активных стратегий: ${ids.size}")
+    }
+
+    /** Back-compat: start one strategy (now parallel-safe). */
+    fun startWithStrategy(slotId: String): ActionResult = startStrategy(slotId)
+
     fun getSystemSnapshot(): SystemSnapshot {
         val settings: FilterSettings = FilterSettingsManager.loadSettings()
         val mode = if (settings.jupiterEnabled) TradingMode.REAL else TradingMode.DEMO
+        val anyRunning = StrategySlotsManager.getRunningIds().isNotEmpty() || engineController.isMonitoring()
         return SystemSnapshot(
-            isMonitoring = engineController.isMonitoring(),
+            isMonitoring = anyRunning,
             mode = mode,
             demoBalanceUsd = getBalanceUsd(),
             dealsSummary = getDealsSummary(),

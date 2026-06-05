@@ -33,7 +33,8 @@ import kotlin.time.Clock
 @Composable
 fun TokenItemCard(
     token: MonitoredToken,
-    onCloseToken: ((String, Boolean) -> Unit)? = null
+    onCloseToken: ((String, Boolean) -> Unit)? = null,
+    modifier: Modifier = Modifier,
 ) {
     val clipboardManager   = LocalClipboardManager.current
     var showCopiedMessage  by remember { mutableStateOf(false) }
@@ -64,7 +65,7 @@ fun TokenItemCard(
     }
 
     Card(
-        modifier = Modifier.fillMaxWidth(),
+        modifier = modifier.fillMaxWidth(),
         shape    = RoundedCornerShape(16.dp),
         colors   = CardDefaults.cardColors(containerColor = cardColor),
         elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)

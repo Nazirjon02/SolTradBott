@@ -27,6 +27,7 @@ class CallbackRouter(
             "monitoring" -> showMonitoring(ctx)
             "filters" -> handleFilters(payload.action, payload.param, ctx)
             "exit" -> handleExit(payload.action, payload.param, ctx)
+            "strategy" -> handleStrategy(payload.action, payload.param, ctx)
             else -> ctx.callbackQueryId?.let { telegram.answerCallbackQuery(it, "Неизвестное действие") }
         }
     }
@@ -41,7 +42,47 @@ class CallbackRouter(
             "filters" -> showFilters(ctx, 0)
             "exit" -> showExitStrategy(ctx, 0)
             "mode" -> showMode(ctx)
+            "strategy" -> showStrategies(ctx)
         }
+    }
+
+    private suspend fun handleStrategy(action: String, param: String?, ctx: RouterContext) {
+        when (action) {
+            // "activate" kept for backward compatibility with old callback payloads.
+            "toggle", "activate" -> {
+                val slotId = param?.trim().orEmpty()
+                if (slotId.isNotEmpty()) {
+                    val result = service.toggleStrategy(slotId)
+                    val running = service.getRunningStrategyIds().contains(slotId)
+                    ctx.callbackQueryId?.let {
+                        val toast = if (!result.success) "❌ ${result.message}"
+                            else if (running) "▶️ Запущено" else "⏹ Остановлено"
+                        telegram.answerCallbackQuery(it, toast)
+                    }
+                    showStrategies(ctx, notice = result.message)
+                } else {
+                    ctx.callbackQueryId?.let { telegram.answerCallbackQuery(it, "Ошибка: нет ID") }
+                }
+            }
+            "stopall" -> {
+                val result = service.stopAllStrategies()
+                ctx.callbackQueryId?.let { telegram.answerCallbackQuery(it, "⏹ ${result.message}") }
+                showStrategies(ctx, notice = result.message)
+            }
+            "refresh" -> showStrategies(ctx)
+        }
+    }
+
+    private suspend fun showStrategies(ctx: RouterContext, notice: String? = null) {
+        val snapshot   = service.getSystemSnapshot()
+        val slots      = service.getStrategySlots()
+        val activeId   = service.getActiveStrategyId()
+        val runningIds = service.getRunningStrategyIds()
+        val text = buildString {
+            if (!notice.isNullOrBlank()) append(TelegramMessageFormatter.actionNotice(notice))
+            append(TelegramMessageFormatter.strategiesMessage(slots, activeId, runningIds, snapshot.isMonitoring))
+        }
+        editOrSend(ctx, text, TelegramMenuBuilder.strategiesMenu(slots, activeId, runningIds, snapshot.isMonitoring))
     }
 
     private suspend fun handleTrade(action: String, ctx: RouterContext) {

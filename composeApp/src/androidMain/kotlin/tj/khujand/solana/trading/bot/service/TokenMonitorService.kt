@@ -36,10 +36,10 @@ class TokenMonitorService : Service() {
                 return START_NOT_STICKY
             }
             else -> {
-                // ACTION_START или null (перезапуск системой после убийства)
+                // ACTION_START или null (перезапуск системой после убийства):
+                // восстанавливаем все ранее запущенные стратегии параллельно.
                 serviceScope.launch {
-                    TradingRuntime.tradingBotService().startTrading()
-                    TradingRuntime.setMonitoringActive(true)
+                    TradingRuntime.tradingBotService().syncRunningStrategies()
                     ensureTelegramBotRunning()
                 }
             }
@@ -58,10 +58,10 @@ class TokenMonitorService : Service() {
     }
 
     private fun stopMonitoring() {
-        TradingRuntime.setMonitoringActive(false)
+        // Останавливаем ВСЕ стратегии — foreground гасим только когда никого не осталось.
+        TradingRuntime.tradingBotService().stopAllStrategies()
         AppSettings.putBoolean(AppSettings.KEY_MONITORING_ACTIVE, false)
         AppSettings.putBoolean(AppSettings.KEY_REQUEST_IN_PROGRESS, false)
-        TradingRuntime.tradingBotService().stopTrading()
         stopForeground(STOP_FOREGROUND_REMOVE)
         stopSelf()
     }
@@ -69,7 +69,7 @@ class TokenMonitorService : Service() {
     override fun onDestroy() {
         AppSettings.putBoolean(AppSettings.KEY_MONITORING_ACTIVE, false)
         AppSettings.putBoolean(AppSettings.KEY_REQUEST_IN_PROGRESS, false)
-        TradingRuntime.tradingBotService().stopTrading()
+        TradingRuntime.tradingBotService().stopAllStrategies()
         runBlocking(Dispatchers.IO) {
             telegramBotRunner?.stop()
         }

@@ -14,7 +14,14 @@
       "Bash(xargs grep -l \"clearHistory\\\\|resetBalance\\\\|clear\\(\\)\\\\|clearAll\\(\\)\")",
       "Bash(xargs grep -h \"const val KEY_\\\\|private const val KEY\")",
       "Bash(xargs grep -l \"ViewModel\\\\|CoroutineScope\\\\|LaunchedEffect\")",
-      "Bash(xargs grep -l \"cached_monitored_tokens\\\\|CACHE_KEY_TOKENS\\\\|CLOSED_TOKENS\")"
+      "Bash(xargs grep -l \"cached_monitored_tokens\\\\|CACHE_KEY_TOKENS\\\\|CLOSED_TOKENS\")",
+      "Bash(./gradlew :composeApp:compileDebugKotlin)",
+      "Bash(./gradlew :composeApp:compileKotlinJvm)",
+      "Bash(./gradlew :composeApp:compileDebugKotlin :composeApp:compileKotlinJvm)",
+      "Bash(./gradlew :composeApp:assembleDebug)",
+      "Bash(./gradlew :composeApp:compileKotlinJvm -q)",
+      "Bash(./gradlew :composeApp:compileDebugKotlin -q)",
+      "Bash(./gradlew :composeApp:run)"
     ]
   }
 }

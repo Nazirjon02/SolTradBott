@@ -12,8 +12,8 @@ import androidx.activity.enableEdgeToEdge
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.tooling.preview.Preview
 import tj.khujand.solana.trading.bot.bot.application.TradingRuntime
+import tj.khujand.solana.trading.bot.data.StrategySlotsManager
 import tj.khujand.solana.trading.bot.ui.MainScreen
-import tj.khujand.solana.trading.bot.util.AppSettings
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -47,10 +47,9 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    // При горячем старте/возврате синхронизируем StateFlow из AppSettings
+    // При горячем старте/возврате восстанавливаем набор запущенных стратегий
     private fun syncMonitoringStateFlow() {
-        val active = AppSettings.getBooleanSafe(AppSettings.KEY_MONITORING_ACTIVE, false)
-        TradingRuntime.setMonitoringActive(active)
+        TradingRuntime.restoreRunningState(StrategySlotsManager.getRunningIds())
     }
 }
 

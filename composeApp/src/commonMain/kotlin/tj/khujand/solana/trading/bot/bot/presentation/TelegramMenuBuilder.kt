@@ -6,6 +6,7 @@ import tj.khujand.solana.trading.bot.bot.telegram.api.TelegramInlineKeyboard
 import tj.khujand.solana.trading.bot.bot.telegram.api.TelegramInlineKeyboardButton
 import tj.khujand.solana.trading.bot.bot.telegram.callback.CallbackDataCodec
 import tj.khujand.solana.trading.bot.bot.telegram.callback.CallbackPayload
+import tj.khujand.solana.trading.bot.data.StrategySlot
 
 object TelegramMenuBuilder {
     fun mainMenu(): TelegramInlineKeyboard {
@@ -13,11 +14,36 @@ object TelegramMenuBuilder {
             rows = listOf(
                 listOf(button("▶️ Старт", "trade", "start"), button("⏹ Стоп", "trade", "stop")),
                 listOf(button("📊 Статус", "main", "status"), button("💰 Баланс", "main", "balance")),
-                listOf(button("📈 Сделки", "main", "deals"), button("🎯 Фильтры", "main", "filters")),
-                listOf(button("📤 Выход", "main", "exit"), button("👁 Мониторинг", "main", "monitoring")),
-                listOf(button("🔐 Режим", "main", "mode"), button("🔄 Обновить", "main", "refresh"))
+                listOf(button("📈 Сделки", "main", "deals"), button("👁 Мониторинг", "main", "monitoring")),
+                listOf(button("🎯 Фильтры", "main", "filters"), button("📤 Выход", "main", "exit")),
+                listOf(button("⚡ Стратегии", "main", "strategy"), button("🔐 Режим", "main", "mode")),
+                listOf(button("🔄 Обновить", "main", "refresh"))
             )
         )
+    }
+
+    fun strategiesMenu(
+        slots: List<StrategySlot>,
+        activeId: String?,
+        runningIds: Set<String>,
+        isMonitoring: Boolean,
+    ): TelegramInlineKeyboard {
+        val rows = mutableListOf<List<TelegramInlineKeyboardButton>>()
+        slots.chunked(2).forEach { pair ->
+            rows += pair.map { slot ->
+                val isRunning = runningIds.contains(slot.id)
+                val label = buildString {
+                    append(if (isRunning) "⏹ " else "▶️ ")
+                    append("${slot.emoji} ${slot.name}")
+                }
+                button(label, "strategy", "toggle", slot.id)
+            }
+        }
+        if (runningIds.isNotEmpty()) {
+            rows += listOf(button("⏹ Остановить все", "strategy", "stopall"))
+        }
+        rows += listOf(button("⬅️ В меню", "main", "home"))
+        return TelegramInlineKeyboard(rows)
     }
 
     fun modeMenu(): TelegramInlineKeyboard {

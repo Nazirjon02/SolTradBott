@@ -11,17 +11,17 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import tj.khujand.solana.trading.bot.ui.*
 
 private enum class AppTab(val label: String, val icon: ImageVector) {
-    SCANNER  ("Сканер",    Icons.Default.Search),
-    PORTFOLIO("Портфель",  Icons.Default.AccountBalanceWallet),
-    HISTORY  ("История",   Icons.Default.History),
-    ANALYTICS("Аналитика", Icons.Default.BarChart),
-    SETTINGS ("Настройки", Icons.Default.Settings),
+    STRATEGIES("Стратегии", Icons.Default.AutoAwesome),
+    PORTFOLIO ("Портфель",  Icons.Default.AccountBalanceWallet),
+    HISTORY   ("История",   Icons.Default.History),
+    ANALYTICS ("Аналитика", Icons.Default.BarChart),
+    SETTINGS  ("Настройки", Icons.Default.Settings),
 }
 
 @Composable
 fun App() {
     SolTradBotTheme {
-        var currentTab by remember { mutableStateOf(AppTab.SCANNER) }
+        var currentTab by remember { mutableStateOf(AppTab.STRATEGIES) }
 
         Scaffold(
             bottomBar = {
@@ -55,8 +55,8 @@ fun App() {
                     .background(DarkBg)
             ) {
                 when (currentTab) {
-                    AppTab.SCANNER   -> MainScreen()
-                    AppTab.PORTFOLIO -> PortfolioScreen()
+                    AppTab.STRATEGIES -> StrategiesScreen()
+                    AppTab.PORTFOLIO  -> PortfolioScreen()
                     AppTab.HISTORY   -> HistoryScreen()
                     AppTab.ANALYTICS -> AnalyticsScreen()
                     AppTab.SETTINGS  -> SettingsScreen()

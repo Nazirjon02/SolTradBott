@@ -11,12 +11,23 @@ import tj.khujand.solana.trading.bot.bot.domain.model.ActionResult
 import tj.khujand.solana.trading.bot.data.FilterSettingsManager
 import tj.khujand.solana.trading.bot.domain.MonitoredToken
 import tj.khujand.solana.trading.bot.domain.TokenMonitor
+import tj.khujand.solana.trading.bot.network.FilterSettings
 import tj.khujand.solana.trading.bot.util.AppSettings
 
 class TradingEngineController(
-    private val tokenMonitor: TokenMonitor = TokenMonitor(),
+    private val instanceId: String = "default",
+    private val tokenMonitor: TokenMonitor = TokenMonitor(instanceId),
+    private val settingsProvider: () -> FilterSettings = { FilterSettingsManager.loadSettings() },
     private val scope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
 ) {
+    // Persisted run/health flags are namespaced so parallel strategies don't share one flag.
+    private val keyMonitoringActive =
+        if (instanceId == "default") AppSettings.KEY_MONITORING_ACTIVE
+        else "${AppSettings.KEY_MONITORING_ACTIVE}_$instanceId"
+    private val keyRequestInProgress =
+        if (instanceId == "default") AppSettings.KEY_REQUEST_IN_PROGRESS
+        else "${AppSettings.KEY_REQUEST_IN_PROGRESS}_$instanceId"
+
     private val tokenFoundListeners  = mutableMapOf<Long, (MonitoredToken) -> Unit>()
     private val tokenClosedListeners = mutableMapOf<Long, (MonitoredToken) -> Unit>()
     private var nextListenerId: Long = 1L
@@ -38,16 +49,18 @@ class TradingEngineController(
     private fun notifyTokenFound(token: MonitoredToken) {
         val listeners = synchronized(this) { tokenFoundListeners.values.toList() }
         listeners.forEach { runCatching { it(token) } }
+        TradingNotifications.emitFound(token)
     }
 
     private fun notifyTokenClosed(token: MonitoredToken) {
         val listeners = synchronized(this) { tokenClosedListeners.values.toList() }
         listeners.forEach { runCatching { it(token) } }
+        TradingNotifications.emitClosed(token)
     }
 
     fun isMonitoring(): Boolean {
         return tokenMonitor.isMonitoringActive() ||
-            AppSettings.getBooleanSafe(AppSettings.KEY_MONITORING_ACTIVE, false)
+            AppSettings.getBooleanSafe(keyMonitoringActive, false)
     }
 
     fun startMonitoring(intervalSeconds: Int = 10): ActionResult {
@@ -57,7 +70,7 @@ class TradingEngineController(
                 message = "Мониторинг уже запущен"
             )
         }
-        val settings = FilterSettingsManager.loadSettings()
+        val settings = settingsProvider()
         tokenMonitor.filterSettings = settings
         tokenMonitor.restoreFromCache()
         tokenMonitor.startMonitoring(
@@ -65,12 +78,12 @@ class TradingEngineController(
             onNewTokenFound = { token -> notifyTokenFound(token) },
             onTokenClosed   = { token -> notifyTokenClosed(token) },
             onRequestStateChanged = { inProgress ->
-                AppSettings.putBoolean(AppSettings.KEY_REQUEST_IN_PROGRESS, inProgress)
+                AppSettings.putBoolean(keyRequestInProgress, inProgress)
             },
             onError = { println("Bot monitor error: $it") }
         )
-        AppSettings.putBoolean(AppSettings.KEY_MONITORING_ACTIVE, true)
-        TradingRuntime.setMonitoringActive(true)
+        AppSettings.putBoolean(keyMonitoringActive, true)
+        TradingRuntime.setStrategyRunning(instanceId, true)
         startWatchdog(intervalSeconds)
         return ActionResult(
             success = true,
@@ -87,7 +100,7 @@ class TradingEngineController(
         watchdogJob = scope.launch {
             while (isActive) {
                 delay(WATCHDOG_CHECK_INTERVAL_MS)
-                val shouldBeRunning = AppSettings.getBooleanSafe(AppSettings.KEY_MONITORING_ACTIVE, false)
+                val shouldBeRunning = AppSettings.getBooleanSafe(keyMonitoringActive, false)
                 if (shouldBeRunning && !tokenMonitor.isMonitoringActive()) {
                     println("🐕 Watchdog: мониторинг завис или упал — перезапускаем")
                     startMonitoring(intervalSeconds)
@@ -99,9 +112,9 @@ class TradingEngineController(
     fun stopMonitoring(): ActionResult {
         watchdogJob?.cancel()
         watchdogJob = null
-        AppSettings.putBoolean(AppSettings.KEY_MONITORING_ACTIVE, false)
-        AppSettings.putBoolean(AppSettings.KEY_REQUEST_IN_PROGRESS, false)
-        TradingRuntime.setMonitoringActive(false)
+        AppSettings.putBoolean(keyMonitoringActive, false)
+        AppSettings.putBoolean(keyRequestInProgress, false)
+        TradingRuntime.setStrategyRunning(instanceId, false)
         if (!tokenMonitor.isMonitoringActive()) {
             return ActionResult(success = true, message = "Мониторинг уже остановлен")
         }
