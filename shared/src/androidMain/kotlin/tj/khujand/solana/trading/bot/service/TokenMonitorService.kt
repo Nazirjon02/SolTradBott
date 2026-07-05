@@ -9,8 +9,6 @@ import kotlinx.coroutines.*
 import tj.khujand.solana.trading.bot.bot.application.TradingRuntime
 import tj.khujand.solana.trading.bot.bot.telegram.TelegramBotRunner
 import tj.khujand.solana.trading.bot.bot.telegram.TelegramBotSettings
-import tj.khujand.solana.trading.bot.MainActivity
-import tj.khujand.solana.trading.bot.R
 import tj.khujand.solana.trading.bot.util.AppSettings
 
 class TokenMonitorService : Service() {
@@ -81,17 +79,21 @@ class TokenMonitorService : Service() {
     override fun onBind(intent: Intent?): IBinder? = null
 
     private fun buildNotification(): Notification {
-        val intent = Intent(this, MainActivity::class.java).apply {
+        // Модуль shared не знает про MainActivity приложения — открываем через launch-intent пакета.
+        val intent = packageManager.getLaunchIntentForPackage(packageName)?.apply {
             flags = Intent.FLAG_ACTIVITY_SINGLE_TOP
         }
-        val pendingIntent = PendingIntent.getActivity(
-            this, 0, intent,
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-        )
+        val pendingIntent = intent?.let {
+            PendingIntent.getActivity(
+                this, 0, it,
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+            )
+        }
+        val icon = applicationInfo.icon.takeIf { it != 0 } ?: android.R.drawable.stat_notify_sync
         return NotificationCompat.Builder(this, CHANNEL_SERVICE_ID)
-            .setContentTitle("🤖 Dex Monitor")
+            .setContentTitle("🤖 DRX Monitor")
             .setContentText("Monitoring active")
-            .setSmallIcon(R.drawable.ic_launcher_foreground)
+            .setSmallIcon(icon)
             .setContentIntent(pendingIntent)
             .setOngoing(true)
             .setPriority(NotificationCompat.PRIORITY_LOW)

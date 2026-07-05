@@ -35,7 +35,13 @@
       "Bash(./gradlew :composeApp:compileKotlinJvm :composeApp:compileDebugKotlinAndroid :composeApp:jvmTest)",
       "Bash(./gradlew :composeApp:compileKotlinJvm :composeApp:compileDebugKotlinAndroid)",
       "Bash(git add *)",
-      "Bash(git commit -m 'Baseline before MRX-style rebuild: Solana redesign, dars engine, iOS removal + ТЗ \\(README\\) *)"
+      "Bash(git commit -m 'Baseline before MRX-style rebuild: Solana redesign, dars engine, iOS removal + ТЗ \\(README\\) *)",
+      "Bash(git rm *)",
+      "Bash(./gradlew :shared:compileKotlinJvm --console=plain -q)",
+      "Bash(./gradlew :server:build :desktopApp:build --console=plain -q)",
+      "Bash(./gradlew :androidApp:assembleDebug --console=plain -q)",
+      "Bash(./gradlew :shared:jvmTest --console=plain -q)",
+      "Bash(git commit -q -m 'Этап 1: разбивка на модули shared/server/desktopApp/androidApp по образцу MRX *)"
     ]
   }
 }
