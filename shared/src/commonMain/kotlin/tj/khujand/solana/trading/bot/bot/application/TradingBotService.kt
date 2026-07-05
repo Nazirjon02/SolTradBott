@@ -15,7 +15,7 @@ import tj.khujand.solana.trading.bot.data.StrategySlot
 import tj.khujand.solana.trading.bot.data.StrategySlotsManager
 import tj.khujand.solana.trading.bot.domain.DemoAccountManager
 import tj.khujand.solana.trading.bot.domain.TokenHistoryManager
-import tj.khujand.solana.trading.bot.network.FilterSettings
+import tj.khujand.solana.trading.bot.exchange.dex.FilterSettings
 
 class TradingBotService(
     private val engineController: TradingEngineController = TradingEngineController()

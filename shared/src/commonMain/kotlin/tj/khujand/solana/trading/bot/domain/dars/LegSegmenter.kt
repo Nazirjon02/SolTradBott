@@ -1,6 +1,6 @@
 package tj.khujand.solana.trading.bot.domain.dars
 
-import tj.khujand.solana.trading.bot.network.Candle
+import tj.khujand.solana.trading.bot.exchange.dex.Candle
 
 /**
  * Разбивает свечи на ноги (импульсы/коррекции) методом ZigZag: новый пивот фиксируется,

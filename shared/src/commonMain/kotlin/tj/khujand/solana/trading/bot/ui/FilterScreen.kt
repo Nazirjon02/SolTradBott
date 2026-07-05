@@ -25,7 +25,7 @@ import tj.khujand.solana.trading.bot.bot.telegram.TelegramBotSettings
 import tj.khujand.solana.trading.bot.crypto.createSignerFromSeedPhrase
 import tj.khujand.solana.trading.bot.data.FilterSettingsManager
 import tj.khujand.solana.trading.bot.domain.DemoAccountManager
-import tj.khujand.solana.trading.bot.network.FilterSettings
+import tj.khujand.solana.trading.bot.exchange.dex.FilterSettings
 import tj.khujand.solana.trading.bot.util.AppSettings
 import tj.khujand.solana.trading.bot.util.formatDemoBalance
 

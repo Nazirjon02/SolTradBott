@@ -43,7 +43,11 @@
       "Bash(./gradlew :shared:jvmTest --console=plain -q)",
       "Bash(git commit -q -m 'Этап 1: разбивка на модули shared/server/desktopApp/androidApp по образцу MRX *)",
       "Bash(./gradlew :androidApp:assembleDebug :server:build :desktopApp:build --console=plain -q)",
-      "Bash(git commit -q -m 'Этап 2: SQLDelight-БД \\(DrxDatabase\\) — 6 схем, драйверы, SeedData, SettingsStore *)"
+      "Bash(git commit -q -m 'Этап 2: SQLDelight-БД \\(DrxDatabase\\) — 6 схем, драйверы, SeedData, SettingsStore *)",
+      "Bash(sed -n '52,110p' shared/src/commonMain/kotlin/tj/khujand/solana/trading/bot/exchange/dex/GeckoTerminalApi.kt)",
+      "Bash(sed -n '38,60p' shared/src/commonMain/kotlin/tj/khujand/solana/trading/bot/exchange/dex/RugCheckApi.kt)",
+      "Bash(sed -n '70,90p' shared/src/commonMain/kotlin/tj/khujand/solana/trading/bot/exchange/dex/SolanaRpcClient.kt)",
+      "Bash(git commit -q -m 'Этап 3: exchange-слой — DexClient, TokenScanner, TokenCache, AccountCache *)"
     ]
   }
 }

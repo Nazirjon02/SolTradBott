@@ -1,7 +1,7 @@
 package tj.khujand.solana.trading.bot.domain
 
-import tj.khujand.solana.trading.bot.network.SplMintInfo
-import tj.khujand.solana.trading.bot.network.TokenPair
+import tj.khujand.solana.trading.bot.exchange.dex.SplMintInfo
+import tj.khujand.solana.trading.bot.exchange.dex.TokenPair
 import tj.khujand.solana.trading.bot.util.formatLargeNumber
 
 /**
@@ -28,7 +28,7 @@ object TokenScoring {
     fun calculateScore(
         token: TokenPair,
         mintInfo: SplMintInfo?,
-        settings: tj.khujand.solana.trading.bot.network.FilterSettings
+        settings: tj.khujand.solana.trading.bot.exchange.dex.FilterSettings
     ): TokenScoreResult {
         var score = INITIAL_SCORE
         val reasons = mutableListOf<String>()

@@ -44,7 +44,7 @@ import tj.khujand.solana.trading.bot.data.parseStrategyColor
 import tj.khujand.solana.trading.bot.domain.DemoAccountManager
 import tj.khujand.solana.trading.bot.domain.MonitoredToken
 import tj.khujand.solana.trading.bot.isAndroid
-import tj.khujand.solana.trading.bot.network.FilterSettings
+import tj.khujand.solana.trading.bot.exchange.dex.FilterSettings
 import tj.khujand.solana.trading.bot.util.AppSettings
 import tj.khujand.solana.trading.bot.util.formatDemoBalance
 import tj.khujand.solana.trading.bot.util.formatSimpleNumber

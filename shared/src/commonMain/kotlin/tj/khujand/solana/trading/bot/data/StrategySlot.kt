@@ -1,7 +1,7 @@
 package tj.khujand.solana.trading.bot.data
 
 import kotlinx.serialization.Serializable
-import tj.khujand.solana.trading.bot.network.FilterSettings
+import tj.khujand.solana.trading.bot.exchange.dex.FilterSettings
 
 @Serializable
 data class StrategySlot(

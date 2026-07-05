@@ -1,4 +1,4 @@
-package tj.khujand.solana.trading.bot.network
+package tj.khujand.solana.trading.bot.exchange.dex
 
 import io.ktor.client.*
 import io.ktor.client.call.*

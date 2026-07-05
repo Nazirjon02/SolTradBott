@@ -6,7 +6,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import tj.khujand.solana.trading.bot.data.FilterSettingsManager
 import tj.khujand.solana.trading.bot.data.StrategySlotsManager
 import tj.khujand.solana.trading.bot.domain.TokenMonitor
-import tj.khujand.solana.trading.bot.network.FilterSettings
+import tj.khujand.solana.trading.bot.exchange.dex.FilterSettings
 
 /**
  * Единый runtime для UI/Service/Telegram.

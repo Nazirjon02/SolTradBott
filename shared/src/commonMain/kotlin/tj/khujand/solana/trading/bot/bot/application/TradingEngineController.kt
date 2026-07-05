@@ -11,7 +11,7 @@ import tj.khujand.solana.trading.bot.bot.domain.model.ActionResult
 import tj.khujand.solana.trading.bot.data.FilterSettingsManager
 import tj.khujand.solana.trading.bot.domain.MonitoredToken
 import tj.khujand.solana.trading.bot.domain.TokenMonitor
-import tj.khujand.solana.trading.bot.network.FilterSettings
+import tj.khujand.solana.trading.bot.exchange.dex.FilterSettings
 import tj.khujand.solana.trading.bot.util.AppSettings
 
 class TradingEngineController(

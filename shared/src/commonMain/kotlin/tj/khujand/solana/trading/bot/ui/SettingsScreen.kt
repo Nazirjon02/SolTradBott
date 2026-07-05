@@ -29,7 +29,7 @@ fun SettingsScreen() {
     val engineController = remember { TradingRuntime.engineController() }
     var settings by remember { mutableStateOf(FilterSettingsManager.loadSettings()) }
 
-    fun applySettings(updated: tj.khujand.solana.trading.bot.network.FilterSettings) {
+    fun applySettings(updated: tj.khujand.solana.trading.bot.exchange.dex.FilterSettings) {
         settings = updated
         FilterSettingsManager.saveSettings(updated)
         tokenMonitor.filterSettings = updated
@@ -223,7 +223,7 @@ private fun BotResetCard(onReset: () -> Unit) {
 
 @Composable
 private fun SettingsBackupCard(
-    onSettingsImported: (tj.khujand.solana.trading.bot.network.FilterSettings) -> Unit
+    onSettingsImported: (tj.khujand.solana.trading.bot.exchange.dex.FilterSettings) -> Unit
 ) {
     var exportMsg     by remember { mutableStateOf<String?>(null) }
     var showImport    by remember { mutableStateOf(false) }

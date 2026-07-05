@@ -13,7 +13,7 @@ import tj.khujand.solana.trading.bot.crypto.Signer
 import tj.khujand.solana.trading.bot.crypto.createSignerFromSeedPhrase
 import tj.khujand.solana.trading.bot.crypto.signTransactionBase64
 import tj.khujand.solana.trading.bot.domain.dars.DarsEntryEngine
-import tj.khujand.solana.trading.bot.network.*
+import tj.khujand.solana.trading.bot.exchange.dex.*
 import tj.khujand.solana.trading.bot.util.AppSettings
 import kotlin.time.Clock
 import kotlinx.coroutines.async
@@ -357,7 +357,7 @@ class TokenMonitor(
                                             println("🛑 RugCheck FAIL ${token.baseToken?.symbol}: score=${rugResult.score} risks=${rugResult.topRisks}")
                                             continue
                                         }
-                                        if (rugResult.level == tj.khujand.solana.trading.bot.network.RugRiskLevel.WARN) {
+                                        if (rugResult.level == tj.khujand.solana.trading.bot.exchange.dex.RugRiskLevel.WARN) {
                                             println("⚠️ RugCheck WARN ${token.baseToken?.symbol}: score=${rugResult.score} risks=${rugResult.topRisks}")
                                         }
                                     }

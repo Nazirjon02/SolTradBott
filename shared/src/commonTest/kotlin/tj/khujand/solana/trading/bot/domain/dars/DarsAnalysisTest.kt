@@ -1,6 +1,6 @@
 package tj.khujand.solana.trading.bot.domain.dars
 
-import tj.khujand.solana.trading.bot.network.Candle
+import tj.khujand.solana.trading.bot.exchange.dex.Candle
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse

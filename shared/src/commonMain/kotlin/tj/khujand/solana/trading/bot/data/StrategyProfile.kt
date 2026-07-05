@@ -1,6 +1,6 @@
 package tj.khujand.solana.trading.bot.data
 
-import tj.khujand.solana.trading.bot.network.FilterSettings
+import tj.khujand.solana.trading.bot.exchange.dex.FilterSettings
 
 enum class StrategyProfile(
     val label: String,

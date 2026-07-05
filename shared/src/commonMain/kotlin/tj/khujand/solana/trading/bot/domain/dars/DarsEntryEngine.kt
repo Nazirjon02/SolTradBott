@@ -1,9 +1,9 @@
 package tj.khujand.solana.trading.bot.domain.dars
 
-import tj.khujand.solana.trading.bot.network.Candle
-import tj.khujand.solana.trading.bot.network.FilterSettings
-import tj.khujand.solana.trading.bot.network.GeckoTerminalApi
-import tj.khujand.solana.trading.bot.network.TokenPair
+import tj.khujand.solana.trading.bot.exchange.dex.Candle
+import tj.khujand.solana.trading.bot.exchange.dex.FilterSettings
+import tj.khujand.solana.trading.bot.exchange.dex.GeckoTerminalApi
+import tj.khujand.solana.trading.bot.exchange.dex.TokenPair
 
 /**
  * Оркестратор входа по методике «Dars». Тянет свечи старшего и рабочего ТФ,

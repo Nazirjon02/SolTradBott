@@ -4,7 +4,7 @@ import kotlinx.datetime.Instant
 import kotlinx.datetime.TimeZone
 import kotlinx.datetime.toLocalDateTime
 import kotlinx.serialization.Serializable
-import tj.khujand.solana.trading.bot.network.TokenPair
+import tj.khujand.solana.trading.bot.exchange.dex.TokenPair
 
 /**
  * История токена с результатом торговли

@@ -1,6 +1,6 @@
 package tj.khujand.solana.trading.bot.domain.dars
 
-import tj.khujand.solana.trading.bot.network.Candle
+import tj.khujand.solana.trading.bot.exchange.dex.Candle
 
 /**
  * Сетап «Ложный пробой» (Урок 3) для лонга: цена прокалывает поддержку вниз (сбор стопов),
