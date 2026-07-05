@@ -17,6 +17,7 @@ dependencies {
     // Рантайм-зависимости commonMain не доходят транзитивно до JVM-консьюмера (доходят только
     // jvmMain), поэтому подключаем явно то, что десктоп реально использует в рантайме.
     implementation(libs.kotlinx.datetime)
+    implementation(libs.sqldelight.runtime)
 
     // Провайдер SLF4J для Ktor (иначе выводится "No SLF4J providers were found").
     runtimeOnly(libs.logback.classic)

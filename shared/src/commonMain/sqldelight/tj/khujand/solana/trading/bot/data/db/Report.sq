@@ -1,0 +1,13 @@
+getDailyReport:
+SELECT
+    COUNT(*) AS total_trades,
+    SUM(CASE WHEN pnl > 0 THEN 1 ELSE 0 END) AS win_trades,
+    SUM(CASE WHEN pnl < 0 THEN 1 ELSE 0 END) AS loss_trades,
+    COALESCE(SUM(pnl), 0.0) AS total_pnl,
+    COALESCE(AVG(CASE WHEN pnl > 0 THEN pnl ELSE NULL END), 0.0) AS avg_win,
+    COALESCE(AVG(CASE WHEN pnl < 0 THEN pnl ELSE NULL END), 0.0) AS avg_loss,
+    COALESCE(MAX(pnl), 0.0) AS best_trade,
+    COALESCE(MIN(pnl), 0.0) AS worst_trade,
+    COALESCE(SUM(fee), 0.0) AS total_fees
+FROM trade
+WHERE status = 'CLOSED' AND closed_at >= ?;

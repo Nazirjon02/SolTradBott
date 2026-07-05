@@ -6,6 +6,7 @@ plugins {
     alias(libs.plugins.composeMultiplatform)
     alias(libs.plugins.composeCompiler)
     alias(libs.plugins.kotlinSerialization)
+    alias(libs.plugins.sqldelight)
 }
 
 kotlin {
@@ -42,6 +43,9 @@ kotlin {
             implementation(libs.ktor.client.logging)
             implementation(libs.ktor.serialization.kotlinxJson)
 
+            implementation(libs.sqldelight.runtime)
+            implementation(libs.sqldelight.coroutinesExtensions)
+
             implementation(libs.kotlinx.serialization.json)
             implementation(libs.kotlinx.datetime)
             implementation(libs.kotlinx.coroutines.core)
@@ -51,17 +55,27 @@ kotlin {
         androidMain.dependencies {
             implementation(libs.compose.uiToolingPreview)
             implementation(libs.androidx.core.ktx)
+            implementation(libs.sqldelight.androidDriver)
             implementation(libs.ktor.client.cio)
             implementation(libs.eddsa)
             implementation(libs.kotlin.bip39.jvm)
         }
         jvmMain.dependencies {
+            implementation(libs.sqldelight.sqliteDriver)
             implementation(libs.ktor.client.cio)
             implementation(libs.eddsa)
             implementation(libs.kotlin.bip39.jvm)
         }
         commonTest.dependencies {
             implementation(libs.kotlin.test)
+        }
+    }
+}
+
+sqldelight {
+    databases {
+        create("DrxDatabase") {
+            packageName.set("tj.khujand.solana.trading.bot.data.db")
         }
     }
 }

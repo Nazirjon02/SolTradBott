@@ -1,0 +1,21 @@
+CREATE TABLE IF NOT EXISTS settings (
+    key TEXT NOT NULL PRIMARY KEY,
+    val_text TEXT NOT NULL,
+    updated_at INTEGER NOT NULL
+);
+
+get:
+SELECT val_text FROM settings WHERE key = ?;
+
+getAll:
+SELECT key, val_text FROM settings;
+
+set:
+INSERT OR REPLACE INTO settings (key, val_text, updated_at)
+VALUES (?, ?, ?);
+
+delete:
+DELETE FROM settings WHERE key = ?;
+
+deleteAll:
+DELETE FROM settings;

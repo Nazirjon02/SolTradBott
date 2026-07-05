@@ -1,0 +1,19 @@
+CREATE TABLE IF NOT EXISTS account_cache (
+    coin TEXT NOT NULL PRIMARY KEY,
+    balance REAL NOT NULL,
+    balance_usd REAL NOT NULL DEFAULT 0,
+    updated_at INTEGER NOT NULL
+);
+
+getCoin:
+SELECT * FROM account_cache WHERE coin = ?;
+
+getAll:
+SELECT * FROM account_cache;
+
+setBalance:
+INSERT OR REPLACE INTO account_cache (coin, balance, balance_usd, updated_at)
+VALUES (?, ?, ?, ?);
+
+deleteAll:
+DELETE FROM account_cache;

@@ -26,6 +26,7 @@ dependencies {
     implementation(libs.ktor.server.cors)
     implementation(libs.ktor.serialization.kotlinxJson)
 
+    implementation(libs.sqldelight.sqliteDriver)
     implementation(libs.kotlinx.serialization.json)
     implementation(libs.kotlinx.datetime)
     implementation(libs.logback.classic)

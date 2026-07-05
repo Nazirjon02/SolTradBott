@@ -1,0 +1,38 @@
+CREATE TABLE IF NOT EXISTS token_cache (
+    mint TEXT NOT NULL PRIMARY KEY,
+    symbol TEXT NOT NULL,
+    name TEXT NOT NULL,
+    pair_address TEXT NOT NULL,
+    dex_id TEXT NOT NULL DEFAULT '',
+    price_usd REAL NOT NULL,
+    liquidity_usd REAL NOT NULL,
+    market_cap REAL NOT NULL,
+    volume_h1_usd REAL NOT NULL DEFAULT 0,
+    buys_h1 INTEGER NOT NULL DEFAULT 0,
+    sells_h1 INTEGER NOT NULL DEFAULT 0,
+    price_change_m5 REAL NOT NULL DEFAULT 0,
+    price_change_h1 REAL NOT NULL DEFAULT 0,
+    token_age_minutes INTEGER NOT NULL DEFAULT 0,
+    score REAL NOT NULL DEFAULT 0,
+    rug_score INTEGER,
+    scanned_at INTEGER NOT NULL
+);
+
+getAll:
+SELECT * FROM token_cache ORDER BY score DESC;
+
+getByMint:
+SELECT * FROM token_cache WHERE mint = ?;
+
+upsert:
+INSERT OR REPLACE INTO token_cache (
+    mint, symbol, name, pair_address, dex_id, price_usd, liquidity_usd, market_cap,
+    volume_h1_usd, buys_h1, sells_h1, price_change_m5, price_change_h1,
+    token_age_minutes, score, rug_score, scanned_at
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+
+deleteOlderThan:
+DELETE FROM token_cache WHERE scanned_at < ?;
+
+deleteAll:
+DELETE FROM token_cache;
