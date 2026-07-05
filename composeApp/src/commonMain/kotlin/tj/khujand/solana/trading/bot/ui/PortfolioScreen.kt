@@ -66,12 +66,7 @@ fun PortfolioScreen() {
             .background(DarkBg)
             .padding(horizontal = 16.dp, vertical = 12.dp)
     ) {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Text("Портфель", style = MaterialTheme.typography.headlineMedium, color = TextOnDark)
+        SectionHeader("Портфель") {
             if (tokens.isNotEmpty()) {
                 Button(
                     onClick = { showPanicDialog = true },
@@ -85,7 +80,7 @@ fun PortfolioScreen() {
                 }
             }
         }
-        Spacer(Modifier.height(4.dp))
+        Spacer(Modifier.height(10.dp))
 
         panicMessage?.let { msg ->
             Spacer(Modifier.height(4.dp))
@@ -118,7 +113,7 @@ fun PortfolioScreen() {
             Text(
                 "Открытые позиции (${tokens.size})",
                 style = MaterialTheme.typography.titleSmall,
-                color = TextOnDarkMuted,
+                color = TextSecondary,
             )
             Spacer(Modifier.height(8.dp))
             LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -139,29 +134,25 @@ private fun PortfolioBalanceCard(demoBalance: Double, tokens: List<MonitoredToke
     val pnlColor = when {
         totalUnrealised > 0  -> SuccessGreen
         totalUnrealised < 0  -> DangerRed
-        else                 -> TextOnDarkMuted
+        else                 -> TextSecondary
     }
 
-    Card(
-        modifier = Modifier.fillMaxWidth(),
-        shape    = RoundedCornerShape(12.dp),
-        colors   = CardDefaults.cardColors(containerColor = DarkSurface),
-    ) {
+    GlowCard(modifier = Modifier.fillMaxWidth(), glow = true) {
         Row(
-            modifier = Modifier.padding(16.dp).fillMaxWidth(),
+            modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Column {
-                Text("Demo баланс", style = MaterialTheme.typography.labelMedium, color = TextOnDarkMuted)
+                Text("Demo баланс", style = MaterialTheme.typography.labelMedium, color = TextSecondary)
                 Text(
                     "$${formatDemoBalance(demoBalance)}",
                     style = MaterialTheme.typography.titleLarge.copy(fontSize = 20.sp, fontWeight = FontWeight.Bold),
-                    color = CyanAccent,
+                    color = SolGreen,
                 )
             }
             Column(horizontalAlignment = Alignment.End) {
-                Text("Нереализованный PnL", style = MaterialTheme.typography.labelMedium, color = TextOnDarkMuted)
+                Text("Нереализованный PnL", style = MaterialTheme.typography.labelMedium, color = TextSecondary)
                 Text(
                     "${if (totalUnrealised >= 0) "+" else ""}$${formatDemoBalance(totalUnrealised)}",
                     style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.SemiBold),
@@ -171,7 +162,7 @@ private fun PortfolioBalanceCard(demoBalance: Double, tokens: List<MonitoredToke
                     Text(
                         "Вложено: $${formatLargeNumber(totalInvested)}",
                         style = MaterialTheme.typography.bodySmall,
-                        color = TextOnDarkFaint,
+                        color = TextMuted,
                     )
                 }
             }
@@ -191,12 +182,12 @@ private fun PortfolioTokenCard(token: MonitoredToken, onCloseRequest: () -> Unit
     val address = token.tokenPair.baseToken?.address ?: token.tokenPair.pairAddress ?: ""
     val mcap    = token.lastMarketCap.takeIf { it > 0 } ?: token.entryMarketCap
 
-    Card(
+    GlowCard(
         modifier = Modifier.fillMaxWidth(),
-        shape    = RoundedCornerShape(12.dp),
-        colors   = CardDefaults.cardColors(containerColor = DarkSurface),
+        accent = pnlColor,
+        contentPadding = PaddingValues(14.dp),
     ) {
-        Column(modifier = Modifier.padding(14.dp)) {
+        Column {
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
@@ -207,7 +198,7 @@ private fun PortfolioTokenCard(token: MonitoredToken, onCloseRequest: () -> Unit
                     Text(
                         symbol,
                         style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold),
-                        color = TextOnDark,
+                        color = TextPrimary,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                     )
@@ -219,13 +210,13 @@ private fun PortfolioTokenCard(token: MonitoredToken, onCloseRequest: () -> Unit
                             Text(
                                 "${address.take(6)}…${address.takeLast(4)}",
                                 style = MaterialTheme.typography.bodySmall,
-                                color = TextOnDarkMuted,
+                                color = TextSecondary,
                             )
                             IconButton(
                                 onClick = { clipboard.setText(AnnotatedString(address)) },
                                 modifier = Modifier.size(18.dp).padding(start = 2.dp),
                             ) {
-                                Icon(Icons.Default.ContentCopy, contentDescription = "Copy", modifier = Modifier.size(12.dp), tint = TextOnDarkFaint)
+                                Icon(Icons.Default.ContentCopy, contentDescription = "Copy", modifier = Modifier.size(12.dp), tint = TextMuted)
                             }
                         }
                     }
@@ -306,8 +297,8 @@ private fun PortfolioTokenCard(token: MonitoredToken, onCloseRequest: () -> Unit
         AlertDialog(
             onDismissRequest = { showCloseConfirm = false },
             containerColor   = DarkSurface,
-            title = { Text("Закрыть позицию?", color = TextOnDark) },
-            text  = { Text("Токен $symbol будет принудительно закрыт по текущей цене.", color = TextOnDarkMuted) },
+            title = { Text("Закрыть позицию?", color = TextPrimary) },
+            text  = { Text("Токен $symbol будет принудительно закрыт по текущей цене.", color = TextSecondary) },
             confirmButton = {
                 TextButton(onClick = { onCloseRequest(); showCloseConfirm = false }) {
                     Text("Закрыть", color = DangerRed)
@@ -315,7 +306,7 @@ private fun PortfolioTokenCard(token: MonitoredToken, onCloseRequest: () -> Unit
             },
             dismissButton = {
                 TextButton(onClick = { showCloseConfirm = false }) {
-                    Text("Отмена", color = TextOnDarkMuted)
+                    Text("Отмена", color = TextSecondary)
                 }
             }
         )
@@ -340,7 +331,7 @@ private fun PanicSellDialog(
         text = {
             Text(
                 "Все $tokenCount открытых позиций будут немедленно закрыты по текущей цене.\n\nЭто действие нельзя отменить.",
-                color = TextOnDarkMuted,
+                color = TextSecondary,
             )
         },
         confirmButton = {
@@ -350,7 +341,7 @@ private fun PanicSellDialog(
             ) { Text("Закрыть всё", color = androidx.compose.ui.graphics.Color.White) }
         },
         dismissButton = {
-            TextButton(onClick = onDismiss) { Text("Отмена", color = TextOnDarkMuted) }
+            TextButton(onClick = onDismiss) { Text("Отмена", color = TextSecondary) }
         }
     )
 }
@@ -358,8 +349,8 @@ private fun PanicSellDialog(
 @Composable
 private fun MetricCell(label: String, value: String) {
     Column(horizontalAlignment = Alignment.CenterHorizontally) {
-        Text(label, style = MaterialTheme.typography.labelSmall, color = TextOnDarkMuted)
-        Text(value, style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.Medium), color = TextOnDark)
+        Text(label, style = MaterialTheme.typography.labelSmall, color = TextSecondary)
+        Text(value, style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.Medium), color = TextPrimary)
     }
 }
 
@@ -372,7 +363,7 @@ private fun StageProgressRow(token: MonitoredToken) {
         "S4" to token.exitStage4Done,
     )
     Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
-        Text("Стадии:", style = MaterialTheme.typography.labelSmall, color = TextOnDarkMuted)
+        Text("Стадии:", style = MaterialTheme.typography.labelSmall, color = TextSecondary)
         stages.forEach { (label, done) ->
             Box(
                 modifier = Modifier
@@ -383,7 +374,7 @@ private fun StageProgressRow(token: MonitoredToken) {
                 Text(
                     label,
                     style = MaterialTheme.typography.labelSmall,
-                    color = if (done) SuccessGreen else TextOnDarkFaint,
+                    color = if (done) SuccessGreen else TextMuted,
                 )
             }
         }
@@ -391,7 +382,7 @@ private fun StageProgressRow(token: MonitoredToken) {
         Text(
             "Остаток: ${formatNumber(token.remainingPositionPct, 0)}%",
             style = MaterialTheme.typography.labelSmall,
-            color = CyanAccent,
+            color = SolPurple,
         )
     }
 }
@@ -399,16 +390,10 @@ private fun StageProgressRow(token: MonitoredToken) {
 @Composable
 private fun EmptyPortfolioPlaceholder() {
     Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-            Icon(
-                Icons.Default.AccountBalanceWallet,
-                contentDescription = null,
-                modifier = Modifier.size(56.dp),
-                tint = TextOnDarkFaint,
-            )
-            Spacer(Modifier.height(12.dp))
-            Text("Нет открытых позиций", style = MaterialTheme.typography.titleMedium, color = TextOnDarkMuted)
-            Text("Запустите сканер для поиска токенов", style = MaterialTheme.typography.bodySmall, color = TextOnDarkFaint)
-        }
+        EmptyState(
+            icon = Icons.Default.AccountBalanceWallet,
+            title = "Нет открытых позиций",
+            subtitle = "Запустите сканер для поиска токенов",
+        )
     }
 }

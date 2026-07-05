@@ -225,7 +225,7 @@ fun StrategiesScreen() {
             text  = {
                 Text(
                     "Стратегия «${toDelete.name}» будет удалена. Это действие нельзя отменить.",
-                    color = TextOnDarkMuted
+                    color = TextSecondary
                 )
             },
             confirmButton = {
@@ -243,7 +243,7 @@ fun StrategiesScreen() {
             },
             dismissButton = {
                 TextButton(onClick = { showDeleteConfirm = null }) {
-                    Text("Отмена", color = TextOnDarkMuted)
+                    Text("Отмена", color = TextSecondary)
                 }
             },
         )
@@ -401,7 +401,8 @@ private fun StatusBanner(
             )
         )
     } else {
-        Brush.linearGradient(colors = listOf(DarkSurface, DarkSurfaceVar))
+        // Стоп-состояние — фирменное свечение Solana поверх тёмной карточки
+        SolanaGradientSoft
     }
 
     Card(
@@ -413,7 +414,9 @@ private fun StatusBanner(
         Box(
             modifier = Modifier
                 .fillMaxWidth()
+                .background(DarkSurface, RoundedCornerShape(20.dp))
                 .background(gradientBrush, RoundedCornerShape(20.dp))
+                .border(1.dp, SolanaGradient, RoundedCornerShape(20.dp))
                 .padding(horizontal = 20.dp, vertical = 18.dp)
         ) {
             Row(
@@ -506,26 +509,17 @@ private fun StatusBanner(
 
 @Composable
 private fun StrategySelectorHeader(onAddSlot: () -> Unit) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 16.dp),
-        horizontalArrangement = Arrangement.SpaceBetween,
-        verticalAlignment = Alignment.CenterVertically,
+    SectionHeader(
+        title = "Стратегии",
+        modifier = Modifier.padding(horizontal = 16.dp),
     ) {
-        Text(
-            "Стратегии",
-            fontSize   = 16.sp,
-            fontWeight = FontWeight.SemiBold,
-            color      = TextOnDark,
-        )
         TextButton(
             onClick = onAddSlot,
             contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp),
         ) {
-            Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(16.dp), tint = CyanAccent)
+            Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(16.dp), tint = SolGreen)
             Spacer(Modifier.width(4.dp))
-            Text("Новая", fontSize = 13.sp, color = CyanAccent)
+            Text("Новая", fontSize = 13.sp, color = SolGreen)
         }
     }
 }
@@ -552,7 +546,7 @@ private fun StrategyCard(
 
     val borderModifier = when {
         isRunning  -> Modifier.border(2.dp, accentColor, RoundedCornerShape(14.dp))
-        isSelected -> Modifier.border(1.5.dp, CyanAccent.copy(alpha = 0.7f), RoundedCornerShape(14.dp))
+        isSelected -> Modifier.border(1.5.dp, SolPurple.copy(alpha = 0.7f), RoundedCornerShape(14.dp))
         else       -> Modifier
     }
 
@@ -577,7 +571,7 @@ private fun StrategyCard(
             Text(
                 slot.name,
                 fontSize  = 10.sp,
-                color     = if (isSelected || isRunning) TextOnDark else TextOnDarkMuted,
+                color     = if (isSelected || isRunning) TextPrimary else TextSecondary,
                 fontWeight = if (isSelected || isRunning) FontWeight.SemiBold else FontWeight.Normal,
                 maxLines  = 1,
                 overflow  = TextOverflow.Ellipsis,
@@ -590,13 +584,13 @@ private fun StrategyCard(
             ) {
                 Box(
                     modifier = Modifier.size(5.dp).clip(CircleShape).background(
-                        if (isRunning) accentColor.copy(alpha = runPulse) else TextOnDarkFaint
+                        if (isRunning) accentColor.copy(alpha = runPulse) else TextMuted
                     )
                 )
                 Text(
                     if (isRunning) "$tokenCount токен${tokenSuffix(tokenCount)}" else "Стоп",
                     fontSize = 9.sp,
-                    color    = if (isRunning) accentColor else TextOnDarkFaint,
+                    color    = if (isRunning) accentColor else TextMuted,
                     maxLines = 1,
                 )
             }
@@ -622,11 +616,11 @@ private fun AddStrategyCard(onClick: () -> Unit) {
             Icon(
                 Icons.Default.Add,
                 contentDescription = "Добавить",
-                tint     = TextOnDarkMuted,
+                tint     = TextSecondary,
                 modifier = Modifier.size(24.dp),
             )
             Spacer(Modifier.height(4.dp))
-            Text("Добавить", fontSize = 9.sp, color = TextOnDarkMuted, textAlign = TextAlign.Center)
+            Text("Добавить", fontSize = 9.sp, color = TextSecondary, textAlign = TextAlign.Center)
         }
     }
 }
@@ -671,12 +665,12 @@ private fun SelectedStrategyPanel(
                             slot.name,
                             fontSize   = 14.sp,
                             fontWeight = FontWeight.SemiBold,
-                            color      = TextOnDark,
+                            color      = TextPrimary,
                         )
                         Text(
                             strategyDescription(slot),
                             fontSize = 11.sp,
-                            color    = TextOnDarkMuted,
+                            color    = TextSecondary,
                             maxLines = 1,
                         )
                     }
@@ -705,36 +699,21 @@ private fun SelectedStrategyPanel(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                // START / STOP
-                Button(
+                // START / STOP — фирменный градиент purple→green; стоп — danger
+                GradientButton(
+                    text     = if (isRunning) "СТОП" else "СТАРТ",
                     onClick  = if (isRunning) onStop else onStart,
                     modifier = Modifier.weight(1f),
-                    shape    = RoundedCornerShape(10.dp),
-                    colors   = ButtonDefaults.buttonColors(
-                        containerColor = if (isRunning) DangerRed else accentColor.copy(alpha = 0.85f),
-                        contentColor   = if (isRunning) Color.White else Color.Black,
-                    ),
-                ) {
-                    Icon(
-                        if (isRunning) Icons.Default.Stop else Icons.Default.PlayArrow,
-                        contentDescription = null,
-                        modifier = Modifier.size(16.dp),
-                    )
-                    Spacer(Modifier.width(5.dp))
-                    Text(
-                        if (isRunning) "СТОП" else "СТАРТ",
-                        fontSize   = 13.sp,
-                        fontWeight = FontWeight.Bold,
-                        letterSpacing = 0.3.sp,
-                    )
-                }
+                    icon     = if (isRunning) Icons.Default.Stop else Icons.Default.PlayArrow,
+                    danger   = isRunning,
+                )
 
                 // EDIT
                 OutlinedButton(
                     onClick  = onEdit,
                     modifier = Modifier.weight(1f),
                     shape    = RoundedCornerShape(10.dp),
-                    colors   = ButtonDefaults.outlinedButtonColors(contentColor = TextOnDark),
+                    colors   = ButtonDefaults.outlinedButtonColors(contentColor = TextPrimary),
                     border   = androidx.compose.foundation.BorderStroke(1.dp, DarkBorder),
                 ) {
                     Icon(Icons.Default.Settings, contentDescription = null, modifier = Modifier.size(16.dp))
@@ -763,7 +742,7 @@ private fun ActiveFiltersStrip(settings: FilterSettings, modifier: Modifier = Mo
     Surface(
         modifier = modifier.fillMaxWidth(),
         shape    = RoundedCornerShape(10.dp),
-        color    = CyanAccentBg,
+        color    = SolPurpleBg,
     ) {
         Row(
             modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
@@ -774,15 +753,15 @@ private fun ActiveFiltersStrip(settings: FilterSettings, modifier: Modifier = Mo
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(5.dp),
             ) {
-                Icon(Icons.Default.FilterAlt, contentDescription = null, modifier = Modifier.size(13.dp), tint = CyanAccent)
-                Text("Фильтры", fontSize = 11.sp, fontWeight = FontWeight.SemiBold, color = CyanAccentDim)
+                Icon(Icons.Default.FilterAlt, contentDescription = null, modifier = Modifier.size(13.dp), tint = SolPurple)
+                Text("Фильтры", fontSize = 11.sp, fontWeight = FontWeight.SemiBold, color = SolPurpleDim)
             }
             Text(
                 "MC \$${formatSimpleNumber(settings.entryMinMarketCap.toInt())}–${formatSimpleNumber(settings.entryMaxMarketCap.toInt())} " +
                 "• Liq ≥\$${formatSimpleNumber(settings.entryMinLiquidity.toInt())} " +
                 "• Age ≤${settings.entryMaxAgeMinutes}m",
                 fontSize = 10.sp,
-                color    = TextOnDarkMuted,
+                color    = TextSecondary,
             )
         }
     }
@@ -796,56 +775,15 @@ private fun StrategiesEmptyState(
     runningSlot: StrategySlot?,
     modifier: Modifier = Modifier,
 ) {
-    Column(
-        modifier = modifier.fillMaxWidth(),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.spacedBy(10.dp),
-    ) {
-        Surface(modifier = Modifier.size(72.dp), shape = CircleShape, color = CyanAccentBg) {
-            Box(contentAlignment = Alignment.Center) {
-                Icon(
-                    if (isMonitoring) Icons.Default.TrackChanges else Icons.Default.Search,
-                    contentDescription = null,
-                    modifier = Modifier.size(36.dp),
-                    tint = CyanAccent,
-                )
-            }
-        }
-        Text(
-            if (isMonitoring) "Сканирую рынок…" else "Готов к запуску",
-            fontSize   = 17.sp,
-            fontWeight = FontWeight.SemiBold,
-            color      = TextOnDark,
-        )
-        Text(
-            if (isMonitoring)
-                "Токены, соответствующие фильтрам ${runningSlot?.name ?: ""}, появятся здесь"
-            else
-                "Выберите стратегию и нажмите СТАРТ",
-            fontSize  = 13.sp,
-            color     = TextOnDarkMuted,
-            textAlign = TextAlign.Center,
-        )
-    }
-}
-
-// ─── Stat Chip ────────────────────────────────────────────────────────────────
-
-@Composable
-private fun StatChip(label: String, value: String, accentColor: Color) {
-    Surface(
-        shape = RoundedCornerShape(6.dp),
-        color = accentColor.copy(alpha = 0.10f),
-    ) {
-        Row(
-            modifier = Modifier.padding(horizontal = 7.dp, vertical = 4.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(3.dp),
-        ) {
-            Text(label, fontSize = 9.sp, color = accentColor.copy(alpha = 0.8f), fontWeight = FontWeight.SemiBold)
-            Text(value, fontSize = 9.sp, color = TextOnDark)
-        }
-    }
+    EmptyState(
+        icon = if (isMonitoring) Icons.Default.TrackChanges else Icons.Default.Search,
+        title = if (isMonitoring) "Сканирую рынок…" else "Готов к запуску",
+        subtitle = if (isMonitoring)
+            "Токены, соответствующие фильтрам ${runningSlot?.name ?: ""}, появятся здесь"
+        else
+            "Выберите стратегию и нажмите СТАРТ",
+        modifier = modifier,
+    )
 }
 
 // ─── Filter Edit Overlay ──────────────────────────────────────────────────────
@@ -869,19 +807,19 @@ private fun FilterEditOverlay(
             verticalAlignment = Alignment.CenterVertically,
         ) {
             IconButton(onClick = onClose) {
-                Icon(Icons.Default.ArrowBack, contentDescription = "Назад", tint = TextOnDark)
+                Icon(Icons.Default.ArrowBack, contentDescription = "Назад", tint = TextPrimary)
             }
             Text(
                 "Настройки: $slotName",
                 fontSize = 15.sp,
                 fontWeight = FontWeight.SemiBold,
-                color = TextOnDark,
+                color = TextPrimary,
             )
             TextButton(onClick = {
                 onSaveToSlot()
                 onClose()
             }) {
-                Text("Сохранить", color = CyanAccent, fontSize = 13.sp)
+                Text("Сохранить", color = SolPurple, fontSize = 13.sp)
             }
         }
         HorizontalDivider(color = DarkBorder)
@@ -916,34 +854,34 @@ private fun AddStrategyDialog(
     AlertDialog(
         onDismissRequest = onDismiss,
         containerColor   = DarkSurface,
-        title = { Text("Новая стратегия", color = TextOnDark, fontWeight = FontWeight.SemiBold) },
+        title = { Text("Новая стратегия", color = TextPrimary, fontWeight = FontWeight.SemiBold) },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 OutlinedTextField(
                     value = name,
                     onValueChange = { name = it },
-                    label = { Text("Название", color = TextOnDarkMuted, fontSize = 12.sp) },
+                    label = { Text("Название", color = TextSecondary, fontSize = 12.sp) },
                     isError = nameError,
                     supportingText = if (nameError) ({ Text(if (name in existingNames) "Имя уже занято" else "Минимум 2 символа", color = DangerRed, fontSize = 11.sp) }) else null,
                     modifier = Modifier.fillMaxWidth(),
                     colors = OutlinedTextFieldDefaults.colors(
-                        focusedBorderColor   = CyanAccent,
+                        focusedBorderColor   = SolPurple,
                         unfocusedBorderColor = DarkBorder,
-                        focusedTextColor     = TextOnDark,
-                        unfocusedTextColor   = TextOnDark,
+                        focusedTextColor     = TextPrimary,
+                        unfocusedTextColor   = TextPrimary,
                     ),
                     singleLine = true,
                 )
 
                 // Emoji picker
-                Text("Иконка", fontSize = 12.sp, color = TextOnDarkMuted)
+                Text("Иконка", fontSize = 12.sp, color = TextSecondary)
                 LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                     items(emojiOptions) { e ->
                         Surface(
                             modifier  = Modifier.size(40.dp).clickable { emoji = e },
                             shape     = CircleShape,
-                            color     = if (emoji == e) CyanAccentBg else DarkSurfaceVar,
-                            border    = if (emoji == e) androidx.compose.foundation.BorderStroke(1.5.dp, CyanAccent) else null,
+                            color     = if (emoji == e) SolPurpleBg else DarkSurfaceVar,
+                            border    = if (emoji == e) androidx.compose.foundation.BorderStroke(1.5.dp, SolPurple) else null,
                         ) {
                             Box(contentAlignment = Alignment.Center) {
                                 Text(e, fontSize = 20.sp)
@@ -953,7 +891,7 @@ private fun AddStrategyDialog(
                 }
 
                 // Color picker
-                Text("Цвет", fontSize = 12.sp, color = TextOnDarkMuted)
+                Text("Цвет", fontSize = 12.sp, color = TextSecondary)
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     colorOptions.forEachIndexed { idx, hex ->
                         val (r, g, b) = parseStrategyColor(hex)
@@ -970,7 +908,7 @@ private fun AddStrategyDialog(
                 }
 
                 // Base strategy
-                Text("Скопировать настройки из", fontSize = 12.sp, color = TextOnDarkMuted)
+                Text("Скопировать настройки из", fontSize = 12.sp, color = TextSecondary)
                 LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                     item {
                         FilterChip(
@@ -978,8 +916,8 @@ private fun AddStrategyDialog(
                             onClick  = { baseSlot = null },
                             label    = { Text("Текущие", fontSize = 11.sp) },
                             colors   = FilterChipDefaults.filterChipColors(
-                                selectedContainerColor = CyanAccentBg,
-                                selectedLabelColor     = CyanAccent,
+                                selectedContainerColor = SolPurpleBg,
+                                selectedLabelColor     = SolPurple,
                             ),
                         )
                     }
@@ -989,8 +927,8 @@ private fun AddStrategyDialog(
                             onClick  = { baseSlot = s },
                             label    = { Text("${s.emoji} ${s.name}", fontSize = 11.sp) },
                             colors   = FilterChipDefaults.filterChipColors(
-                                selectedContainerColor = CyanAccentBg,
-                                selectedLabelColor     = CyanAccent,
+                                selectedContainerColor = SolPurpleBg,
+                                selectedLabelColor     = SolPurple,
                             ),
                         )
                     }
@@ -1004,11 +942,11 @@ private fun AddStrategyDialog(
                         onConfirm(name.trim(), emoji, colorOptions[colorIdx], baseSlot)
                 },
                 enabled  = name.isNotBlank() && !nameError,
-                colors   = ButtonDefaults.buttonColors(containerColor = CyanAccent),
+                colors   = ButtonDefaults.buttonColors(containerColor = SolPurple),
             ) { Text("Создать", color = Color.Black, fontWeight = FontWeight.Bold) }
         },
         dismissButton = {
-            TextButton(onClick = onDismiss) { Text("Отмена", color = TextOnDarkMuted) }
+            TextButton(onClick = onDismiss) { Text("Отмена", color = TextSecondary) }
         },
     )
 }

@@ -12,6 +12,7 @@ import kotlinx.serialization.json.jsonPrimitive
 import tj.khujand.solana.trading.bot.crypto.Signer
 import tj.khujand.solana.trading.bot.crypto.createSignerFromSeedPhrase
 import tj.khujand.solana.trading.bot.crypto.signTransactionBase64
+import tj.khujand.solana.trading.bot.domain.dars.DarsEntryEngine
 import tj.khujand.solana.trading.bot.network.*
 import tj.khujand.solana.trading.bot.util.AppSettings
 import kotlin.time.Clock
@@ -91,6 +92,7 @@ class TokenMonitor(
     private val api = DexScreenerApi()
     private val jupiterApi = JupiterApi()
     private var aiAnalyzer: AiAnalyzer? = null  // ⭐ AI-анализатор (создаётся при необходимости)
+    private var darsEngine: DarsEntryEngine? = null  // ⭐ Движок входа по методике «Dars» (свечи OHLCV)
     private var monitorJob: Job? = null
     // @Volatile — изменение видно всем потокам немедленно (loop-check + cancel из другого потока)
     @Volatile private var isMonitoring = false
@@ -137,6 +139,8 @@ class TokenMonitor(
                 aiAnalyzer?.close()
                 aiAnalyzer = null
             }
+            // Движок Dars создаётся при включении методики
+            darsEngine = if (value.darsEnabled) (darsEngine ?: DarsEntryEngine()) else null
         }
 
     init {
@@ -357,6 +361,21 @@ class TokenMonitor(
                                             println("⚠️ RugCheck WARN ${token.baseToken?.symbol}: score=${rugResult.score} risks=${rugResult.topRisks}")
                                         }
                                     }
+                                }
+
+                                // 5в. 🎯 DARS — вход по методике (свечи OHLCV, прайс-экшн)
+                                if (filterSettings.darsEnabled) {
+                                    if (isWithinNewsBlackout()) {
+                                        println("⏭️ Dars ${token.baseToken?.symbol}: окно новостей — входы заблокированы")
+                                        continue
+                                    }
+                                    val engine = darsEngine ?: DarsEntryEngine().also { darsEngine = it }
+                                    val signal = engine.evaluate(token, filterSettings)
+                                    if (!signal.passed) {
+                                        println("⏭️ Dars ${token.baseToken?.symbol}: ${signal.describe()}")
+                                        continue
+                                    }
+                                    println("✅ Dars ${token.baseToken?.symbol}: ${signal.describe()}")
                                 }
 
                                 // 5б. Добавляем токен
@@ -1114,6 +1133,10 @@ class TokenMonitor(
     }
 
     private fun matchesEntryCriteria(token: TokenPair): Boolean {
+        // В режиме «Только Dars» вход решает методика, а старые momentum-фильтры смягчаются.
+        // Предохранители (возраст, market cap, ликвидность) остаются активными всегда.
+        val darsOnly = filterSettings.darsEnabled && filterSettings.darsOnlyMode
+
         val createdAtMs = getPairCreatedAtMs(token.pairCreatedAt) ?: return false
         val ageMinutes = (Clock.System.now().toEpochMilliseconds() - createdAtMs) / (1000.0 * 60.0)
         if (ageMinutes > filterSettings.entryMaxAgeMinutes) return false
@@ -1124,31 +1147,33 @@ class TokenMonitor(
         val liquidity = token.liquidity?.usd ?: return false
         if (liquidity < filterSettings.entryMinLiquidity) return false
 
-        val volumeH24 = token.volume?.h24 ?: 0.0
-        if (filterSettings.useVolumeH24 && volumeH24 < filterSettings.entryMinVolume) return false
+        if (!darsOnly) {
+            val volumeH24 = token.volume?.h24 ?: 0.0
+            if (filterSettings.useVolumeH24 && volumeH24 < filterSettings.entryMinVolume) return false
 
-        val volumeM5 = token.volume?.m5 ?: 0.0
-        if (filterSettings.useVolumeM5 && volumeM5 < filterSettings.entryMinVolumeM5) return false
+            val volumeM5 = token.volume?.m5 ?: 0.0
+            if (filterSettings.useVolumeM5 && volumeM5 < filterSettings.entryMinVolumeM5) return false
 
-        val hasWebsite = token.info?.websites?.any { !it.url.isNullOrBlank() } == true
-        val hasSocials = token.info?.socials?.any { !it.url.isNullOrBlank() } == true
-        if (filterSettings.requireWebsite && !hasWebsite) return false
-        if (filterSettings.requireSocials && !hasSocials) return false
+            val hasWebsite = token.info?.websites?.any { !it.url.isNullOrBlank() } == true
+            val hasSocials = token.info?.socials?.any { !it.url.isNullOrBlank() } == true
+            if (filterSettings.requireWebsite && !hasWebsite) return false
+            if (filterSettings.requireSocials && !hasSocials) return false
 
-        // Buys/Sells ratio M5 > min (если фильтр включён)
-        if (filterSettings.useMinBuysToSellsRatioM5) {
-            val buysM5 = token.txns?.m5?.buys ?: 0
-            val sellsM5 = token.txns?.m5?.sells ?: 0
-            val ratioOk = when {
-                sellsM5 == 0 -> buysM5 > 0
-                else -> (buysM5.toDouble() / sellsM5) >= filterSettings.minBuysToSellsRatioM5
+            // Buys/Sells ratio M5 > min (если фильтр включён)
+            if (filterSettings.useMinBuysToSellsRatioM5) {
+                val buysM5 = token.txns?.m5?.buys ?: 0
+                val sellsM5 = token.txns?.m5?.sells ?: 0
+                val ratioOk = when {
+                    sellsM5 == 0 -> buysM5 > 0
+                    else -> (buysM5.toDouble() / sellsM5) >= filterSettings.minBuysToSellsRatioM5
+                }
+                if (!ratioOk) return false
             }
-            if (!ratioOk) return false
-        }
 
-        // Price ↑ за 5 мин (если фильтр включён; при отсутствии m5 в API — не отсекаем)
-        if (filterSettings.useMinPriceChangeM5Pct) {
-            token.priceChange?.m5?.let { if (it < filterSettings.minPriceChangeM5Pct) return false }
+            // Price ↑ за 5 мин (если фильтр включён; при отсутствии m5 в API — не отсекаем)
+            if (filterSettings.useMinPriceChangeM5Pct) {
+                token.priceChange?.m5?.let { if (it < filterSettings.minPriceChangeM5Pct) return false }
+            }
         }
 
         return true
@@ -1902,6 +1927,23 @@ class TokenMonitor(
         } else {
             // Диапазон переходит через полночь (напр. 22:00 – 06:00)
             hourOfDay >= start || hourOfDay < end
+        }
+    }
+
+    /**
+     * Окно новостей (Урок 4): в заданный интервал UTC входы запрещены.
+     * true = сейчас внутри окна (торговать нельзя).
+     */
+    private fun isWithinNewsBlackout(): Boolean {
+        if (!filterSettings.darsNewsBlackoutEnabled) return false
+        val start = filterSettings.darsBlackoutStartUtcMin.coerceIn(0, 1439)
+        val end = filterSettings.darsBlackoutEndUtcMin.coerceIn(0, 1439)
+        if (start == end) return false
+        val minuteOfDay = ((Clock.System.now().toEpochMilliseconds() / 60_000L) % 1440L).toInt()
+        return if (start <= end) {
+            minuteOfDay in start until end
+        } else {
+            minuteOfDay >= start || minuteOfDay < end
         }
     }
 

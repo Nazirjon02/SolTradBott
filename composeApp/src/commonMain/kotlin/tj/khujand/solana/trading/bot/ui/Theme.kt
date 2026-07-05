@@ -4,90 +4,91 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Typography
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.runtime.Composable
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.sp
 
-// ─── Dark Brand Palette ───────────────────────────────────────────────────────
-val CyanAccent        = Color(0xFF00E5FF)
-val CyanAccentDim     = Color(0xFF0097A7)
-val CyanAccentBg      = Color(0xFF001F26)
+// ─── Solana Brand Palette ─────────────────────────────────────────────────────
+val SolPurple         = Color(0xFF9945FF)   // фирменный фиолетовый Solana
+val SolPurpleDim      = Color(0xFF7A2FE0)
+val SolPurpleBg       = Color(0xFF1E1236)   // подложка под фиолетовый акцент
 
-val DarkBg            = Color(0xFF0D1117)   // page background per spec
-val DarkSurface       = Color(0xFF161B22)   // card background
-val DarkSurfaceVar    = Color(0xFF1C2128)   // elevated card
-val DarkBorder        = Color(0xFF30363D)
+val SolGreen          = Color(0xFF14F195)   // фирменный зелёный Solana
+val SolGreenDim       = Color(0xFF0EC27A)
+val SolGreenBg        = Color(0xFF0A2119)   // подложка под зелёный акцент
 
-val TextOnDark        = Color(0xFFE6EDF3)   // primary text
-val TextOnDarkMuted   = Color(0xFF8B949E)   // secondary text
-val TextOnDarkFaint   = Color(0xFF484F58)   // disabled / placeholder
+// ─── Dark Background Scale (фиолетово-чёрный, вайб Phantom) ───────────────────
+val DarkBg            = Color(0xFF0E0B14)   // фон страницы
+val DarkSurface       = Color(0xFF171322)   // карточка
+val DarkSurfaceVar    = Color(0xFF1E1930)   // приподнятая карточка
+val DarkBorder        = Color(0xFF2C2440)   // рамки/разделители
+
+// ─── Text ─────────────────────────────────────────────────────────────────────
+val TextPrimary       = Color(0xFFF2EFF7)
+val TextSecondary     = Color(0xFF9D95B3)
+val TextMuted         = Color(0xFF574F6B)
 
 // ─── Semantic Colors ──────────────────────────────────────────────────────────
-val SuccessGreen      = Color(0xFF3FB950)
-val SuccessGreenBg    = Color(0xFF0D1F12)
+val SuccessGreen      = SolGreen
+val SuccessGreenBg    = SolGreenBg
 
-val DangerRed         = Color(0xFFF85149)
-val DangerRedBg       = Color(0xFF1F0D0D)
+val DangerRed         = Color(0xFFFF4976)
+val DangerRedBg       = Color(0xFF2A0F18)
 
-val WarnAmber         = Color(0xFFD29922)
-val WarnAmberBg       = Color(0xFF1C1600)
+val WarnAmber         = Color(0xFFFFB224)
+val WarnAmberBg       = Color(0xFF241A05)
 
-// ─── Legacy aliases kept for compatibility ────────────────────────────────────
-val BrandIndigo       = CyanAccent
-val BrandIndigoLight  = CyanAccentBg
-val BrandIndigoDark   = CyanAccentDim
-val BrandTeal         = CyanAccent
-val BrandTealLight    = CyanAccentBg
-val BrandTealDark     = CyanAccentDim
-val BrandPurple       = Color(0xFF9747FF)
-val BrandPurpleLight  = Color(0xFF1A0D2E)
-val BrandPurpleDark   = Color(0xFF6B21A8)
-val NeutralBg         = DarkBg
-val NeutralCard       = DarkSurface
-val NeutralBorder     = DarkBorder
-val TextPrimary       = TextOnDark
-val TextSecondary     = TextOnDarkMuted
-val TextMuted         = TextOnDarkFaint
-val SuccessGreenDark  = SuccessGreen
-val DangerRedDark     = DangerRed
+// ─── Gradients (акценты, кнопки, индикаторы) ──────────────────────────────────
+val SolanaGradient = Brush.linearGradient(listOf(SolPurple, SolGreen))
+
+/** Полупрозрачный вариант для фонов карточек/баннеров. */
+val SolanaGradientSoft = Brush.linearGradient(
+    listOf(SolPurple.copy(alpha = 0.22f), SolGreen.copy(alpha = 0.10f))
+)
+
+/** Вертикальное свечение для подложек графиков (purple → прозрачный). */
+val SolanaGlowVertical = Brush.verticalGradient(
+    listOf(SolPurple.copy(alpha = 0.25f), Color.Transparent)
+)
 
 // ─── Dark Color Scheme ────────────────────────────────────────────────────────
 private val AppColorScheme = darkColorScheme(
-    primary              = CyanAccent,
-    onPrimary            = Color(0xFF002023),
-    primaryContainer     = CyanAccentBg,
-    onPrimaryContainer   = CyanAccent,
+    primary              = SolPurple,
+    onPrimary            = Color.White,
+    primaryContainer     = SolPurpleBg,
+    onPrimaryContainer   = Color(0xFFCFA9FF),
 
-    secondary            = Color(0xFF58A6FF),
-    onSecondary          = Color(0xFF001B3E),
-    secondaryContainer   = Color(0xFF001B3E),
-    onSecondaryContainer = Color(0xFF58A6FF),
+    secondary            = SolGreen,
+    onSecondary          = Color(0xFF00281A),
+    secondaryContainer   = SolGreenBg,
+    onSecondaryContainer = SolGreen,
 
-    tertiary             = BrandPurple,
-    onTertiary           = Color(0xFF1A0D2E),
-    tertiaryContainer    = BrandPurpleLight,
-    onTertiaryContainer  = Color(0xFFCFB8FF),
+    tertiary             = Color(0xFF58A6FF),
+    onTertiary           = Color(0xFF001B3E),
+    tertiaryContainer    = Color(0xFF0E1A2E),
+    onTertiaryContainer  = Color(0xFF9CC8FF),
 
     error                = DangerRed,
     errorContainer       = DangerRedBg,
     onError              = Color.White,
-    onErrorContainer     = Color(0xFFFFB4AB),
+    onErrorContainer     = Color(0xFFFFB3C2),
 
     background           = DarkBg,
-    onBackground         = TextOnDark,
+    onBackground         = TextPrimary,
 
     surface              = DarkSurface,
-    onSurface            = TextOnDark,
+    onSurface            = TextPrimary,
     surfaceVariant       = DarkSurfaceVar,
-    onSurfaceVariant     = TextOnDarkMuted,
+    onSurfaceVariant     = TextSecondary,
 
     outline              = DarkBorder,
-    outlineVariant       = Color(0xFF21262D),
+    outlineVariant       = Color(0xFF221B33),
 
-    inverseSurface       = TextOnDark,
+    inverseSurface       = TextPrimary,
     inverseOnSurface     = DarkBg,
-    inversePrimary       = CyanAccentDim,
+    inversePrimary       = SolPurpleDim,
 )
 
 // ─── Typography ───────────────────────────────────────────────────────────────

@@ -286,7 +286,41 @@ data class FilterSettings(
     val sniperEnabled: Boolean = false,             // ⭐ Включить sniper режим
     val sniperMaxAgeSeconds: Int = 120,             // ⭐ Макс. возраст токена для sniper (секунды)
     val sniperMinLiquidityUsd: Double = 1000.0,     // Мин. ликвидность для sniper входа
-    val sniperIntervalMs: Long = 3_000L             // Интервал опроса sniper (мс)
+    val sniperIntervalMs: Long = 3_000L,            // Интервал опроса sniper (мс)
+
+    // ─────────────────────────────────────────────────────────────────────────────
+    // 🎯 DARS ENTRY (вход по методике прайс-экшена на свечах OHLCV — GeckoTerminal)
+    // ─────────────────────────────────────────────────────────────────────────────
+    val darsEnabled: Boolean = false,               // ⭐ Включить вход по методике «Dars»
+    val darsOnlyMode: Boolean = true,               // ⭐ «Только Dars»: старые momentum-фильтры смягчаются, вход решает методика
+
+    // Таймфреймы: "minute" | "hour" | "day"
+    val darsHigherTf: String = "hour",              // ⭐ Старший ТФ (тренд, Урок 2)
+    val darsHigherTfAggregate: Int = 1,             // Агрегация старшего ТФ (hour: 1/4/12)
+    val darsEntryTf: String = "minute",             // ⭐ Рабочий ТФ (точка входа)
+    val darsEntryTfAggregate: Int = 5,              // Агрегация рабочего ТФ (minute: 1/5/15)
+    val darsCandleLimit: Int = 200,                 // Сколько свечей запрашивать (30..1000)
+
+    // Переключатели сетапов
+    val darsUseImpulseCorrection: Boolean = true,   // ⭐ Импульс/коррекция + доминирование (Урок 1)
+    val darsUseTrendLevels: Boolean = true,         // ⭐ Тренд старшего ТФ + уровни (Урок 2)
+    val darsUseFalseBreakout: Boolean = true,       // ⭐ Ложный пробой (Урок 3)
+    val darsUseTriangle: Boolean = true,            // ⭐ Треугольник (Урок 5)
+
+    // Параметры правил
+    val darsSwingPivotPct: Double = 1.5,            // ⭐ Порог ZigZag для пивотов, % (сегментация ног)
+    val darsRequireHtfTrend: Boolean = true,        // ⭐ Требовать восходящий тренд старшего ТФ
+    val darsDominanceRatio: Double = 1.5,           // ⭐ Во сколько раз импульс должен быть сильнее коррекции
+    val darsMinCorrectionLenPct: Double = 70.0,     // ⭐ Мин. длина коррекции, % от длины импульса (Урок 4)
+    val darsRejectAtResistance: Boolean = true,     // ⭐ Не покупать у сопротивления (Урок 4)
+    val darsResistanceProximityPct: Double = 2.0,   // ⭐ Насколько близко к сопротивлению = «у сопротивления», %
+    val darsMinLegs: Int = 4,                       // Мин. число ног для анализа структуры
+    val darsFailClosed: Boolean = false,            // При нехватке свечей/ошибке: true=отклонять, false=пропускать анализ
+
+    // Окно новостей (Урок 4: не торговать ±30 мин вокруг важных новостей). Ручное расписание UTC.
+    val darsNewsBlackoutEnabled: Boolean = false,   // ⭐ Включить блокировку входов в окно новостей
+    val darsBlackoutStartUtcMin: Int = 0,           // Начало окна, минут от полуночи UTC (0..1439)
+    val darsBlackoutEndUtcMin: Int = 0              // Конец окна, минут от полуночи UTC (0..1439)
 )
 // ════════════════════════════════════════════════════════════════════════════════
 
@@ -411,6 +445,10 @@ class DexScreenerApi {
 
                 if (!ageOk) return@filter false
 
+                // Режим «Только Dars»: momentum-фильтры первичного отбора смягчаются,
+                // чтобы спокойные трендовые монеты дошли до анализа по методике.
+                val darsOnly = settings.darsEnabled && settings.darsOnlyMode
+
                 // 3. 💰 Проверка объема (24h / 5m по флагам)
                 val volumeH24Ok = if (settings.useVolumeH24) {
                     (token.volume?.h24 ?: 0.0) >= settings.entryMinVolume
@@ -418,7 +456,7 @@ class DexScreenerApi {
                 val volumeM5Ok = if (settings.useVolumeM5) {
                     (token.volume?.m5 ?: 0.0) >= settings.entryMinVolumeM5
                 } else true
-                val volumeOk = volumeH24Ok && volumeM5Ok
+                val volumeOk = if (darsOnly) true else volumeH24Ok && volumeM5Ok
 
                 // 4. 💧 Проверка ликвидности (должна быть >= liquidityMinUsd)
                 val liquidityOk = (token.liquidity?.usd ?: 0.0) >= settings.liquidityMinUsd
@@ -431,13 +469,13 @@ class DexScreenerApi {
                 // 6. 📈 Buys/Sells ratio M5 > min (если фильтр включён)
                 val buysM5 = token.txns?.m5?.buys ?: 0
                 val sellsM5 = token.txns?.m5?.sells ?: 0
-                val ratioOk = if (!settings.useMinBuysToSellsRatioM5) true else when {
+                val ratioOk = if (darsOnly || !settings.useMinBuysToSellsRatioM5) true else when {
                     sellsM5 == 0 -> buysM5 > 0
                     else -> (buysM5.toDouble() / sellsM5) >= settings.minBuysToSellsRatioM5
                 }
 
                 // 7. 📈 Price ↑ за 5 мин (если фильтр включён; если m5 нет в API — пропускаем)
-                val pricePumpOk = if (!settings.useMinPriceChangeM5Pct) true
+                val pricePumpOk = if (darsOnly || !settings.useMinPriceChangeM5Pct) true
                 else token.priceChange?.m5?.let { it >= settings.minPriceChangeM5Pct } ?: true
 
                 volumeOk && liquidityOk && notScam && ratioOk && pricePumpOk

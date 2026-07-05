@@ -11,11 +11,10 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import tj.khujand.solana.trading.bot.ui.*
 
 private enum class AppTab(val label: String, val icon: ImageVector) {
-    STRATEGIES("Стратегии", Icons.Default.AutoAwesome),
-    PORTFOLIO ("Портфель",  Icons.Default.AccountBalanceWallet),
-    HISTORY   ("История",   Icons.Default.History),
-    ANALYTICS ("Аналитика", Icons.Default.BarChart),
-    SETTINGS  ("Настройки", Icons.Default.Settings),
+    STRATEGIES("Стратегии",  Icons.Default.AutoAwesome),
+    PORTFOLIO ("Портфель",   Icons.Default.AccountBalanceWallet),
+    STATISTICS("Статистика", Icons.Default.Insights),
+    SETTINGS  ("Настройки",  Icons.Default.Settings),
 }
 
 @Composable
@@ -27,7 +26,7 @@ fun App() {
             bottomBar = {
                 NavigationBar(
                     containerColor = DarkSurface,
-                    contentColor   = CyanAccent,
+                    contentColor   = SolPurple,
                 ) {
                     AppTab.entries.forEach { tab ->
                         NavigationBarItem(
@@ -36,11 +35,11 @@ fun App() {
                             icon      = { Icon(tab.icon, contentDescription = tab.label) },
                             label     = { Text(tab.label, style = MaterialTheme.typography.labelSmall) },
                             colors    = NavigationBarItemDefaults.colors(
-                                selectedIconColor   = CyanAccent,
-                                selectedTextColor   = CyanAccent,
-                                unselectedIconColor = TextOnDarkMuted,
-                                unselectedTextColor = TextOnDarkMuted,
-                                indicatorColor      = CyanAccentBg,
+                                selectedIconColor   = SolGreen,
+                                selectedTextColor   = SolGreen,
+                                unselectedIconColor = TextSecondary,
+                                unselectedTextColor = TextSecondary,
+                                indicatorColor      = SolPurpleBg,
                             )
                         )
                     }
@@ -57,9 +56,8 @@ fun App() {
                 when (currentTab) {
                     AppTab.STRATEGIES -> StrategiesScreen()
                     AppTab.PORTFOLIO  -> PortfolioScreen()
-                    AppTab.HISTORY   -> HistoryScreen()
-                    AppTab.ANALYTICS -> AnalyticsScreen()
-                    AppTab.SETTINGS  -> SettingsScreen()
+                    AppTab.STATISTICS -> StatisticsScreen()
+                    AppTab.SETTINGS   -> SettingsScreen()
                 }
             }
         }

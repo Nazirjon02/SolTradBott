@@ -56,7 +56,7 @@ fun TokenItemCard(
     val accentColor = when (token.status) {
         TokenStatus.STOPPED_TP -> SuccessGreen
         TokenStatus.STOPPED_SL -> DangerRed
-        else -> BrandIndigo
+        else -> SolPurple
     }
     val leftBarColor = when (token.status) {
         TokenStatus.STOPPED_TP -> SuccessGreen
@@ -71,12 +71,18 @@ fun TokenItemCard(
         elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)
     ) {
         Row(modifier = Modifier.fillMaxWidth()) {
-            // Left accent bar
+            // Left accent bar: активная позиция — фирменный градиент, TP/SL — семантический цвет
+            val barShape = RoundedCornerShape(topStart = 16.dp, bottomStart = 16.dp)
             Box(
                 modifier = Modifier
                     .width(4.dp)
                     .fillMaxHeight()
-                    .background(leftBarColor, RoundedCornerShape(topStart = 16.dp, bottomStart = 16.dp))
+                    .then(
+                        if (token.status == TokenStatus.MONITORING)
+                            Modifier.background(SolanaGradient, barShape)
+                        else
+                            Modifier.background(leftBarColor, barShape)
+                    )
             )
 
             Column(modifier = Modifier.padding(start = 14.dp, end = 16.dp, top = 14.dp, bottom = 14.dp)) {
@@ -223,7 +229,7 @@ fun TokenItemCard(
                             Icon(
                                 if (showCopiedMessage) Icons.Default.Check else Icons.Default.ContentCopy,
                                 contentDescription = null,
-                                tint = if (showCopiedMessage) SuccessGreen else BrandIndigo,
+                                tint = if (showCopiedMessage) SuccessGreen else SolPurple,
                                 modifier = Modifier.size(14.dp)
                             )
                         }
@@ -303,7 +309,7 @@ fun TokenItemCard(
                                 "Now  \$${formatNumber(nowValue)}",
                                 fontSize = 12.sp,
                                 fontWeight = FontWeight.SemiBold,
-                                color = if (nowValue >= investment) SuccessGreenDark else DangerRedDark
+                                color = if (nowValue >= investment) SuccessGreen else DangerRed
                             )
                         }
                     }
@@ -320,21 +326,21 @@ fun TokenItemCard(
                         icon  = Icons.Default.WaterDrop,
                         label = "Liquidity",
                         value = "\$${formatLargeNumber(token.tokenPair.liquidity?.usd ?: 0.0)}",
-                        color = BrandTeal,
+                        color = SolGreen,
                         modifier = Modifier.weight(1f)
                     )
                     StatChip(
                         icon  = Icons.Default.BarChart,
                         label = "Market Cap",
                         value = "\$${formatLargeNumber(token.tokenPair.marketCap ?: 0.0)}",
-                        color = BrandIndigo,
+                        color = SolPurple,
                         modifier = Modifier.weight(1f)
                     )
                     StatChip(
                         icon  = Icons.Default.Link,
                         label = "Chain",
                         value = token.tokenPair.chainId?.uppercase()?.take(3) ?: "N/A",
-                        color = BrandPurple,
+                        color = SolPurple,
                         modifier = Modifier.weight(1f)
                     )
                 }

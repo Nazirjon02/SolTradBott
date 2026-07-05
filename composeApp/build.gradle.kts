@@ -18,16 +18,6 @@ kotlin {
         }
     }
     
-    listOf(
-        iosArm64(),
-        iosSimulatorArm64()
-    ).forEach { iosTarget ->
-        iosTarget.binaries.framework {
-            baseName = "ComposeApp"
-            isStatic = true
-        }
-    }
-
     // Добавьте это:
     jvm()
     
@@ -68,11 +58,6 @@ kotlin {
 
             // Корутины (скорее всего уже есть, но для уверенности)
             implementation(libs.kotlinx.coroutines.core)
-        }
-
-        iosMain.dependencies {
-            // Ktor для iOS (использует Darwin/NSURLSession)
-            implementation(libs.ktor.client.darwin)
         }
 
         jvmMain.dependencies {

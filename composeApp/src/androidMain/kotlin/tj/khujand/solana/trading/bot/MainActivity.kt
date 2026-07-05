@@ -13,7 +13,6 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.tooling.preview.Preview
 import tj.khujand.solana.trading.bot.bot.application.TradingRuntime
 import tj.khujand.solana.trading.bot.data.StrategySlotsManager
-import tj.khujand.solana.trading.bot.ui.MainScreen
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -56,5 +55,5 @@ class MainActivity : ComponentActivity() {
 @Preview
 @Composable
 fun AppAndroidPreview() {
-    MainScreen()
+    App()
 }

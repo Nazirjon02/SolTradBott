@@ -67,17 +67,16 @@ fun SettingsScreen() {
 private fun StrategyProfileCard(onProfileSelected: (StrategyProfile) -> Unit) {
     var showConfirm by remember { mutableStateOf<StrategyProfile?>(null) }
 
-    Card(
+    GlowCard(
         modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
-        shape    = RoundedCornerShape(12.dp),
-        colors   = CardDefaults.cardColors(containerColor = DarkSurface),
+        glow = true,
     ) {
-        Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            Text("Профиль стратегии", style = MaterialTheme.typography.titleMedium, color = TextOnDark)
+        Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Text("Профиль стратегии", style = MaterialTheme.typography.titleMedium, color = TextPrimary)
             Text(
                 "Быстро применить набор настроек для выбранного стиля торговли",
                 style = MaterialTheme.typography.bodySmall,
-                color = TextOnDarkMuted,
+                color = TextSecondary,
             )
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -98,21 +97,21 @@ private fun StrategyProfileCard(onProfileSelected: (StrategyProfile) -> Unit) {
         AlertDialog(
             onDismissRequest = { showConfirm = null },
             containerColor   = DarkSurface,
-            title = { Text("${profile.emoji} ${profile.label}", color = TextOnDark) },
+            title = { Text("${profile.emoji} ${profile.label}", color = TextPrimary) },
             text  = {
                 Text(
                     "${profile.description}\n\nНастройки будут перезаписаны. Ключи и секреты сохранятся.",
-                    color = TextOnDarkMuted,
+                    color = TextSecondary,
                 )
             },
             confirmButton = {
                 Button(
                     onClick = { onProfileSelected(profile); showConfirm = null },
-                    colors = ButtonDefaults.buttonColors(containerColor = CyanAccent),
+                    colors = ButtonDefaults.buttonColors(containerColor = SolPurple),
                 ) { Text("Применить", color = DarkBg) }
             },
             dismissButton = {
-                TextButton(onClick = { showConfirm = null }) { Text("Отмена", color = TextOnDarkMuted) }
+                TextButton(onClick = { showConfirm = null }) { Text("Отмена", color = TextSecondary) }
             }
         )
     }
@@ -136,7 +135,7 @@ private fun ProfileChip(profile: StrategyProfile, modifier: Modifier, onClick: (
             Text(
                 profile.label,
                 style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Medium),
-                color = TextOnDark,
+                color = TextPrimary,
                 maxLines = 1,
             )
         }
@@ -151,8 +150,9 @@ private fun BotResetCard(onReset: () -> Unit) {
 
     Card(
         modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
-        shape    = RoundedCornerShape(12.dp),
+        shape    = RoundedCornerShape(16.dp),
         colors   = CardDefaults.cardColors(containerColor = DangerRedBg),
+        border   = androidx.compose.foundation.BorderStroke(1.dp, DangerRed.copy(alpha = 0.4f)),
     ) {
         Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
             Row(
@@ -165,7 +165,7 @@ private fun BotResetCard(onReset: () -> Unit) {
             Text(
                 "Удаляет историю сделок, активные позиции, кривую капитала и сбрасывает демо-баланс до \$10 000. Настройки фильтров, ключи и Telegram не затрагиваются.",
                 style = MaterialTheme.typography.bodySmall,
-                color = TextOnDarkMuted,
+                color = TextSecondary,
             )
             Button(
                 onClick  = { showConfirm = true },
@@ -187,7 +187,7 @@ private fun BotResetCard(onReset: () -> Unit) {
             title            = { Text("Подтвердить сброс", color = DangerRed) },
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                    Text("Будет безвозвратно удалено:", color = TextOnDark, fontWeight = FontWeight.Medium)
+                    Text("Будет безвозвратно удалено:", color = TextPrimary, fontWeight = FontWeight.Medium)
                     Spacer(Modifier.height(2.dp))
                     listOf(
                         "Вся история сделок",
@@ -196,12 +196,12 @@ private fun BotResetCard(onReset: () -> Unit) {
                         "Кривая капитала / Equity",
                         "Демо-баланс → сброс до \$10 000",
                     ).forEach { item ->
-                        Text("• $item", color = TextOnDarkMuted, fontSize = 13.sp)
+                        Text("• $item", color = TextSecondary, fontSize = 13.sp)
                     }
                     Spacer(Modifier.height(6.dp))
                     Text(
                         "Настройки фильтров, API-ключи и Telegram не затрагиваются.",
-                        color    = TextOnDarkFaint,
+                        color    = TextMuted,
                         fontSize = 12.sp,
                     )
                 }
@@ -213,7 +213,7 @@ private fun BotResetCard(onReset: () -> Unit) {
                 ) { Text("Сбросить", fontWeight = FontWeight.Bold) }
             },
             dismissButton = {
-                TextButton(onClick = { showConfirm = false }) { Text("Отмена", color = TextOnDarkMuted) }
+                TextButton(onClick = { showConfirm = false }) { Text("Отмена", color = TextSecondary) }
             },
         )
     }
@@ -230,17 +230,15 @@ private fun SettingsBackupCard(
     var importJson    by remember { mutableStateOf("") }
     var importResult  by remember { mutableStateOf<String?>(null) }
 
-    Card(
+    GlowCard(
         modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
-        shape    = RoundedCornerShape(12.dp),
-        colors   = CardDefaults.cardColors(containerColor = DarkSurface),
     ) {
-        Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            Text("Резервная копия настроек", style = MaterialTheme.typography.titleMedium, color = TextOnDark)
+        Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Text("Резервная копия настроек", style = MaterialTheme.typography.titleMedium, color = TextPrimary)
             Text(
                 "Экспортируй все настройки в файл и быстро восстанови их без ручного ввода",
                 style = MaterialTheme.typography.bodySmall,
-                color = TextOnDarkMuted,
+                color = TextSecondary,
             )
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -258,7 +256,7 @@ private fun SettingsBackupCard(
                     },
                     modifier = Modifier.weight(1f),
                     shape  = RoundedCornerShape(8.dp),
-                    colors = ButtonDefaults.buttonColors(containerColor = CyanAccentBg, contentColor = CyanAccent),
+                    colors = ButtonDefaults.buttonColors(containerColor = SolPurpleBg, contentColor = SolPurple),
                 ) {
                     Icon(Icons.Default.Upload, contentDescription = null, modifier = Modifier.size(16.dp))
                     Spacer(Modifier.width(6.dp))
@@ -273,7 +271,7 @@ private fun SettingsBackupCard(
                     },
                     modifier = Modifier.weight(1f),
                     shape  = RoundedCornerShape(8.dp),
-                    colors = ButtonDefaults.buttonColors(containerColor = DarkSurfaceVar, contentColor = TextOnDark),
+                    colors = ButtonDefaults.buttonColors(containerColor = DarkSurfaceVar, contentColor = TextPrimary),
                 ) {
                     Icon(Icons.Default.Download, contentDescription = null, modifier = Modifier.size(16.dp))
                     Spacer(Modifier.width(6.dp))
@@ -287,7 +285,7 @@ private fun SettingsBackupCard(
                         msg,
                         modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
                         fontSize = 11.sp,
-                        color = if (msg.startsWith("Ошибка")) DangerRedDark else SuccessGreenDark,
+                        color = if (msg.startsWith("Ошибка")) DangerRed else SuccessGreen,
                     )
                 }
             }
@@ -299,31 +297,31 @@ private fun SettingsBackupCard(
         AlertDialog(
             onDismissRequest = { showImport = false; importResult = null },
             containerColor = DarkSurface,
-            title = { Text("Импорт настроек", color = TextOnDark) },
+            title = { Text("Импорт настроек", color = TextPrimary) },
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Text(
                         "Вставь JSON из файла резервной копии. Текущие настройки будут перезаписаны.",
-                        color = TextOnDarkMuted,
+                        color = TextSecondary,
                         style = MaterialTheme.typography.bodySmall,
                     )
                     OutlinedTextField(
                         value = importJson,
                         onValueChange = { importJson = it },
                         modifier = Modifier.fillMaxWidth().heightIn(min = 120.dp, max = 260.dp),
-                        placeholder = { Text("{\"version\":2,...}", color = TextOnDarkMuted, fontSize = 11.sp) },
+                        placeholder = { Text("{\"version\":2,...}", color = TextSecondary, fontSize = 11.sp) },
                         textStyle = MaterialTheme.typography.bodySmall.copy(
-                            color = TextOnDark,
+                            color = TextPrimary,
                             fontSize = 11.sp,
                         ),
                         maxLines = 12,
                         colors = OutlinedTextFieldDefaults.colors(
-                            focusedBorderColor = CyanAccent,
+                            focusedBorderColor = SolPurple,
                             unfocusedBorderColor = DarkSurfaceVar,
                         ),
                     )
                     importResult?.let { res ->
-                        Text(res, fontSize = 11.sp, color = if (res.startsWith("Ошибка")) DangerRedDark else SuccessGreenDark)
+                        Text(res, fontSize = 11.sp, color = if (res.startsWith("Ошибка")) DangerRed else SuccessGreen)
                     }
                 }
             },
@@ -339,12 +337,12 @@ private fun SettingsBackupCard(
                             importResult = err
                         }
                     },
-                    colors = ButtonDefaults.buttonColors(containerColor = CyanAccent),
+                    colors = ButtonDefaults.buttonColors(containerColor = SolPurple),
                 ) { Text("Применить", color = DarkBg) }
             },
             dismissButton = {
                 TextButton(onClick = { showImport = false; importResult = null }) {
-                    Text("Отмена", color = TextOnDarkMuted)
+                    Text("Отмена", color = TextSecondary)
                 }
             },
         )

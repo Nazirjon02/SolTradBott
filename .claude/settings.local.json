@@ -21,7 +21,21 @@
       "Bash(./gradlew :composeApp:assembleDebug)",
       "Bash(./gradlew :composeApp:compileKotlinJvm -q)",
       "Bash(./gradlew :composeApp:compileDebugKotlin -q)",
-      "Bash(./gradlew :composeApp:run)"
+      "Bash(./gradlew :composeApp:run)",
+      "Bash(/usr/bin/jps -l)",
+      "Read(//Users/qurbonjonkhalilov/Desktop/**)",
+      "Bash(pandoc -t markdown \"Dars.docx\")",
+      "Read(//private/tmp/**)",
+      "Bash(rm -rf dars_unpack)",
+      "Bash(mkdir dars_unpack)",
+      "Bash(unzip -q \"/Users/qurbonjonkhalilov/Desktop/Dars.docx\" -d dars_unpack)",
+      "Bash(rm composeApp/src/commonMain/kotlin/tj/khujand/solana/trading/bot/ui/MainScreen.kt composeApp/src/commonMain/kotlin/tj/khujand/solana/trading/bot/Greeting.kt composeApp/src/commonMain/kotlin/tj/khujand/solana/trading/bot/Platform.kt composeApp/src/androidMain/kotlin/tj/khujand/solana/trading/bot/Platform.android.kt composeApp/src/jvmMain/kotlin/tj/khujand/solana/trading/bot/Platform.jvm.kt && echo \"deleted 5 files\")",
+      "Bash(git -C /Users/qurbonjonkhalilov/AndroidStudioProjects/SolTradBott status --short)",
+      "Bash(git checkout *)",
+      "Bash(./gradlew :composeApp:compileKotlinJvm :composeApp:compileDebugKotlinAndroid :composeApp:jvmTest)",
+      "Bash(./gradlew :composeApp:compileKotlinJvm :composeApp:compileDebugKotlinAndroid)",
+      "Bash(git add *)",
+      "Bash(git commit -m 'Baseline before MRX-style rebuild: Solana redesign, dars engine, iOS removal + ТЗ \\(README\\) *)"
     ]
   }
 }

@@ -13,7 +13,7 @@ import tj.khujand.solana.trading.bot.network.FilterSettings
  *
  * Реестр стратегий: каждая стратегия получает СВОЙ [TokenMonitor] и [TradingEngineController],
  * что позволяет нескольким стратегиям работать параллельно, не затирая состояние друг друга.
- * Инстанс с id "default" — обратная совместимость со старым однопоточным кодом (MainScreen, iOS).
+ * Инстанс с id "default" — обратная совместимость со старым однопоточным кодом (jvm main, Telegram).
  */
 object TradingRuntime {
     private const val DEFAULT_ID = "default"

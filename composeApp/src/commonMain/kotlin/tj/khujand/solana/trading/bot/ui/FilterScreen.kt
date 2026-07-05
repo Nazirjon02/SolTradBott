@@ -145,18 +145,14 @@ fun FilterScreen(
                         tint = TextSecondary
                     )
                 }
-                Button(
+                GradientButton(
+                    text = "Сохранить",
                     onClick = {
                         saveTelegramSettings()
                         onClose()
                     },
-                    shape = RoundedCornerShape(10.dp),
-                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary)
-                ) {
-                    Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(16.dp))
-                    Spacer(modifier = Modifier.width(4.dp))
-                    Text("Сохранить", fontWeight = FontWeight.SemiBold)
-                }
+                    icon = Icons.Default.Check,
+                )
             }
         }
 
@@ -166,7 +162,7 @@ fun FilterScreen(
             edgePadding = 12.dp,
             containerColor = MaterialTheme.colorScheme.surface,
             contentColor = MaterialTheme.colorScheme.primary,
-            divider = { HorizontalDivider(color = NeutralBorder) }
+            divider = { HorizontalDivider(color = DarkBorder) }
         ) {
             tabs.forEachIndexed { idx, tab ->
                 Tab(
@@ -429,6 +425,185 @@ private fun EntryTab(settings: FilterSettings, onApply: (FilterSettings) -> Unit
                 steps = 8,
                 onValueChange = { onApply(settings.copy(maxTokensPerTick = it.toInt())) }
             )
+        }
+
+        // ── Dars — вход по методике ──────────────────────────────────────────
+        SettingCard("Dars — вход по методике", Icons.Default.CandlestickChart) {
+            SwitchRow(
+                label = "Включить вход по методике «Dars»",
+                subtitle = "Свечной прайс-экшн на свечах OHLCV (GeckoTerminal, Solana)",
+                checked = settings.darsEnabled,
+                onCheckedChange = { onApply(settings.copy(darsEnabled = it)) }
+            )
+
+            if (settings.darsEnabled) {
+                Spacer(modifier = Modifier.height(8.dp))
+                SwitchRow(
+                    label = "Режим «Только Dars»",
+                    subtitle = "Старые momentum-фильтры смягчаются, вход решает методика",
+                    checked = settings.darsOnlyMode,
+                    onCheckedChange = { onApply(settings.copy(darsOnlyMode = it)) }
+                )
+
+                Spacer(modifier = Modifier.height(12.dp))
+                HintText("Сетапы")
+                SwitchRow(
+                    label = "Импульс / коррекция + доминирование",
+                    subtitle = "Урок 1: сильный импульс, слабая коррекция, одна сторона",
+                    checked = settings.darsUseImpulseCorrection,
+                    onCheckedChange = { onApply(settings.copy(darsUseImpulseCorrection = it)) }
+                )
+                SwitchRow(
+                    label = "Тренд старшего ТФ + уровни",
+                    subtitle = "Урок 2: торговать только по тренду, не у сопротивления",
+                    checked = settings.darsUseTrendLevels,
+                    onCheckedChange = { onApply(settings.copy(darsUseTrendLevels = it)) }
+                )
+                SwitchRow(
+                    label = "Ложный пробой",
+                    subtitle = "Урок 3",
+                    checked = settings.darsUseFalseBreakout,
+                    onCheckedChange = { onApply(settings.copy(darsUseFalseBreakout = it)) }
+                )
+                SwitchRow(
+                    label = "Треугольник",
+                    subtitle = "Урок 5",
+                    checked = settings.darsUseTriangle,
+                    onCheckedChange = { onApply(settings.copy(darsUseTriangle = it)) }
+                )
+
+                Spacer(modifier = Modifier.height(12.dp))
+                ChoiceRow(
+                    label = "Старший ТФ (тренд)",
+                    options = darsTfLabels,
+                    selected = settings.darsHigherTf,
+                    onSelect = { tf ->
+                        onApply(settings.copy(darsHigherTf = tf, darsHigherTfAggregate = darsDefaultAgg(tf)))
+                    }
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+                ChoiceRow(
+                    label = "Агрегация старшего ТФ",
+                    options = darsAggOptions(settings.darsHigherTf).map { "$it" to it },
+                    selected = settings.darsHigherTfAggregate,
+                    onSelect = { onApply(settings.copy(darsHigherTfAggregate = it)) }
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+                ChoiceRow(
+                    label = "Рабочий ТФ (вход)",
+                    options = darsTfLabels,
+                    selected = settings.darsEntryTf,
+                    onSelect = { tf ->
+                        onApply(settings.copy(darsEntryTf = tf, darsEntryTfAggregate = darsDefaultAgg(tf)))
+                    }
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+                ChoiceRow(
+                    label = "Агрегация рабочего ТФ",
+                    options = darsAggOptions(settings.darsEntryTf).map { "$it" to it },
+                    selected = settings.darsEntryTfAggregate,
+                    onSelect = { onApply(settings.copy(darsEntryTfAggregate = it)) }
+                )
+
+                Spacer(modifier = Modifier.height(12.dp))
+                SwitchRow(
+                    label = "Требовать восходящий тренд старшего ТФ",
+                    checked = settings.darsRequireHtfTrend,
+                    onCheckedChange = { onApply(settings.copy(darsRequireHtfTrend = it)) }
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+                SliderRow(
+                    label = "Порог пивота (ZigZag)",
+                    valueText = "${(settings.darsSwingPivotPct * 10).roundToInt() / 10.0}%",
+                    value = settings.darsSwingPivotPct.toFloat().coerceIn(0.3f, 5f),
+                    valueRange = 0.3f..5f,
+                    steps = 46,
+                    onValueChange = { onApply(settings.copy(darsSwingPivotPct = it.toDouble())) }
+                )
+                SliderRow(
+                    label = "Доминирование импульса",
+                    valueText = "${(settings.darsDominanceRatio * 10).roundToInt() / 10.0}×",
+                    value = settings.darsDominanceRatio.toFloat().coerceIn(1f, 4f),
+                    valueRange = 1f..4f,
+                    steps = 29,
+                    onValueChange = { onApply(settings.copy(darsDominanceRatio = it.toDouble())) }
+                )
+                SliderRow(
+                    label = "Мин. длина коррекции",
+                    valueText = "${settings.darsMinCorrectionLenPct.toInt()}% от импульса",
+                    value = settings.darsMinCorrectionLenPct.toFloat().coerceIn(0f, 100f),
+                    valueRange = 0f..100f,
+                    steps = 19,
+                    onValueChange = { onApply(settings.copy(darsMinCorrectionLenPct = it.toDouble())) }
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+                SwitchRow(
+                    label = "Не покупать у сопротивления",
+                    subtitle = "Урок 4",
+                    checked = settings.darsRejectAtResistance,
+                    onCheckedChange = { onApply(settings.copy(darsRejectAtResistance = it)) }
+                )
+                if (settings.darsRejectAtResistance) {
+                    SliderRow(
+                        label = "Близость к сопротивлению",
+                        valueText = "${(settings.darsResistanceProximityPct * 10).roundToInt() / 10.0}%",
+                        value = settings.darsResistanceProximityPct.toFloat().coerceIn(0.2f, 10f),
+                        valueRange = 0.2f..10f,
+                        steps = 48,
+                        onValueChange = { onApply(settings.copy(darsResistanceProximityPct = it.toDouble())) }
+                    )
+                }
+                Spacer(modifier = Modifier.height(8.dp))
+                SliderRow(
+                    label = "Мин. число ног для анализа",
+                    valueText = "${settings.darsMinLegs}",
+                    value = settings.darsMinLegs.toFloat().coerceIn(2f, 8f),
+                    valueRange = 2f..8f,
+                    steps = 5,
+                    onValueChange = { onApply(settings.copy(darsMinLegs = it.toInt())) }
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+                SwitchRow(
+                    label = "Отклонять при нехватке свечей",
+                    subtitle = "fail-closed: без данных — пропускать монету",
+                    checked = settings.darsFailClosed,
+                    onCheckedChange = { onApply(settings.copy(darsFailClosed = it)) }
+                )
+
+                Spacer(modifier = Modifier.height(12.dp))
+                SwitchRow(
+                    label = "Окно новостей: блокировать входы",
+                    subtitle = "Урок 4: не торговать в заданный интервал UTC",
+                    checked = settings.darsNewsBlackoutEnabled,
+                    onCheckedChange = { onApply(settings.copy(darsNewsBlackoutEnabled = it)) }
+                )
+                if (settings.darsNewsBlackoutEnabled) {
+                    SliderRow(
+                        label = "Начало окна",
+                        valueText = utcHhMm(settings.darsBlackoutStartUtcMin),
+                        value = settings.darsBlackoutStartUtcMin.toFloat().coerceIn(0f, 1439f),
+                        valueRange = 0f..1439f,
+                        steps = 95,
+                        onValueChange = {
+                            val v = (it / 15f).roundToInt() * 15
+                            onApply(settings.copy(darsBlackoutStartUtcMin = v.coerceIn(0, 1439)))
+                        }
+                    )
+                    SliderRow(
+                        label = "Конец окна",
+                        valueText = utcHhMm(settings.darsBlackoutEndUtcMin),
+                        value = settings.darsBlackoutEndUtcMin.toFloat().coerceIn(0f, 1439f),
+                        valueRange = 0f..1439f,
+                        steps = 95,
+                        onValueChange = {
+                            val v = (it / 15f).roundToInt() * 15
+                            onApply(settings.copy(darsBlackoutEndUtcMin = v.coerceIn(0, 1439)))
+                        }
+                    )
+                }
+
+                HintText("Новые монеты часто без истории свечей — тогда вход по Dars пропускается (входов будет меньше). Данные: GeckoTerminal OHLCV по пулам Solana.")
+            }
         }
     }
 }
@@ -1271,7 +1446,8 @@ private fun SettingCard(
         modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(16.dp),
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-        elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)
+        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
+        border = androidx.compose.foundation.BorderStroke(1.dp, DarkBorder),
     ) {
         Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 14.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -1279,7 +1455,7 @@ private fun SettingCard(
                     Icon(
                         icon,
                         contentDescription = null,
-                        tint = MaterialTheme.colorScheme.primary,
+                        tint = SolGreen,
                         modifier = Modifier.size(18.dp)
                     )
                     Spacer(modifier = Modifier.width(8.dp))
@@ -1359,4 +1535,51 @@ private fun HintText(text: String) {
         style = MaterialTheme.typography.labelMedium,
         color = TextMuted
     )
+}
+
+// ─── Dars helpers ──────────────────────────────────────────────────────────────
+
+@Composable
+private fun <T> ChoiceRow(
+    label: String,
+    options: List<Pair<String, T>>,
+    selected: T,
+    onSelect: (T) -> Unit,
+) {
+    Column(modifier = Modifier.fillMaxWidth()) {
+        Text(label, style = MaterialTheme.typography.bodyMedium, color = TextSecondary)
+        Spacer(modifier = Modifier.height(4.dp))
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            options.forEach { (lbl, value) ->
+                FilterChip(
+                    selected = selected == value,
+                    onClick = { onSelect(value) },
+                    label = { Text(lbl) }
+                )
+            }
+        }
+    }
+}
+
+private val darsTfLabels = listOf("Минуты" to "minute", "Часы" to "hour", "Дни" to "day")
+
+private fun darsAggOptions(tf: String): List<Int> = when (tf) {
+    "minute" -> listOf(1, 5, 15)
+    "hour" -> listOf(1, 4, 12)
+    else -> listOf(1)
+}
+
+private fun darsDefaultAgg(tf: String): Int = when (tf) {
+    "minute" -> 5
+    "hour" -> 1
+    else -> 1
+}
+
+private fun utcHhMm(min: Int): String {
+    val m = ((min % 1440) + 1440) % 1440
+    val h = m / 60
+    val mm = m % 60
+    val hs = if (h < 10) "0$h" else "$h"
+    val ms = if (mm < 10) "0$mm" else "$mm"
+    return "$hs:$ms UTC"
 }

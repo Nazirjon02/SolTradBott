@@ -1,15 +1,8 @@
 package tj.khujand.solana.trading.bot
 
 import android.content.Context
-import android.os.Build
 import tj.khujand.solana.trading.bot.service.ServiceHelper
 import java.io.File
-
-class AndroidPlatform : Platform {
-    override val name: String = "Android ${Build.VERSION.SDK_INT}"
-}
-
-actual fun getPlatform(): Platform = AndroidPlatform()
 
 actual class ServiceController(private val context: Context) {
     actual fun startMonitoring() {
