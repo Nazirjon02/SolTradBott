@@ -39,6 +39,8 @@ import tj.khujand.solana.trading.bot.exchange.dex.DexClient
 import tj.khujand.solana.trading.bot.exchange.dex.TokenCache
 import tj.khujand.solana.trading.bot.exchange.dex.TokenScanner
 import tj.khujand.solana.trading.bot.seedDefaultStrategies
+import tj.khujand.solana.trading.bot.telegram.TelegramBotController
+import tj.khujand.solana.trading.bot.telegram.TelegramNotifier
 
 fun main() {
     val config = DrxConfig()
@@ -70,8 +72,10 @@ fun main() {
     val riskManager = RiskManager(db, accountCache)
     val executor = TradeExecutor(client, db, settingsStore, accountCache, activityLog)
 
-    // Telegram-контроллер подключается на этапе 6; пока нотификации глушим.
-    val notifier = NoopNotifier
+    // Telegram: токен из БД (приоритет) или из env. Пусто — нотификации глушатся.
+    val tgToken = settingsStore.getTelegramToken() ?: config.telegramToken
+    val tgChatId = settingsStore.getTelegramChatId() ?: config.telegramChatId
+    val notifier = if (tgToken.isNotBlank() && tgChatId != 0L) TelegramNotifier(tgToken, tgChatId) else NoopNotifier
 
     val strategyManager = StrategyManager(
         client, riskManager, notifier, db, scanner, executor, activityLog, settingsStore
@@ -83,6 +87,14 @@ fun main() {
     tradeMonitor.start()
 
     val scope = CoroutineScope(Dispatchers.Default)
+
+    // Telegram-управление: long-polling запускается только при заданном токене.
+    if (tgToken.isNotBlank()) {
+        val telegramBot = TelegramBotController(
+            tgToken, tgChatId, engine, strategyManager, executor, db, tokenCache, settingsStore
+        )
+        scope.launch { telegramBot.startPolling() }
+    }
 
     embeddedServer(Netty, port = config.serverPort) {
         install(ContentNegotiation) { json(Json { ignoreUnknownKeys = true }) }

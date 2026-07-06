@@ -56,7 +56,10 @@
       "Bash(curl -s http://localhost:18099/health)",
       "Bash(curl -s -H \"Authorization: Bearer soltrad-secret\" http://localhost:18099/api/v1/bot/status)",
       "Bash(curl -s -H \"Authorization: Bearer soltrad-secret\" http://localhost:18099/api/v1/balance)",
-      "Bash(curl -s -m 5 http://localhost:18099/health)"
+      "Bash(curl -s -m 5 http://localhost:18099/health)",
+      "Bash(./gradlew :shared:compileKotlinJvm :server:build --console=plain -q)",
+      "Bash(./gradlew :androidApp:assembleDebug :desktopApp:build --console=plain -q)",
+      "Bash(git commit -q -m 'Этап 6: Telegram — TelegramBotController и TelegramNotifier как в MRX *)"
     ]
   }
 }
