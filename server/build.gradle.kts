@@ -33,5 +33,7 @@ dependencies {
 }
 
 kotlin {
-    jvmToolchain(11)
+    // Модуль shared собирается тулчейном 17 — серверу нужен тот же рантайм,
+    // иначе UnsupportedClassVersionError при загрузке классов shared.
+    jvmToolchain(17)
 }

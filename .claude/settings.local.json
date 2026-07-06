@@ -49,7 +49,14 @@
       "Bash(sed -n '70,90p' shared/src/commonMain/kotlin/tj/khujand/solana/trading/bot/exchange/dex/SolanaRpcClient.kt)",
       "Bash(git commit -q -m 'Этап 3: exchange-слой — DexClient, TokenScanner, TokenCache, AccountCache *)",
       "Bash(./gradlew :androidApp:assembleDebug :server:build :desktopApp:build :shared:jvmTest --console=plain -q)",
-      "Bash(git commit -q -m 'Этап 4: торговое ядро — BotEngine, TradeMonitor, RiskManager, 3 стратегии *)"
+      "Bash(git commit -q -m 'Этап 4: торговое ядро — BotEngine, TradeMonitor, RiskManager, 3 стратегии *)",
+      "Bash(./gradlew :server:build --console=plain -q)",
+      "Bash(rm -f drx-test.db)",
+      "Bash(DB_PATH=/tmp/drx-test.db PORT=18099 /Users/qurbonjonkhalilov/AndroidStudioProjects/SolTradBott/gradlew -p /Users/qurbonjonkhalilov/AndroidStudioProjects/SolTradBott :server:run --console=plain -q)",
+      "Bash(curl -s http://localhost:18099/health)",
+      "Bash(curl -s -H \"Authorization: Bearer soltrad-secret\" http://localhost:18099/api/v1/bot/status)",
+      "Bash(curl -s -H \"Authorization: Bearer soltrad-secret\" http://localhost:18099/api/v1/balance)",
+      "Bash(curl -s -m 5 http://localhost:18099/health)"
     ]
   }
 }
