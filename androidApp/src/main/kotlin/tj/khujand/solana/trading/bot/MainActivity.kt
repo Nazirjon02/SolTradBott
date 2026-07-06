@@ -9,10 +9,6 @@ import android.provider.Settings
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
-import androidx.compose.runtime.Composable
-import androidx.compose.ui.tooling.preview.Preview
-import tj.khujand.solana.trading.bot.bot.application.TradingRuntime
-import tj.khujand.solana.trading.bot.data.StrategySlotsManager
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -21,9 +17,8 @@ class MainActivity : ComponentActivity() {
         initServiceController(this)
         requestNotificationPermission()
         requestBatteryOptimizationExemption()
-        // Синхронизируем StateFlow с реальным состоянием при старте
-        syncMonitoringStateFlow()
-        setContent { App() }
+        val runtime = DrxRuntimeHolder.init("soltradbot.db")
+        setContent { App(runtime) }
     }
 
     private fun requestNotificationPermission() {
@@ -45,15 +40,4 @@ class MainActivity : ComponentActivity() {
             }
         }
     }
-
-    // При горячем старте/возврате восстанавливаем набор запущенных стратегий
-    private fun syncMonitoringStateFlow() {
-        TradingRuntime.restoreRunningState(StrategySlotsManager.getRunningIds())
-    }
-}
-
-@Preview
-@Composable
-fun AppAndroidPreview() {
-    App()
 }

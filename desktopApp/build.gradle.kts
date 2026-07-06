@@ -38,12 +38,3 @@ compose.desktop {
         }
     }
 }
-
-tasks.register<JavaExec>("runTelegramBot") {
-    group = "application"
-    description = "Run Telegram bot JVM entrypoint"
-
-    val runTask = tasks.named<JavaExec>("run")
-    classpath = runTask.get().classpath
-    mainClass.set("tj.khujand.solana.trading.bot.TelegramBotMainKt")
-}

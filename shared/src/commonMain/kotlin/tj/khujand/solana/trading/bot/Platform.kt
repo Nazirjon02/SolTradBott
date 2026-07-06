@@ -1,5 +1,6 @@
 package tj.khujand.solana.trading.bot
 
+/** Управление фоновым сервисом (Android — foreground service, JVM — no-op). */
 expect class ServiceController {
     fun startMonitoring()
     fun stopMonitoring()
@@ -8,9 +9,3 @@ expect class ServiceController {
 expect fun createServiceController(): ServiceController
 
 expect fun isAndroid(): Boolean
-
-/** Записывает JSON-строку в файл настроек. Возвращает путь к файлу или сообщение об ошибке. */
-expect fun writeSettingsFile(json: String): String
-
-/** Читает содержимое файла настроек. Возвращает JSON-строку или null если файл не найден. */
-expect fun readSettingsFile(): String?

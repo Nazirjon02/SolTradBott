@@ -1,20 +1,29 @@
 package tj.khujand.solana.trading.bot.service
 
-import android.app.*
+import android.app.Notification
+import android.app.NotificationChannel
+import android.app.NotificationManager
+import android.app.PendingIntent
+import android.app.Service
 import android.content.Intent
 import android.os.Build
 import android.os.IBinder
 import androidx.core.app.NotificationCompat
-import kotlinx.coroutines.*
-import tj.khujand.solana.trading.bot.bot.application.TradingRuntime
-import tj.khujand.solana.trading.bot.bot.telegram.TelegramBotRunner
-import tj.khujand.solana.trading.bot.bot.telegram.TelegramBotSettings
-import tj.khujand.solana.trading.bot.util.AppSettings
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.launch
+import tj.khujand.solana.trading.bot.DrxRuntimeHolder
 
+/**
+ * Foreground-сервис DRX: держит процесс живым, пока движок торгует.
+ * Сам движок живёт в DrxRuntimeHolder (singleton) — сервис лишь показывает
+ * уведомление и гасит движок при своём уничтожении системой/пользователем.
+ */
 class TokenMonitorService : Service() {
 
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
-    private var telegramBotRunner: TelegramBotRunner? = null
 
     override fun onCreate() {
         super.onCreate()
@@ -34,44 +43,21 @@ class TokenMonitorService : Service() {
                 return START_NOT_STICKY
             }
             else -> {
-                // ACTION_START или null (перезапуск системой после убийства):
-                // восстанавливаем все ранее запущенные стратегии параллельно.
-                serviceScope.launch {
-                    TradingRuntime.tradingBotService().syncRunningStrategies()
-                    ensureTelegramBotRunning()
-                }
+                // ACTION_START или null (перезапуск системой): движок уже запущен из UI,
+                // сервис просто удерживает процесс.
             }
         }
         return START_STICKY
     }
 
-    private fun ensureTelegramBotRunning() {
-        if (telegramBotRunner != null) return
-        val botConfig = TelegramBotSettings.loadFromAppSettings() ?: return
-        telegramBotRunner = TelegramBotRunner(
-            config = botConfig,
-            service = TradingRuntime.tradingBotService()
-        ).also { it.start() }
-        println("Telegram bot started in Android service")
-    }
-
     private fun stopMonitoring() {
-        // Останавливаем ВСЕ стратегии — foreground гасим только когда никого не осталось.
-        TradingRuntime.tradingBotService().stopAllStrategies()
-        AppSettings.putBoolean(AppSettings.KEY_MONITORING_ACTIVE, false)
-        AppSettings.putBoolean(AppSettings.KEY_REQUEST_IN_PROGRESS, false)
+        serviceScope.launch { DrxRuntimeHolder.get()?.engine?.stop() }
         stopForeground(STOP_FOREGROUND_REMOVE)
         stopSelf()
     }
 
     override fun onDestroy() {
-        AppSettings.putBoolean(AppSettings.KEY_MONITORING_ACTIVE, false)
-        AppSettings.putBoolean(AppSettings.KEY_REQUEST_IN_PROGRESS, false)
-        TradingRuntime.tradingBotService().stopAllStrategies()
-        runBlocking(Dispatchers.IO) {
-            telegramBotRunner?.stop()
-        }
-        telegramBotRunner = null
+        serviceScope.launch { DrxRuntimeHolder.get()?.engine?.stop() }
         serviceScope.cancel()
         super.onDestroy()
     }
@@ -91,8 +77,8 @@ class TokenMonitorService : Service() {
         }
         val icon = applicationInfo.icon.takeIf { it != 0 } ?: android.R.drawable.stat_notify_sync
         return NotificationCompat.Builder(this, CHANNEL_SERVICE_ID)
-            .setContentTitle("🤖 DRX Monitor")
-            .setContentText("Monitoring active")
+            .setContentTitle("🤖 DRX Bot")
+            .setContentText("Торговый движок работает")
             .setSmallIcon(icon)
             .setContentIntent(pendingIntent)
             .setOngoing(true)
@@ -104,11 +90,9 @@ class TokenMonitorService : Service() {
     private fun createNotificationChannels() {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
         val nm = getSystemService(NotificationManager::class.java) ?: return
-
-        // Канал для фонового сервиса (тихий, не беспокоить)
         nm.createNotificationChannel(
-            NotificationChannel(CHANNEL_SERVICE_ID, "Token Monitor Service", NotificationManager.IMPORTANCE_LOW).apply {
-                description = "Token monitoring service"
+            NotificationChannel(CHANNEL_SERVICE_ID, "DRX Bot Service", NotificationManager.IMPORTANCE_LOW).apply {
+                description = "DRX trading engine"
                 setSound(null, null)
                 enableVibration(false)
             }
@@ -117,7 +101,7 @@ class TokenMonitorService : Service() {
 
     companion object {
         const val ACTION_START = "ACTION_START_MONITORING"
-        const val ACTION_STOP  = "ACTION_STOP_MONITORING"
+        const val ACTION_STOP = "ACTION_STOP_MONITORING"
         private const val CHANNEL_SERVICE_ID = "monitor_channel"
         private const val NOTIFICATION_ID = 1
     }
