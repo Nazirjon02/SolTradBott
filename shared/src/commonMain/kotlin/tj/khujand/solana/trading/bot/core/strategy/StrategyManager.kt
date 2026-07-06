@@ -1,0 +1,240 @@
+package tj.khujand.solana.trading.bot.core.strategy
+
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+import kotlin.random.Random
+import kotlin.time.Clock
+import tj.khujand.solana.trading.bot.core.TradeNotifier
+import tj.khujand.solana.trading.bot.core.engine.ActivityLog
+import tj.khujand.solana.trading.bot.core.engine.TradeExecutor
+import tj.khujand.solana.trading.bot.core.engine.fmtNum
+import tj.khujand.solana.trading.bot.core.risk.RiskManager
+import tj.khujand.solana.trading.bot.data.SettingsStore
+import tj.khujand.solana.trading.bot.data.db.DrxDatabase
+import tj.khujand.solana.trading.bot.exchange.dex.DexClient
+import tj.khujand.solana.trading.bot.exchange.dex.TokenCandidate
+import tj.khujand.solana.trading.bot.exchange.dex.TokenScanner
+
+/** Интервал одного цикла сканирования (мемкоины живут быстро — 30с как у скальпинга MRX). */
+private const val SCAN_INTERVAL_MS = 30_000L
+
+/** Минимальная уверенность сигнала для входа (как в MRX). */
+private const val MIN_CONFIDENCE = 0.6
+
+/**
+ * Менеджер стратегий (модель MRX): держит по джобу на активную стратегию.
+ * Цикл: сканер кандидатов → свечи → анализ → риск-чек → вход (DEMO/REAL/только сигнал).
+ */
+class StrategyManager(
+    private val client: DexClient,
+    private val riskManager: RiskManager,
+    private val notifier: TradeNotifier,
+    private val db: DrxDatabase,
+    private val scanner: TokenScanner,
+    private val executor: TradeExecutor,
+    private val activityLog: ActivityLog = ActivityLog(),
+    private val settingsStore: SettingsStore? = null,
+) {
+    /**
+     * Режим «только сигнал» (глобальный переключатель из настроек/Telegram).
+     * Когда включён — бот НЕ открывает сделки, а лишь шлёт сигнал с параметрами входа.
+     */
+    private val _signalOnly = MutableStateFlow(settingsStore?.getSignalOnly() ?: false)
+    val signalOnly: StateFlow<Boolean> = _signalOnly.asStateFlow()
+
+    fun setSignalOnly(value: Boolean) {
+        _signalOnly.value = value
+        settingsStore?.setSignalOnly(value)
+    }
+
+    private val activeJobs = mutableMapOf<String, Job>()
+    private val mutex = Mutex()
+
+    // По одному локу на mint — чтобы две стратегии не купили один токен одновременно.
+    private val mintLocks = mutableMapOf<String, Mutex>()
+
+    // Кулдаун после сделки per-strategy: не лезем в рынок очередями.
+    private val lastTradeAt = mutableMapOf<String, Long>()
+
+    // Дедуп сигналов в режиме «только сигнал»: mint → время последнего алерта.
+    private val lastSignalAt = mutableMapOf<String, Long>()
+
+    // Троттлинг ошибок в Telegram: при обрыве сети циклы не должны слать десятки сообщений.
+    private var lastErrorNotifiedAt: Long = 0L
+    private val errorNotifyMinIntervalMs = 60_000L
+
+    private suspend fun mintLock(mint: String): Mutex =
+        mutex.withLock { mintLocks.getOrPut(mint) { Mutex() } }
+
+    private suspend fun notifyErrorThrottled(text: String) {
+        val now = now()
+        val send = mutex.withLock {
+            if (now - lastErrorNotifiedAt < errorNotifyMinIntervalMs) false
+            else { lastErrorNotifiedAt = now; true }
+        }
+        if (send) notifier.send(text)
+    }
+
+    suspend fun run(config: StrategyConfig) {
+        val strategy = createStrategy(config)
+        val scope = CoroutineScope(Dispatchers.Default + SupervisorJob())
+        val job = scope.launchScanLoop(config, strategy)
+        mutex.withLock { activeJobs[config.id] = job }
+    }
+
+    /** Один цикл стратегии: кандидаты сканера → анализ каждого → возможный вход → пауза. */
+    private fun CoroutineScope.launchScanLoop(config: StrategyConfig, strategy: Strategy): Job = launch {
+        activityLog.success("▶️ Стратегия запущена: ${config.name} (${config.timeframe})")
+        while (isActive) {
+            try {
+                scanOnce(config, strategy)
+                delay(SCAN_INTERVAL_MS + Random.nextLong(0L, 5_000L))
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                activityLog.requestFailed()
+                activityLog.error("⚠️ ${config.name}: ошибка цикла — ${e.message ?: "нет соединения"}")
+                notifyErrorThrottled("⚠️ Ошибка стратегии ${config.name}: ${e.message}")
+                delay(30_000L + Random.nextLong(0L, 15_000L))
+            }
+        }
+    }
+
+    private suspend fun scanOnce(config: StrategyConfig, strategy: Strategy) {
+        // Кулдаун после последней сделки этой стратегии.
+        val last = mutex.withLock { lastTradeAt[config.id] } ?: 0L
+        val sinceLast = now() - last
+        if (sinceLast < config.cooldownSeconds * 1000L) {
+            activityLog.info("⏸ ${config.name}: кулдаун ещё ${(config.cooldownSeconds - sinceLast / 1000)}с")
+            return
+        }
+
+        // Риск-лимиты (в режиме «только сигнал» не проверяем — сделок нет).
+        if (!_signalOnly.value) {
+            val block = riskManager.blockReason(config)
+            if (block != null) {
+                activityLog.warn("⏸ ${config.name}: $block")
+                return
+            }
+        }
+
+        activityLog.info("🔍 ${config.name}: сканирую кандидатов…")
+        val candidates = scanner.scan(config.scanFilters())
+        activityLog.requestOk()
+        if (candidates.isEmpty()) {
+            activityLog.info("○ ${config.name}: подходящих токенов нет")
+            return
+        }
+        activityLog.success("✓ ${config.name}: кандидатов ${candidates.size}")
+
+        val openMints = db.tradeQueries.getOpenTrades().executeAsList().map { it.mint }.toSet()
+
+        for (candidate in candidates) {
+            if (candidate.mint in openMints) continue
+
+            val candles = runCatching {
+                client.getCandles(candidate.pairAddress, config.timeframe, config.darsCandleLimit)
+            }.getOrDefault(emptyList())
+
+            val signal = strategy.analyze(candidate, candles, emptyList()) ?: continue
+            if (signal.confidence < MIN_CONFIDENCE) {
+                activityLog.info("○ ${candidate.symbol}: уверенность ${(signal.confidence * 100).toInt()}% < 60%")
+                continue
+            }
+
+            if (_signalOnly.value) {
+                emitSignalOnly(signal, config)
+                continue
+            }
+
+            // Сериализуем вход по монете + перепроверка внутри лока.
+            val opened = mintLock(candidate.mint).withLock {
+                val stillOpen = db.tradeQueries.getOpenTrades().executeAsList().any { it.mint == candidate.mint }
+                if (stillOpen) return@withLock false
+                if (!riskManager.canTrade(config)) return@withLock false
+                executeSignal(signal, config, candidate)
+            }
+            if (opened) {
+                mutex.withLock { lastTradeAt[config.id] = now() }
+                return // одна сделка за цикл — дальше кулдаун
+            }
+        }
+    }
+
+    private suspend fun executeSignal(signal: Signal, config: StrategyConfig, candidate: TokenCandidate): Boolean {
+        val sizeUsd = riskManager.calculatePositionSizeUsd(config)
+        if (sizeUsd <= 0) {
+            activityLog.warn("⚠️ ${config.name}: нулевой размер позиции (нет баланса?)")
+            return false
+        }
+        activityLog.success(
+            "⚡ ${signal.symbol}: сигнал BUY (${(signal.confidence * 100).toInt()}%) — открываю на $${fmtNum(sizeUsd)}"
+        )
+        val tradeId = executor.openTrade(signal, config, sizeUsd, candidate.liquidityUsd) ?: return false
+        notifier.sendOpenAlert(
+            symbol = signal.symbol,
+            strategyName = config.name,
+            entryPrice = signal.entryPrice,
+            sizeUsd = kotlin.math.round(sizeUsd * 100) / 100,
+            stopLoss = signal.stopLoss,
+            takeProfit = signal.takeProfit,
+            isDemo = executor.isDemo(),
+            reason = signal.reason,
+        )
+        return tradeId.isNotEmpty()
+    }
+
+    /** Режим «только сигнал»: шлём алерт с параметрами входа, дедуп по mint раз в 30 минут. */
+    private suspend fun emitSignalOnly(signal: Signal, config: StrategyConfig) {
+        val now = now()
+        val send = mutex.withLock {
+            val prev = lastSignalAt[signal.mint] ?: 0L
+            if (now - prev < 30 * 60_000L) false
+            else { lastSignalAt[signal.mint] = now; true }
+        }
+        if (!send) return
+        activityLog.success("📣 ${signal.symbol}: сигнал (только уведомление, сделка не открыта)")
+        notifier.send(
+            "📣 СИГНАЛ (без сделки) ${signal.symbol}\n" +
+                "Стратегия: ${config.name}\n" +
+                "Цена: ${signal.entryPrice}\nSL: ${signal.stopLoss} | TP: ${signal.takeProfit}\n" +
+                "Уверенность: ${(signal.confidence * 100).toInt()}%\n${signal.reason}\n" +
+                "mint: ${signal.mint}"
+        )
+    }
+
+    suspend fun stopStrategy(strategyId: String) {
+        mutex.withLock {
+            activeJobs[strategyId]?.cancel()
+            activeJobs.remove(strategyId)
+        }
+    }
+
+    /** true, если по стратегии сейчас крутится сканер (есть активный job). */
+    suspend fun isRunning(strategyId: String): Boolean =
+        mutex.withLock { activeJobs[strategyId]?.isActive == true }
+
+    /** Сколько стратегий сейчас реально сканируют. */
+    suspend fun activeCount(): Int =
+        mutex.withLock { activeJobs.count { it.value.isActive } }
+
+    suspend fun stopAll() {
+        mutex.withLock {
+            activeJobs.values.forEach { it.cancel() }
+            activeJobs.clear()
+        }
+    }
+
+    private fun now() = Clock.System.now().toEpochMilliseconds()
+}

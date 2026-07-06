@@ -4,6 +4,7 @@ CREATE TABLE IF NOT EXISTS trade (
     strategy_name TEXT NOT NULL,
     mint TEXT NOT NULL,
     symbol TEXT NOT NULL,
+    pair_address TEXT NOT NULL DEFAULT '',
     entry_price REAL NOT NULL,
     exit_price REAL,
     qty REAL NOT NULL,
@@ -44,11 +45,11 @@ SELECT COUNT(*) FROM trade WHERE status = 'OPEN';
 
 insert:
 INSERT INTO trade (
-    id, strategy_id, strategy_name, mint, symbol, entry_price, exit_price,
+    id, strategy_id, strategy_name, mint, symbol, pair_address, entry_price, exit_price,
     qty, qty_remaining, size_usd, size_sol, stop_loss, take_profit, peak_price,
     tp1_done, tp2_done, entry_liquidity_usd, pnl, pnl_percent, fee,
     status, open_reason, close_reason, is_demo, opened_at, closed_at
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
 
 closeTrade:
 UPDATE trade SET

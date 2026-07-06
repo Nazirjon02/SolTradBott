@@ -18,6 +18,7 @@ class SettingsStore(private val db: DrxDatabase) {
         const val DEMO_MODE        = "bot.demo_mode"
         const val SIGNAL_ONLY      = "bot.signal_only"
         const val RPC_URL          = "solana.rpc_url"
+        const val WALLET_SEED      = "wallet.seed_phrase"
         const val AI_API_KEY       = "ai.api_key"
     }
 
@@ -60,6 +61,11 @@ class SettingsStore(private val db: DrxDatabase) {
 
     fun getRpcUrl(): String?         = get(Keys.RPC_URL)?.takeIf { it.isNotBlank() }
     fun setRpcUrl(v: String)         = set(Keys.RPC_URL, v)
+
+    // Seed-фраза кошелька для REAL-режима (подпись Jupiter-свопов). Хранится локально в SQLite.
+    fun getWalletSeed(): String?     = get(Keys.WALLET_SEED)?.takeIf { it.isNotBlank() }
+    fun setWalletSeed(v: String)     = set(Keys.WALLET_SEED, v)
+    fun clearWalletSeed()            = delete(Keys.WALLET_SEED)
 
     // ─── AI-анализатор (опциональный фильтр confidence) ──────────────────────
 

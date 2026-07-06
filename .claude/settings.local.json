@@ -47,7 +47,9 @@
       "Bash(sed -n '52,110p' shared/src/commonMain/kotlin/tj/khujand/solana/trading/bot/exchange/dex/GeckoTerminalApi.kt)",
       "Bash(sed -n '38,60p' shared/src/commonMain/kotlin/tj/khujand/solana/trading/bot/exchange/dex/RugCheckApi.kt)",
       "Bash(sed -n '70,90p' shared/src/commonMain/kotlin/tj/khujand/solana/trading/bot/exchange/dex/SolanaRpcClient.kt)",
-      "Bash(git commit -q -m 'Этап 3: exchange-слой — DexClient, TokenScanner, TokenCache, AccountCache *)"
+      "Bash(git commit -q -m 'Этап 3: exchange-слой — DexClient, TokenScanner, TokenCache, AccountCache *)",
+      "Bash(./gradlew :androidApp:assembleDebug :server:build :desktopApp:build :shared:jvmTest --console=plain -q)",
+      "Bash(git commit -q -m 'Этап 4: торговое ядро — BotEngine, TradeMonitor, RiskManager, 3 стратегии *)"
     ]
   }
 }
