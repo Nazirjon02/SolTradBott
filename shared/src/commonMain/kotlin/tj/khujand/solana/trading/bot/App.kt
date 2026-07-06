@@ -61,6 +61,9 @@ import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
@@ -936,7 +939,9 @@ data class TradeHistoryItem(
     val openReason: String,
     val closeReason: String,
     val closedAt: Long = 0L,
-    val fee: Double = 0.0
+    val fee: Double = 0.0,
+    val mint: String = "",
+    val openedAt: Long = 0L
 )
 
 /** Закрытые сделки из БД (новые сверху) → элементы истории. */
@@ -960,7 +965,9 @@ private fun loadClosedTrades(db: DrxDatabase?): List<TradeHistoryItem> {
                     openReason = t.open_reason,
                     closeReason = t.close_reason ?: "—",
                     closedAt = t.closed_at ?: t.opened_at,
-                    fee = t.fee ?: 0.0
+                    fee = t.fee ?: 0.0,
+                    mint = t.mint,
+                    openedAt = t.opened_at
                 )
             }
     }.getOrDefault(emptyList())
@@ -988,6 +995,18 @@ private fun dateLabel(ms: Long): String {
     val dt = Instant.fromEpochMilliseconds(ms).toLocalDateTime(TimeZone.currentSystemDefault())
     return "${dt.day.toString().padStart(2, '0')}.${(dt.month.ordinal + 1).toString().padStart(2, '0')}"
 }
+
+/** «06.07 14:32» — дата и время входа/выхода в карточке сделки. */
+private fun fmtDateTime(ms: Long): String {
+    if (ms <= 0) return "—"
+    val dt = Instant.fromEpochMilliseconds(ms).toLocalDateTime(TimeZone.currentSystemDefault())
+    return "${dt.day.toString().padStart(2, '0')}.${(dt.month.ordinal + 1).toString().padStart(2, '0')} " +
+        "${dt.hour.toString().padStart(2, '0')}:${dt.minute.toString().padStart(2, '0')}"
+}
+
+/** «Ab3dEf…7xYz» — короткий вид адреса контракта. */
+private fun shortMint(mint: String): String =
+    if (mint.length <= 14) mint else "${mint.take(6)}…${mint.takeLast(6)}"
 
 /** Цены мемкоинов крошечные — до 8 значащих знаков после точки, без хвостовых нулей. */
 private fun fmtPrice(v: Double): String {
@@ -1046,12 +1065,12 @@ fun TradeCard(item: TradeHistoryItem) {
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween
             ) {
-                PriceCol("Вход", fmtPrice(item.entryPrice))
+                PriceCol("Вход", fmtPrice(item.entryPrice), fmtDateTime(item.openedAt))
                 Text(
                     "→", color = TextSecondary, fontSize = 16.sp,
                     modifier = Modifier.align(Alignment.CenterVertically)
                 )
-                PriceCol("Выход", fmtPrice(item.exitPrice))
+                PriceCol("Выход", fmtPrice(item.exitPrice), fmtDateTime(item.closedAt))
                 Column(horizontalAlignment = Alignment.End) {
                     Text("P&L", fontSize = 10.sp, color = TextSecondary)
                     Text(
@@ -1086,15 +1105,51 @@ fun TradeCard(item: TradeHistoryItem) {
                 fontSize = 11.sp, color = TextSecondary,
                 maxLines = 1, overflow = TextOverflow.Ellipsis
             )
+
+            // Строка 5: смарт-контракт — тап по строке копирует полный адрес
+            if (item.mint.isNotEmpty()) {
+                Spacer(Modifier.height(6.dp))
+                MintCopyRow(item.mint)
+            }
         }
     }
 }
 
+/** Адрес контракта (mint) с копированием по тапу и индикацией «Скопировано». */
 @Composable
-fun PriceCol(label: String, value: String) {
+fun MintCopyRow(mint: String) {
+    val clipboard = LocalClipboardManager.current
+    var copied by remember(mint) { mutableStateOf(false) }
+    LaunchedEffect(copied) {
+        if (copied) { delay(2_000); copied = false }
+    }
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+        modifier = Modifier.clickable {
+            clipboard.setText(AnnotatedString(mint))
+            copied = true
+        }
+    ) {
+        Text("📋", fontSize = 11.sp)
+        Text(
+            if (copied) "✓ Скопировано" else shortMint(mint),
+            fontSize = 11.sp,
+            fontFamily = FontFamily.Monospace,
+            color = if (copied) Green else TextSecondary,
+            maxLines = 1, overflow = TextOverflow.Ellipsis
+        )
+    }
+}
+
+@Composable
+fun PriceCol(label: String, value: String, sub: String? = null) {
     Column {
         Text(label, fontSize = 10.sp, color = TextSecondary)
         Text(value, fontWeight = FontWeight.SemiBold, color = TextPrimary, fontSize = 13.sp)
+        if (sub != null) {
+            Text(sub, fontSize = 9.sp, color = TextSecondary)
+        }
     }
 }
 

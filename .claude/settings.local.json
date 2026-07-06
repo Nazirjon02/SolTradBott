@@ -71,7 +71,22 @@
       "Bash(./gradlew build *)",
       "Bash(echo \"BUILD_EXIT=$?\")",
       "Bash(git commit -q -m 'Этап 10: тесты — Indicators, RiskManager, TradeExecutor \\(20 тестов зелёные\\) *)",
-      "Bash(git commit -q -m 'README: статус ТЗ → РЕАЛИЗОВАНО, быстрый старт *)"
+      "Bash(git commit -q -m 'README: статус ТЗ → РЕАЛИЗОВАНО, быстрый старт *)",
+      "PowerShell(git -C C:\\\\Users\\\\Virtual\\\\AndroidStudioProjects\\\\SolTradBot ls-files composeApp)",
+      "PowerShell(git -C C:\\\\Users\\\\Virtual\\\\AndroidStudioProjects\\\\SolTradBot log --oneline -3 -- composeApp)",
+      "PowerShell(.\\\\gradlew.bat projects --quiet)",
+      "PowerShell(Get-Process studio64, studio -ErrorAction SilentlyContinue)",
+      "PowerShell($p = Get-Process studio64 -ErrorAction SilentlyContinue; if \\($null -eq $p\\) { 'Studio not running' } else { $script:path = $p.Path; $p.Path; $p.CloseMainWindow\\(\\); 'Close signal sent' })",
+      "PowerShell($deadline = \\(Get-Date\\).AddSeconds\\(90\\); while \\(\\(Get-Date\\) -lt $deadline\\) { $p = Get-Process studio64 -ErrorAction SilentlyContinue; if \\($null -eq $p\\) { 'Studio exited'; break }; Start-Sleep -Seconds 3 }; if \\($null -ne \\(Get-Process studio64 -ErrorAction SilentlyContinue\\)\\) { 'STILL RUNNING' })",
+      "PowerShell(Stop-Process -Name studio64 -Force -Confirm:$false; Start-Sleep -Seconds 3; if \\($null -eq \\(Get-Process studio64 -ErrorAction SilentlyContinue\\)\\) { 'Studio stopped' } else { 'still running' })",
+      "PowerShell($ok = $true; foreach \\($f in @\\('.idea\\\\workspace.xml','.idea\\\\deploymentTargetSelector.xml','.idea\\\\gradle.xml'\\)\\) { try { $x = New-Object xml; $x.Load\\(\"C:\\\\Users\\\\Virtual\\\\AndroidStudioProjects\\\\SolTradBot\\\\$f\"\\); \"$f — OK\" } catch { $ok = $false; \"$f — ERROR: $\\($_.Exception.Message\\)\" } }; Select-String -Path C:\\\\Users\\\\Virtual\\\\AndroidStudioProjects\\\\SolTradBot\\\\.idea\\\\workspace.xml -Pattern 'composeApp' | Measure-Object | ForEach-Object { \"composeApp refs left in workspace.xml: $\\($_.Count\\)\" })",
+      "PowerShell($x = New-Object xml; $x.Load\\('C:\\\\Users\\\\Virtual\\\\AndroidStudioProjects\\\\SolTradBot\\\\.idea\\\\workspace.xml'\\); 'workspace.xml — valid XML'; $hits = Get-ChildItem C:\\\\Users\\\\Virtual\\\\AndroidStudioProjects\\\\SolTradBot\\\\.idea -Recurse -File | Select-String -Pattern 'composeApp' | Measure-Object; \"composeApp refs left in .idea: $\\($hits.Count\\)\")",
+      "PowerShell(Start-Process 'C:\\\\Program Files\\\\Android\\\\Android Studio\\\\bin\\\\studio64.exe' -ArgumentList '\"C:\\\\Users\\\\Virtual\\\\AndroidStudioProjects\\\\SolTradBot\"'; Start-Sleep -Seconds 5; if \\($null -ne \\(Get-Process studio64 -ErrorAction SilentlyContinue\\)\\) { 'Android Studio started' } else { 'failed to start' })",
+      "PowerShell(.\\\\gradlew.bat :shared:compileKotlinJvm --console=plain -q)",
+      "WebFetch(domain:docs.dexscreener.com)",
+      "WebFetch(domain:apiguide.geckoterminal.com)",
+      "WebFetch(domain:dev.jup.ag)",
+      "WebFetch(domain:developers.jup.ag)"
     ]
   }
 }
