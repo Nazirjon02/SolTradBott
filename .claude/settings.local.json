@@ -70,7 +70,8 @@
       "Bash(python3 -c ' *)",
       "Bash(./gradlew build *)",
       "Bash(echo \"BUILD_EXIT=$?\")",
-      "Bash(git commit -q -m 'Этап 10: тесты — Indicators, RiskManager, TradeExecutor \\(20 тестов зелёные\\) *)"
+      "Bash(git commit -q -m 'Этап 10: тесты — Indicators, RiskManager, TradeExecutor \\(20 тестов зелёные\\) *)",
+      "Bash(git commit -q -m 'README: статус ТЗ → РЕАЛИЗОВАНО, быстрый старт *)"
     ]
   }
 }
