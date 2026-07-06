@@ -62,7 +62,9 @@
       "Bash(git commit -q -m 'Этап 6: Telegram — TelegramBotController и TelegramNotifier как в MRX *)",
       "Bash(./gradlew :desktopApp:build :server:build :androidApp:assembleDebug :shared:jvmTest --console=plain -q)",
       "Bash(rm -f /tmp/drx-ui-test.db)",
-      "Bash(git commit -q -m 'Этап 7: UI в стиле MRX — 5 экранов, палитра 1-в-1, имя DRX *)"
+      "Bash(git commit -q -m 'Этап 7: UI в стиле MRX — 5 экранов, палитра 1-в-1, имя DRX *)",
+      "Bash(grep -n \"^\\\\.env$\\\\|^\\\\.env\" .gitignore)",
+      "Bash(git commit -q -m 'Этап 8: инфраструктура — setup/start/desktop.bat, Dockerfile, docker-compose, .env.example *)"
     ]
   }
 }

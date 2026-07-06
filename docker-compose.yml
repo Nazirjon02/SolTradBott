@@ -1,0 +1,17 @@
+services:
+  drx-bot:
+    build: .
+    restart: always
+    environment:
+      - DEMO_MODE=true
+      - SOLANA_RPC_URL=https://api.mainnet-beta.solana.com
+      - SOLANA_WALLET_SEED=
+      - TG_BOT_TOKEN=вставь_токен_бота
+      - TG_CHAT_ID=вставь_свой_chat_id
+      - SOLTRAD_API_KEY=придумай_секрет
+      - DB_PATH=/data/soltradbot.db
+      - PORT=8080
+    volumes:
+      - ./data:/data
+    ports:
+      - "8080:8080"
