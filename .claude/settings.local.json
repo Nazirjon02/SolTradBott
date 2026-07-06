@@ -65,7 +65,12 @@
       "Bash(git commit -q -m 'Этап 7: UI в стиле MRX — 5 экранов, палитра 1-в-1, имя DRX *)",
       "Bash(grep -n \"^\\\\.env$\\\\|^\\\\.env\" .gitignore)",
       "Bash(git commit -q -m 'Этап 8: инфраструктура — setup/start/desktop.bat, Dockerfile, docker-compose, .env.example *)",
-      "Bash(git commit -q -m 'Этап 9: DOCUMENTATION.md — полная русская документация по образцу MRX *)"
+      "Bash(git commit -q -m 'Этап 9: DOCUMENTATION.md — полная русская документация по образцу MRX *)",
+      "Bash(./gradlew :shared:jvmTest --console=plain)",
+      "Bash(python3 -c ' *)",
+      "Bash(./gradlew build *)",
+      "Bash(echo \"BUILD_EXIT=$?\")",
+      "Bash(git commit -q -m 'Этап 10: тесты — Indicators, RiskManager, TradeExecutor \\(20 тестов зелёные\\) *)"
     ]
   }
 }
