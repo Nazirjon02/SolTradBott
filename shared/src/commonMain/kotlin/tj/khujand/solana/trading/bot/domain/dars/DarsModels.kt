@@ -75,6 +75,12 @@ data class DarsSignal(
     val setup: DarsSetup? = null,
     val score: Int = 0,
     val reasons: List<String> = emptyList(),
+    /**
+     * Цель тейк-профита как доля хода от цены входа до ближайшего сопротивления сверху
+     * (Урок 2: «цель фиксируем у следующего уровня»). null — уровня сверху нет
+     * (пробой к новым максимумам), тогда стратегия берёт механический TP%.
+     */
+    val targetFrac: Double? = null,
 ) {
     /** Короткое человекочитаемое описание для логов/Telegram. */
     fun describe(): String = buildString {

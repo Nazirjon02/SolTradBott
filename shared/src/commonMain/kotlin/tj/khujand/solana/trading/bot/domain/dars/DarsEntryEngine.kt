@@ -73,17 +73,17 @@ class DarsEntryEngine(
 
         if (cfg.useImpulseCorrection) {
             val r = ImpulseCorrectionAnalyzer.analyze(legs, cfg)
-            if (r.passed) return r
+            if (r.passed) return withTarget(r, levels, price)
             rejects += r.reasons.map { "имп/корр: $it" }
         }
         if (cfg.useFalseBreakout) {
             val r = FalseBreakoutDetector.detect(etf, levels, cfg)
-            if (r.passed) return r
+            if (r.passed) return withTarget(r, levels, price)
             rejects += r.reasons.map { "лож.пробой: $it" }
         }
         if (cfg.useTriangle) {
             val r = TriangleDetector.detect(etf, legs, cfg)
-            if (r.passed) return r
+            if (r.passed) return withTarget(r, levels, price)
             rejects += r.reasons.map { "треуг.: $it" }
         }
 
@@ -109,6 +109,24 @@ class DarsEntryEngine(
         useFalseBreakout = s.darsUseFalseBreakout,
         useTriangle = s.darsUseTriangle,
     )
+
+    /**
+     * Обогащает прошедший сигнал целью тейк-профита у ближайшего сопротивления сверху (Урок 2):
+     * «цель фиксируем у следующего уровня», а не механическим TP% от входа.
+     * Если сопротивления выше нет (пробой к новым максимумам) — оставляем как есть,
+     * стратегия возьмёт механический TP%.
+     */
+    private fun withTarget(sig: DarsSignal, levels: List<Level>, price: Double): DarsSignal {
+        val frac = LevelDetector.takeProfitFrac(levels, price) ?: return sig
+        val res = LevelDetector.nearestResistance(levels, price) ?: return sig
+        return sig.copy(
+            targetFrac = frac,
+            reasons = sig.reasons + "TP у сопротивления ${fmtPrice(res.price)} (+${(frac * 100).format1()}%)",
+        )
+    }
+
+    private fun fmtPrice(v: Double): String =
+        if (v >= 0.01) ((v * 1_000_000).toLong() / 1_000_000.0).toString() else v.toString()
 
     private fun Double.format1(): String {
         val r = (this * 10).toLong() / 10.0

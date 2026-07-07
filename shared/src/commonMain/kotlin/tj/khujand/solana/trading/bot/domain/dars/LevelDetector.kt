@@ -37,6 +37,18 @@ object LevelDetector {
     fun nearestResistance(levels: List<Level>, price: Double): Level? =
         levels.filter { it.price > price }.minByOrNull { it.price - price }
 
+    /**
+     * Цель тейк-профита (Урок 2): доля хода от [price] до ближайшего сопротивления сверху.
+     * Например, цена 100 и сопротивление 110 → 0.10 (TP на +10%).
+     * null — если сопротивления выше нет (пробой к новым максимумам) или цена некорректна.
+     */
+    fun takeProfitFrac(levels: List<Level>, price: Double): Double? {
+        if (price <= 0.0) return null
+        val res = nearestResistance(levels, price) ?: return null
+        val frac = (res.price - price) / price
+        return if (frac > 0.0) frac else null
+    }
+
     /** Ближайшая поддержка ниже цены. */
     fun nearestSupport(levels: List<Level>, price: Double): Level? =
         levels.filter { it.price < price }.maxByOrNull { it.price }

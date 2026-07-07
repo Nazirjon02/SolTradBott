@@ -4,6 +4,8 @@ import tj.khujand.solana.trading.bot.exchange.dex.Candle
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertNotNull
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 /**
@@ -80,6 +82,26 @@ class DarsAnalysisTest {
         assertTrue(signal.passed, "Сетап должен пройти. Причины: ${signal.reasons}")
         assertEquals(DarsSetup.IMPULSE_CORRECTION, signal.setup)
         assertEquals(TrendDirection.UP, signal.direction)
+    }
+
+    @Test
+    fun takeProfitTargetsNearestResistanceAbove() {
+        // Урок 2: цель — у следующего уровня, а не механический TP%.
+        val levels = listOf(
+            Level(price = 90.0, kind = "reversal"),   // поддержка снизу — игнор
+            Level(price = 110.0, kind = "reversal"),  // ближайшее сопротивление сверху → цель
+            Level(price = 130.0, kind = "reversal"),
+        )
+        val frac = LevelDetector.takeProfitFrac(levels, price = 100.0)
+        assertNotNull(frac, "Должна быть цель у сопротивления сверху")
+        assertEquals(0.10, frac, 1e-9) // до 110 = +10%
+    }
+
+    @Test
+    fun noResistanceAboveMeansMechanicalTp() {
+        // Пробой к новым максимумам: сверху уровней нет → null (стратегия берёт механический TP%).
+        val levels = listOf(Level(price = 80.0, kind = "reversal"), Level(price = 95.0, kind = "reversal"))
+        assertNull(LevelDetector.takeProfitFrac(levels, price = 100.0))
     }
 
     @Test

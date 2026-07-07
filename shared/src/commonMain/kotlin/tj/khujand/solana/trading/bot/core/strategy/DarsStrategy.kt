@@ -36,6 +36,11 @@ class DarsStrategy(override val config: StrategyConfig) : Strategy {
         val entry = candidate.priceUsd
         if (entry <= 0) return null
         val confidence = (result.score / 100.0).coerceIn(0.0, 1.0)
+        // Тейк-профит у следующего уровня (Урок 2): движок отдаёт долю хода до ближайшего
+        // сопротивления сверху. Если уровня нет (пробой к новым максимумам) — механический TP%.
+        val takeProfit = result.targetFrac
+            ?.let { entry * (1 + it) }
+            ?: config.takeProfitPrice(entry)
         return Signal(
             mint = candidate.mint,
             symbol = candidate.symbol,
@@ -44,7 +49,7 @@ class DarsStrategy(override val config: StrategyConfig) : Strategy {
             reason = "Dars: ${result.setup} — ${result.reasons.joinToString("; ")}",
             entryPrice = entry,
             stopLoss = config.stopLossPrice(entry),
-            takeProfit = config.takeProfitPrice(entry),
+            takeProfit = takeProfit,
         )
     }
 }
