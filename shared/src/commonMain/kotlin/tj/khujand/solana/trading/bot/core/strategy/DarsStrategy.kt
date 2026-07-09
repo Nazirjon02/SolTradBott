@@ -35,12 +35,13 @@ class DarsStrategy(override val config: StrategyConfig) : Strategy {
 
         val entry = candidate.priceUsd
         if (entry <= 0) return null
+
+        // Стоп «за структурой» (минимум коррекции) + TP у уровня + гейт риск/прибыль.
+        // Без приемлемого R:R вход отклоняем — даже верный по форме сетап не берём в убыток.
+        val exits = resolveDarsExits(entry, result.targetFrac, result.stopFrac, config, MIN_RISK_REWARD)
+            ?: return null
+
         val confidence = (result.score / 100.0).coerceIn(0.0, 1.0)
-        // Тейк-профит у следующего уровня (Урок 2): движок отдаёт долю хода до ближайшего
-        // сопротивления сверху. Если уровня нет (пробой к новым максимумам) — механический TP%.
-        val takeProfit = result.targetFrac
-            ?.let { entry * (1 + it) }
-            ?: config.takeProfitPrice(entry)
         return Signal(
             mint = candidate.mint,
             symbol = candidate.symbol,
@@ -48,10 +49,48 @@ class DarsStrategy(override val config: StrategyConfig) : Strategy {
             confidence = confidence,
             reason = "Dars: ${result.setup} — ${result.reasons.joinToString("; ")}",
             entryPrice = entry,
-            stopLoss = config.stopLossPrice(entry),
-            takeProfit = takeProfit,
+            stopLoss = exits.stopLoss,
+            takeProfit = exits.takeProfit,
         )
     }
+
+    companion object {
+        /** Минимально допустимое отношение прибыль/риск для входа (Урок: цель дальше риска). */
+        const val MIN_RISK_REWARD = 1.5
+    }
+}
+
+/** Рассчитанные выходы: цены стопа и тейка. */
+internal data class DarsExits(val stopLoss: Double, val takeProfit: Double)
+
+/**
+ * Считает цены стопа и тейка для сигнала Dars и применяет гейт R:R.
+ *  - Тейк: у ближайшего сопротивления (targetFrac) либо механический TP% при пробое к новым максимумам.
+ *  - Стоп: под структурой (stopFrac от движка), но не рискуя больше механического SL% из конфига
+ *    (`maxOf` берёт более высокую = более близкую цену стопа). Если структуры нет — механический SL%.
+ *  - Гейт: если прибыль/риск < [minRiskReward] или некорректны — возвращает null (вход отклонён).
+ */
+internal fun resolveDarsExits(
+    entry: Double,
+    targetFrac: Double?,
+    stopFrac: Double?,
+    config: StrategyConfig,
+    minRiskReward: Double,
+): DarsExits? {
+    if (entry <= 0.0) return null
+
+    val takeProfit = targetFrac?.let { entry * (1 + it) } ?: config.takeProfitPrice(entry)
+
+    val mechanicalStop = config.stopLossPrice(entry)
+    val structuralStop = stopFrac?.let { entry * (1 - it) }
+    val stopLoss = if (structuralStop != null) maxOf(structuralStop, mechanicalStop) else mechanicalStop
+
+    val risk = entry - stopLoss
+    val reward = takeProfit - entry
+    if (risk <= 0.0 || reward <= 0.0) return null
+    if (reward / risk < minRiskReward) return null
+
+    return DarsExits(stopLoss, takeProfit)
 }
 
 /** Мост: типизированный StrategyConfig → legacy FilterSettings, который понимает DarsEntryEngine. */
@@ -73,7 +112,8 @@ internal fun StrategyConfig.toDarsFilterSettings(): FilterSettings {
         darsRejectAtResistance = darsRejectAtResistance,
         darsResistanceProximityPct = darsResistanceProximityPct,
         darsMinLegs = darsMinLegs,
-        darsFailClosed = false,
+        // Урок 2: без данных старшего ТФ тренд неизвестен → не торгуем вслепую.
+        darsFailClosed = true,
         darsUseImpulseCorrection = darsUseImpulseCorrection,
         darsUseTrendLevels = darsUseTrendLevels,
         darsUseFalseBreakout = darsUseFalseBreakout,

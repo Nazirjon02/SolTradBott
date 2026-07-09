@@ -138,10 +138,13 @@ class StrategyManager(
         }
         activityLog.success("✓ ${config.name}: кандидатов ${candidates.size}")
 
-        val openMints = db.tradeQueries.getOpenTrades().executeAsList().map { it.mint }.toSet()
+        // «Одна монета — одна сделка»: пропускаем все монеты, по которым уже была сделка
+        // в текущем режиме (demo/real) — открытая ИЛИ уже закрытая. Повторно не входим.
+        val demoFlag = if (executor.isDemo()) 1L else 0L
+        val tradedMints = db.tradeQueries.tradedMints(demoFlag).executeAsList().toSet()
 
         for (candidate in candidates) {
-            if (candidate.mint in openMints) continue
+            if (candidate.mint in tradedMints) continue
 
             val candles = runCatching {
                 client.getCandles(candidate.pairAddress, config.timeframe, config.darsCandleLimit)
@@ -158,10 +161,11 @@ class StrategyManager(
                 continue
             }
 
-            // Сериализуем вход по монете + перепроверка внутри лока.
+            // Сериализуем вход по монете + перепроверка внутри лока (защита от гонки
+            // между стратегиями и от повторного входа в уже торговавшуюся монету).
             val opened = mintLock(candidate.mint).withLock {
-                val stillOpen = db.tradeQueries.getOpenTrades().executeAsList().any { it.mint == candidate.mint }
-                if (stillOpen) return@withLock false
+                val alreadyTraded = db.tradeQueries.hasTradedMint(candidate.mint, demoFlag).executeAsOne() > 0L
+                if (alreadyTraded) return@withLock false
                 if (!riskManager.canTrade(config)) return@withLock false
                 executeSignal(signal, config, candidate)
             }

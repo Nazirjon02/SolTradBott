@@ -110,11 +110,11 @@ data class StrategyConfig(
     val darsCandleLimit: Int = 200,
     val darsSwingPivotPct: Double = 1.0,
     val darsRequireHtfTrend: Boolean = true,
-    val darsDominanceRatio: Double = 1.3,
-    val darsMinCorrectionLenPct: Double = 30.0,
+    val darsDominanceRatio: Double = 1.5,        // импульс должен явно доминировать над коррекцией
+    val darsMinCorrectionLenPct: Double = 70.0,  // Урок 4: коррекция ≥70% длины импульса
     val darsRejectAtResistance: Boolean = true,
     val darsResistanceProximityPct: Double = 1.0,
-    val darsMinLegs: Int = 2,
+    val darsMinLegs: Int = 4,                     // 4 ноги → работает сравнение с прошлыми импульсом/коррекцией
     val darsUseImpulseCorrection: Boolean = true,
     val darsUseTrendLevels: Boolean = true,
     val darsUseFalseBreakout: Boolean = true,

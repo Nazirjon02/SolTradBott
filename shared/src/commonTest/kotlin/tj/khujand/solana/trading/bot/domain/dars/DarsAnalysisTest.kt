@@ -133,6 +133,55 @@ class DarsAnalysisTest {
         assertNull(LevelDetector.takeProfitFrac(levels, price = 100.0))
     }
 
+    /**
+     * Восходящий треугольник (Урок 5): higher lows, сужающиеся коррекции, пробойный бар вверх.
+     * Импульс до ~120 (верх треугольника), затем три коррекции 12→7→4 с растущими минимумами
+     * 108→112→115 и откатами к ~119, и финальный агрессивный пробой на 122.
+     */
+    private fun ascendingTriangleCandles(): List<Candle> {
+        val closes = buildList {
+            add(100.0)
+            addAll(listOf(102.0, 104.0, 106.0, 108.0, 110.0, 112.0, 114.0, 116.0, 118.0, 120.0)) // импульс → 120
+            addAll(listOf(118.0, 116.0, 114.0, 112.0, 110.0, 108.0)) // коррекция 1 → 108 (12)
+            addAll(listOf(110.0, 112.0, 114.0, 116.0, 118.0, 119.0)) // откат → 119
+            addAll(listOf(117.0, 115.0, 113.0, 112.0))               // коррекция 2 → 112 (7)
+            addAll(listOf(114.0, 116.0, 118.0, 119.0))               // откат → 119
+            addAll(listOf(117.0, 115.0))                             // коррекция 3 → 115 (4)
+            add(122.0)                                               // пробой вверх
+        }
+        return closes.mapIndexed { i, close ->
+            val prev = if (i == 0) close else closes[i - 1]
+            val up = close >= prev
+            Candle(
+                openTimeMs = i * 60_000L,
+                open = prev,
+                high = maxOf(prev, close) * 1.002,
+                low = minOf(prev, close) * 0.998,
+                close = close,
+                volume = if (up) 1000.0 else 200.0,
+            )
+        }
+    }
+
+    @Test
+    fun triangleBreakoutPasses() {
+        val candles = ascendingTriangleCandles()
+        val legs = LegSegmenter.segment(candles, cfg.swingPivotPct)
+        val signal = TriangleDetector.detect(candles, legs, cfg)
+        assertTrue(signal.passed, "Пробой треугольника должен пройти. Причины: ${signal.reasons}")
+        assertEquals(DarsSetup.TRIANGLE, signal.setup)
+        assertEquals(TrendDirection.UP, signal.direction)
+    }
+
+    @Test
+    fun triangleWithoutBreakoutDoesNotPass() {
+        // Без пробойного бара (обрезаем финальный бар 122) входа быть не должно.
+        val candles = ascendingTriangleCandles().dropLast(1)
+        val legs = LegSegmenter.segment(candles, cfg.swingPivotPct)
+        val signal = TriangleDetector.detect(candles, legs, cfg)
+        assertFalse(signal.passed, "Без пробоя треугольника входа быть не должно")
+    }
+
     @Test
     fun flatMarketDoesNotPass() {
         // Плоский рынок без структуры → мало ног → отказ.

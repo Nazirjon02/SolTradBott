@@ -14,6 +14,9 @@ import tj.khujand.solana.trading.bot.data.db.DrxDatabase
  * Momentum Scalping и RSI+EMA (включаются вручную).
  */
 fun seedDefaultStrategies(db: DrxDatabase) {
+    // Уже засеянные БД подтягиваем к значениям методички один раз (см. ниже).
+    normalizeDarsDefaults(db)
+
     val existing = db.strategyQueries.getAll().executeAsList()
     if (existing.isNotEmpty()) return  // уже есть стратегии — не добавляем
 
@@ -68,11 +71,11 @@ fun seedDefaultStrategies(db: DrxDatabase) {
         dars_candle_limit = 200L,
         dars_swing_pivot_pct = 1.0,
         dars_require_htf_trend = 1L,
-        dars_dominance_ratio = 1.3,
-        dars_min_correction_len_pct = 30.0,
+        dars_dominance_ratio = 1.5,
+        dars_min_correction_len_pct = 70.0,
         dars_reject_at_resistance = 1L,
         dars_resistance_proximity_pct = 1.0,
-        dars_min_legs = 2L,
+        dars_min_legs = 4L,
         dars_use_impulse_correction = 1L,
         dars_use_trend_levels = 1L,
         dars_use_false_breakout = 1L,
@@ -130,11 +133,11 @@ fun seedDefaultStrategies(db: DrxDatabase) {
         dars_candle_limit = 100L,
         dars_swing_pivot_pct = 1.0,
         dars_require_htf_trend = 0L,
-        dars_dominance_ratio = 1.3,
-        dars_min_correction_len_pct = 30.0,
+        dars_dominance_ratio = 1.5,
+        dars_min_correction_len_pct = 70.0,
         dars_reject_at_resistance = 0L,
         dars_resistance_proximity_pct = 1.0,
-        dars_min_legs = 2L,
+        dars_min_legs = 4L,
         dars_use_impulse_correction = 0L,
         dars_use_trend_levels = 0L,
         dars_use_false_breakout = 0L,
@@ -192,11 +195,11 @@ fun seedDefaultStrategies(db: DrxDatabase) {
         dars_candle_limit = 200L,
         dars_swing_pivot_pct = 1.0,
         dars_require_htf_trend = 1L,
-        dars_dominance_ratio = 1.3,
-        dars_min_correction_len_pct = 30.0,
+        dars_dominance_ratio = 1.5,
+        dars_min_correction_len_pct = 70.0,
         dars_reject_at_resistance = 1L,
         dars_resistance_proximity_pct = 1.0,
-        dars_min_legs = 2L,
+        dars_min_legs = 4L,
         dars_use_impulse_correction = 0L,
         dars_use_trend_levels = 0L,
         dars_use_false_breakout = 0L,
@@ -204,4 +207,21 @@ fun seedDefaultStrategies(db: DrxDatabase) {
         created_at = now,
         updated_at = now
     )
+}
+
+/** Ключ-флаг: нормализация Dars-дефолтов к методичке выполнена (чтобы не повторять). */
+private const val DARS_DEFAULTS_MIGRATION_KEY = "dars_defaults_normalized_v1"
+
+/**
+ * Одноразовая миграция: подтягивает уже засеянные Dars-стратегии к значениям методички
+ * (коррекция ≥70% импульса, minLegs=4, доминирование 1.5×). Затрагивает только строки,
+ * где осталась ровно старая слабая тройка значений (30/2/1.3) — пользовательские правки
+ * не трогаем. Выполняется один раз: результат помечается флагом в settings.
+ */
+private fun normalizeDarsDefaults(db: DrxDatabase) {
+    val alreadyDone = db.settingsQueries.get(DARS_DEFAULTS_MIGRATION_KEY).executeAsOneOrNull() != null
+    if (alreadyDone) return
+    val now = Clock.System.now().toEpochMilliseconds()
+    db.strategyQueries.normalizeDarsDefaults(now)
+    db.settingsQueries.set(DARS_DEFAULTS_MIGRATION_KEY, "1", now)
 }

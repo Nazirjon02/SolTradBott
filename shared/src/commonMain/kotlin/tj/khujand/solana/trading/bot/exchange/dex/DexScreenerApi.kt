@@ -315,7 +315,7 @@ data class FilterSettings(
     val darsRejectAtResistance: Boolean = true,     // ⭐ Не покупать у сопротивления (Урок 4)
     val darsResistanceProximityPct: Double = 2.0,   // ⭐ Насколько близко к сопротивлению = «у сопротивления», %
     val darsMinLegs: Int = 4,                       // Мин. число ног для анализа структуры
-    val darsFailClosed: Boolean = false,            // При нехватке свечей/ошибке: true=отклонять, false=пропускать анализ
+    val darsFailClosed: Boolean = true,             // При нехватке свечей старшего ТФ: true=отклонять (Урок 2, не торгуем вслепую), false=пропускать
 
     // Окно новостей (Урок 4: не торговать ±30 мин вокруг важных новостей). Ручное расписание UTC.
     val darsNewsBlackoutEnabled: Boolean = false,   // ⭐ Включить блокировку входов в окно новостей

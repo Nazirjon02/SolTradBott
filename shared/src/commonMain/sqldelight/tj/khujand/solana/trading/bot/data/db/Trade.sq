@@ -43,6 +43,15 @@ SELECT COUNT(*) FROM trade WHERE strategy_id = ? AND status = 'OPEN';
 getOpenCountTotal:
 SELECT COUNT(*) FROM trade WHERE status = 'OPEN';
 
+-- «Одна монета — одна сделка»: все mint'ы, по которым уже была сделка в этом режиме
+-- (demo/real), независимо от статуса. Используется для пред-фильтра кандидатов сканера.
+tradedMints:
+SELECT DISTINCT mint FROM trade WHERE is_demo = ?;
+
+-- Точечная перепроверка под локом перед входом: торговали ли уже этой монетой.
+hasTradedMint:
+SELECT COUNT(*) FROM trade WHERE mint = ? AND is_demo = ?;
+
 insert:
 INSERT INTO trade (
     id, strategy_id, strategy_name, mint, symbol, pair_address, entry_price, exit_price,

@@ -5,6 +5,9 @@ import tj.khujand.solana.trading.bot.exchange.dex.FilterSettings
 import tj.khujand.solana.trading.bot.exchange.dex.GeckoTerminalApi
 import tj.khujand.solana.trading.bot.exchange.dex.TokenPair
 
+/** Буфер под минимумом коррекции для структурного стопа (0.5%), чтобы не выбивало ровно по low. */
+private const val STOP_BUFFER = 0.005
+
 /**
  * Оркестратор входа по методике «Dars». Тянет свечи старшего и рабочего ТФ,
  * применяет тренд-гейт и уровни (Урок 2), затем включённые сетапы:
@@ -36,16 +39,20 @@ class DarsEntryEngine(
         val etf = candleSource(pool, cfg.entryTf, cfg.entryTfAggregate, cfg.candleLimit)
         if (etf.size < 12) return DarsSignal.reject("мало свечей рабочего ТФ (${etf.size})")
 
+        // Старший ТФ тянем ОДИН раз — он нужен и для тренда, и для уровней (Урок 2).
+        val needHtf = cfg.useTrendLevels || cfg.requireHtfTrend
+        val htf = if (needHtf) candleSource(pool, cfg.higherTf, cfg.higherTfAggregate, cfg.candleLimit) else emptyList()
+
         // Тренд старшего ТФ (Урок 2). Бот лонговый → нужен UP.
-        val trend = if (cfg.useTrendLevels || cfg.requireHtfTrend) {
-            val htf = candleSource(pool, cfg.higherTf, cfg.higherTfAggregate, cfg.candleLimit)
-            if (htf.size < 6) {
-                if (cfg.failClosed) return DarsSignal.reject("мало свечей старшего ТФ (${htf.size})")
-                TrendDirection.UP  // не блокируем, если разрешён fail-open
-            } else {
-                TrendAnalyzer.trend(htf, cfg.swingPivotPct)
+        val trend = when {
+            !needHtf -> TrendDirection.UP
+            htf.size < 6 -> {
+                // Нет данных старшего ТФ → тренд неизвестен. Fail-closed: не торгуем вслепую.
+                if (cfg.failClosed) return DarsSignal.reject("мало свечей старшего ТФ (${htf.size}) — тренд неизвестен")
+                TrendDirection.UP
             }
-        } else TrendDirection.UP
+            else -> TrendAnalyzer.trend(htf, cfg.swingPivotPct)
+        }
 
         if (cfg.useTrendLevels && cfg.requireHtfTrend && trend != TrendDirection.UP) {
             return DarsSignal.reject("тренд старшего ТФ не восходящий ($trend) — лонг запрещён")
@@ -54,7 +61,10 @@ class DarsEntryEngine(
         val legs = LegSegmenter.segment(etf, cfg.swingPivotPct)
         if (legs.size < cfg.minLegs) return DarsSignal.reject("мало ног на рабочем ТФ (${legs.size}<${cfg.minLegs})")
 
-        val levels = LevelDetector.detect(etf, cfg.swingPivotPct)
+        // Уровни поддержки/сопротивления считаем на СТАРШЕМ ТФ (Урок 2). Если старшего ТФ нет
+        // (отключён или мало данных) — на рабочем, чтобы TP/фильтры не остались пустыми.
+        val levels = if (cfg.useTrendLevels && htf.size >= 6) LevelDetector.detect(htf, cfg.swingPivotPct)
+        else LevelDetector.detect(etf, cfg.swingPivotPct)
         val price = etf.last().close
 
         // «Не покупаем у сопротивления» (Урок 4).
@@ -73,17 +83,17 @@ class DarsEntryEngine(
 
         if (cfg.useImpulseCorrection) {
             val r = ImpulseCorrectionAnalyzer.analyze(etf, legs, cfg)
-            if (r.passed) return withTarget(r, levels, price)
+            if (r.passed) return withTarget(r, levels, price, legs, etf)
             rejects += r.reasons.map { "имп/корр: $it" }
         }
         if (cfg.useFalseBreakout) {
             val r = FalseBreakoutDetector.detect(etf, levels, cfg)
-            if (r.passed) return withTarget(r, levels, price)
+            if (r.passed) return withTarget(r, levels, price, legs, etf)
             rejects += r.reasons.map { "лож.пробой: $it" }
         }
         if (cfg.useTriangle) {
             val r = TriangleDetector.detect(etf, legs, cfg)
-            if (r.passed) return withTarget(r, levels, price)
+            if (r.passed) return withTarget(r, levels, price, legs, etf)
             rejects += r.reasons.map { "треуг.: $it" }
         }
 
@@ -111,18 +121,42 @@ class DarsEntryEngine(
     )
 
     /**
-     * Обогащает прошедший сигнал целью тейк-профита у ближайшего сопротивления сверху (Урок 2):
-     * «цель фиксируем у следующего уровня», а не механическим TP% от входа.
-     * Если сопротивления выше нет (пробой к новым максимумам) — оставляем как есть,
-     * стратегия возьмёт механический TP%.
+     * Обогащает прошедший сигнал целью тейк-профита и структурным стопом.
+     *  - TP у ближайшего сопротивления сверху (Урок 2): «цель фиксируем у следующего уровня».
+     *    Если сопротивления выше нет (пробой к новым максимумам) — стратегия возьмёт механический TP%.
+     *  - Стоп под минимумом последней коррекции + буфер (стоп «за структурой», а не механический SL%).
+     *    Если структуру не определить — стратегия возьмёт механический SL%.
      */
-    private fun withTarget(sig: DarsSignal, levels: List<Level>, price: Double): DarsSignal {
-        val frac = LevelDetector.takeProfitFrac(levels, price) ?: return sig
-        val res = LevelDetector.nearestResistance(levels, price) ?: return sig
-        return sig.copy(
+    private fun withTarget(
+        sig: DarsSignal,
+        levels: List<Level>,
+        price: Double,
+        legs: List<Leg>,
+        etf: List<Candle>,
+    ): DarsSignal {
+        var out = sig
+
+        // Структурный стоп: под минимумом последней коррекции (нога вниз), с небольшим буфером.
+        val swingLow = legs.lastOrNull { it.direction == TrendDirection.DOWN }?.endPrice
+            ?: etf.takeLast(10).minOfOrNull { it.low }
+        if (swingLow != null && price > 0.0 && swingLow < price) {
+            val structuralStop = swingLow * (1.0 - STOP_BUFFER)
+            val sf = (price - structuralStop) / price
+            if (sf > 0.0) out = out.copy(
+                stopFrac = sf,
+                reasons = out.reasons + "стоп под структурой ${fmtPrice(structuralStop)} (−${(sf * 100).format1()}%)",
+            )
+        }
+
+        // TP у ближайшего сопротивления сверху.
+        val frac = LevelDetector.takeProfitFrac(levels, price)
+        val res = if (frac != null) LevelDetector.nearestResistance(levels, price) else null
+        if (frac != null && res != null) out = out.copy(
             targetFrac = frac,
-            reasons = sig.reasons + "TP у сопротивления ${fmtPrice(res.price)} (+${(frac * 100).format1()}%)",
+            reasons = out.reasons + "TP у сопротивления ${fmtPrice(res.price)} (+${(frac * 100).format1()}%)",
         )
+
+        return out
     }
 
     private fun fmtPrice(v: Double): String =
