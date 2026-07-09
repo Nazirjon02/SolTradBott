@@ -78,6 +78,11 @@ class DarsEntryEngine(
             }
         }
 
+        // Урок 4 п.2: после резкого движения (нож вверх/вниз) ждём накопления, только потом вход.
+        if (AccumulationGate.blocksEntry(etf)) {
+            return DarsSignal.reject("резкое движение недавно — ждём накопления (Урок 4)")
+        }
+
         // Перебор сетапов по приоритету; собираем причины отказа.
         val rejects = ArrayList<String>()
 

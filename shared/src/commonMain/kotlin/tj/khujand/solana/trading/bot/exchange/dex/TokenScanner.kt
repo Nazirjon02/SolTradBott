@@ -1,5 +1,6 @@
 package tj.khujand.solana.trading.bot.exchange.dex
 
+import kotlin.math.abs
 import kotlin.time.Clock
 import kotlinx.coroutines.CancellationException
 
@@ -108,7 +109,7 @@ class TokenScanner(
                 priceChangeM5 = pair.priceChange?.m5 ?: 0.0,
                 priceChangeH1 = pair.priceChange?.h1 ?: 0.0,
                 tokenAgeMinutes = ageMinutes,
-                score = score(liquidity, volumeH1, ratio, pair.priceChange?.h1 ?: 0.0),
+                score = computeScanScore(liquidity, volumeH1, ratio, pair.priceChange?.h1 ?: 0.0),
                 rugScore = rugScore,
                 scannedAt = now,
             )
@@ -128,16 +129,29 @@ class TokenScanner(
             it.volumeH1Usd >= f.minVolumeH1Usd
     }
 
-    /** Простой скоринг 0..100: ликвидность + объём + давление покупок + импульс за час. */
-    private fun score(liquidity: Double, volumeH1: Double, buySellRatio: Double, changeH1: Double): Double {
-        val liqScore = (liquidity / 100_000.0).coerceAtMost(1.0) * 25
-        val volScore = (volumeH1 / 50_000.0).coerceAtMost(1.0) * 25
-        val ratioScore = ((buySellRatio - 1.0) / 2.0).coerceIn(0.0, 1.0) * 25
-        val momentumScore = (changeH1 / 100.0).coerceIn(0.0, 1.0) * 25
-        return liqScore + volScore + ratioScore + momentumScore
-    }
-
     /** DexScreener иногда отдаёт createdAt в секундах — нормализуем в миллисекунды. */
     private fun normalizeCreatedAt(value: Long): Long =
         if (value < 100_000_000_000L) value * 1000 else value
+}
+
+/**
+ * Скоринг кандидата 0..100: ликвидность + объём + давление покупок + стабильность.
+ *
+ * Урок 4: НЕ поощряем памп. Резкое изменение цены за час (в любую сторону) СНИЖАЕТ балл —
+ * предпочитаем токены в накоплении/консолидации, а не на вершине V-разворота. Раньше здесь
+ * был momentumScore, который, наоборот, тянул наверх уже пампнутые монеты.
+ *
+ * @param changeH1 изменение цены за час в процентах (например 50.0 = +50%).
+ */
+internal fun computeScanScore(
+    liquidity: Double,
+    volumeH1: Double,
+    buySellRatio: Double,
+    changeH1: Double,
+): Double {
+    val liqScore = (liquidity / 100_000.0).coerceAtMost(1.0) * 25
+    val volScore = (volumeH1 / 50_000.0).coerceAtMost(1.0) * 25
+    val ratioScore = ((buySellRatio - 1.0) / 2.0).coerceIn(0.0, 1.0) * 25
+    val stabilityScore = (1.0 - abs(changeH1) / 100.0).coerceIn(0.0, 1.0) * 25
+    return liqScore + volScore + ratioScore + stabilityScore
 }
