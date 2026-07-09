@@ -56,6 +56,24 @@ class DarsAnalysisTest {
         }
     }
 
+    /**
+     * Канонический паттерн + подтверждающий агрессивный бычий бар в конце (Урок 4):
+     * коррекция завершилась, цена разворачивается вверх — только тогда входим.
+     */
+    private fun entryWithConfirmation(): List<Candle> {
+        val base = canonicalEntryCandles()               // заканчивается падающим баром (125.0)
+        val prev = base.last().close                     // 125.0
+        val close = 127.5                                // сильный разворот вверх (+2%)
+        return base + Candle(
+            openTimeMs = base.size * 60_000L,
+            open = prev,
+            high = close * 1.002,
+            low = prev * 0.998,
+            close = close,
+            volume = 1200.0,
+        )
+    }
+
     @Test
     fun segmentsIntoFourLegs() {
         val legs = LegSegmenter.segment(canonicalEntryCandles(), cfg.swingPivotPct)
@@ -77,11 +95,22 @@ class DarsAnalysisTest {
 
     @Test
     fun impulseCorrectionSetupPasses() {
-        val legs = LegSegmenter.segment(canonicalEntryCandles(), cfg.swingPivotPct)
-        val signal = ImpulseCorrectionAnalyzer.analyze(legs, cfg)
+        val candles = entryWithConfirmation()
+        val legs = LegSegmenter.segment(candles, cfg.swingPivotPct)
+        val signal = ImpulseCorrectionAnalyzer.analyze(candles, legs, cfg)
         assertTrue(signal.passed, "Сетап должен пройти. Причины: ${signal.reasons}")
         assertEquals(DarsSetup.IMPULSE_CORRECTION, signal.setup)
         assertEquals(TrendDirection.UP, signal.direction)
+    }
+
+    @Test
+    fun withoutConfirmationBarDoesNotPass() {
+        // «Не ловим нож» (Урок 4): пока коррекция ещё падает и нет подтверждающего
+        // бычьего бара — входа быть не должно.
+        val candles = canonicalEntryCandles()            // заканчивается падающим баром
+        val legs = LegSegmenter.segment(candles, cfg.swingPivotPct)
+        val signal = ImpulseCorrectionAnalyzer.analyze(candles, legs, cfg)
+        assertFalse(signal.passed, "Без подтверждения разворота входа быть не должно")
     }
 
     @Test
@@ -111,7 +140,7 @@ class DarsAnalysisTest {
             Candle(i * 60_000L, open = 100.0, high = 100.2, low = 99.8, close = 100.0, volume = 100.0)
         }
         val legs = LegSegmenter.segment(flat, cfg.swingPivotPct)
-        val signal = ImpulseCorrectionAnalyzer.analyze(legs, cfg)
+        val signal = ImpulseCorrectionAnalyzer.analyze(flat, legs, cfg)
         assertFalse(signal.passed, "Плоский рынок не должен давать вход")
     }
 }

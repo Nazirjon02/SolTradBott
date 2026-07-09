@@ -86,7 +86,11 @@
       "WebFetch(domain:docs.dexscreener.com)",
       "WebFetch(domain:apiguide.geckoterminal.com)",
       "WebFetch(domain:dev.jup.ag)",
-      "WebFetch(domain:developers.jup.ag)"
+      "WebFetch(domain:developers.jup.ag)",
+      "PowerShell(.\\\\gradlew.bat :shared:jvmTest --tests \"tj.khujand.solana.trading.bot.domain.dars.DarsAnalysisTest\" -q 2>&1)",
+      "PowerShell(.\\\\gradlew.bat :shared:jvmTest --tests \"tj.khujand.solana.trading.bot.domain.dars.DarsAnalysisTest\" 2>&1)",
+      "PowerShell(.\\\\gradlew.bat :shared:jvmTest --rerun-tasks 2>&1)",
+      "PowerShell(& \"C:\\\\Users\\\\Virtual\\\\AndroidStudioProjects\\\\SolTradBot\\\\gradlew.bat\" -p \"C:\\\\Users\\\\Virtual\\\\AndroidStudioProjects\\\\SolTradBot\" :shared:jvmTest --rerun-tasks 2>&1)"
     ]
   }
 }

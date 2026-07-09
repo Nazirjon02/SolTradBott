@@ -72,7 +72,7 @@ class DarsEntryEngine(
         val rejects = ArrayList<String>()
 
         if (cfg.useImpulseCorrection) {
-            val r = ImpulseCorrectionAnalyzer.analyze(legs, cfg)
+            val r = ImpulseCorrectionAnalyzer.analyze(etf, legs, cfg)
             if (r.passed) return withTarget(r, levels, price)
             rejects += r.reasons.map { "имп/корр: $it" }
         }
