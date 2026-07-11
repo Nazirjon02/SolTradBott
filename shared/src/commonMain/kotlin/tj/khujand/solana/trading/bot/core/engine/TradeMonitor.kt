@@ -46,6 +46,12 @@ class TradeMonitor(
     fun start() {
         if (job?.isActive == true) return
         job = scope.launch {
+            // При запуске (в т.ч. после перезапуска приложения) сообщаем, сколько
+            // открытых позиций из БД взято на сопровождение — чтобы это было видно в UI.
+            val resumed = runCatching { db.tradeQueries.getOpenCountTotal().executeAsOne() }.getOrDefault(0L)
+            if (resumed > 0) {
+                activityLog.info("↩️ Подхвачено открытых позиций: $resumed — сопровождаю")
+            }
             while (isActive) {
                 try {
                     checkOnce()
