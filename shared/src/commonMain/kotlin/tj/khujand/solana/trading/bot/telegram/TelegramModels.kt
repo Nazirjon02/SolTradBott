@@ -37,3 +37,15 @@ data class TgUpdatesResponse(
     val ok: Boolean,
     val result: List<TgUpdate>
 )
+
+/**
+ * Экранирование спецсимволов легаси-Markdown Telegram (`_ * ` `[`) в динамических
+ * строках — символах монет, названиях стратегий, причинах. Без этого символ вроде
+ * `PEPE_2` ломает парсер, и Telegram молча отклоняет сообщение (алерт теряется).
+ */
+internal fun String.escapeMarkdown(): String = buildString {
+    for (c in this@escapeMarkdown) {
+        if (c == '_' || c == '*' || c == '`' || c == '[') append('\\')
+        append(c)
+    }
+}

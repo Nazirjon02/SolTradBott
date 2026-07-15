@@ -1,6 +1,7 @@
 package tj.khujand.solana.trading.bot.telegram
 
 import io.ktor.client.HttpClient
+import io.ktor.client.plugins.HttpTimeout
 import io.ktor.client.plugins.contentnegotiation.ContentNegotiation
 import io.ktor.client.request.post
 import io.ktor.client.request.setBody
@@ -11,8 +12,8 @@ import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import kotlin.math.abs
-import kotlin.math.roundToLong
 import tj.khujand.solana.trading.bot.core.TradeNotifier
+import tj.khujand.solana.trading.bot.util.formatNumber
 
 /**
  * Отправка алертов о сделках в Telegram (порт из MRX).
@@ -29,6 +30,7 @@ class TelegramNotifier(
     private val apiUrl get() = "https://api.telegram.org/bot$botToken"
     private val client = HttpClient {
         install(ContentNegotiation) { json(Json { ignoreUnknownKeys = true }) }
+        install(HttpTimeout) { requestTimeoutMillis = 15_000 }
     }
 
     /** Применяет новые токен/чат на лету (вызывается при сохранении настроек). */
@@ -37,7 +39,17 @@ class TelegramNotifier(
         chatId = chat
     }
 
-    override suspend fun send(text: String) {
+    /**
+     * Обычные уведомления (статус движка, сигналы, ошибки) шлём БЕЗ Markdown:
+     * в них попадают сырые символы монет и тексты причин, а спецсимвол вроде `_`
+     * сломал бы Markdown-парсер, и Telegram молча отклонил бы сообщение.
+     * Форматированные алерты о сделках идут через [sendMarkdown] с экранированием.
+     */
+    override suspend fun send(text: String) = post(text, markdown = false)
+
+    private suspend fun sendMarkdown(text: String) = post(text, markdown = true)
+
+    private suspend fun post(text: String, markdown: Boolean) {
         if (botToken.isBlank() || chatId == 0L) return
         runCatching {
             client.post("$apiUrl/sendMessage") {
@@ -45,7 +57,7 @@ class TelegramNotifier(
                 setBody(buildJsonObject {
                     put("chat_id", chatId)
                     put("text", text)
-                    put("parse_mode", "Markdown")
+                    if (markdown) put("parse_mode", "Markdown")
                 })
             }
         }
@@ -65,17 +77,17 @@ class TelegramNotifier(
         val risk = abs(entryPrice - stopLoss)
         val reward = abs(takeProfit - entryPrice)
         val rr = if (risk > 0) reward / risk else 0.0
-        send(
+        sendMarkdown(
             """
-            🟢 *Вход LONG — $symbol*$mode
+            🟢 *Вход LONG — ${symbol.escapeMarkdown()}*$mode
 
-            🧠 Стратегия: $strategyName
+            🧠 Стратегия: ${strategyName.escapeMarkdown()}
             💵 Цена входа: ${fmt(entryPrice)}
             💰 Размер: ${fmt(sizeUsd)} USD
             🛑 Stop Loss: ${fmt(stopLoss)}
             🎯 Take Profit: ${fmt(takeProfit)}
             ⚖️ R:R ≈ ${fmt(rr)}
-            💡 $reason
+            💡 ${reason.escapeMarkdown()}
             """.trimIndent()
         )
     }
@@ -93,30 +105,21 @@ class TelegramNotifier(
         val emoji = if (pnlUsd > 0) "✅" else "❌"
         val pnlEmoji = if (pnlUsd > 0) "💰" else "💸"
         val mode = if (isDemo) " _(DEMO)_" else ""
-        send(
+        sendMarkdown(
             """
             $emoji *Закрыта позиция*$mode
 
-            📌 $symbol | $strategyName
+            📌 ${symbol.escapeMarkdown()} | ${strategyName.escapeMarkdown()}
             📥 Вход: ${fmt(entryPrice)}
             📤 Выход: ${fmt(exitPrice)}
             $pnlEmoji P&L: ${fmt(pnlUsd)} USD (${fmt(pnlPercent)}%)
-            📝 Причина: $reason
+            📝 Причина: ${reason.escapeMarkdown()}
             """.trimIndent()
         )
     }
 
     fun close() = client.close()
 
-    /** Локале-независимое форматирование числа (точка, без хвостовых нулей). */
-    private fun fmt(v: Double): String {
-        var factor = 1L
-        repeat(6) { factor *= 10 }
-        val scaled = (v * factor).roundToLong()
-        val intPart = scaled / factor
-        val frac = (if (scaled < 0) -scaled else scaled) % factor
-        if (frac == 0L) return intPart.toString()
-        val fracStr = frac.toString().padStart(6, '0').trimEnd('0')
-        return "$intPart.$fracStr"
-    }
+    /** Локале-независимое форматирование (точка, без хвостовых нулей, до 6 знаков). */
+    private fun fmt(v: Double): String = formatNumber(v, 6)
 }

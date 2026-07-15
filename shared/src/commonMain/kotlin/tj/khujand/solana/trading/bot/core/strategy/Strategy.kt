@@ -96,6 +96,14 @@ data class StrategyConfig(
     val rugcheckEnabled: Boolean = true,
     val rugcheckMaxScore: Int = 5_000,
 
+    // ── Фильтр по позиции в диапазоне (общий, для любой стратегии) ──
+    // Спот, только лонг → «не покупать у верха диапазона». Позиция входа считается по
+    // последним rangeLookbackBars свечам рабочего ТФ: 0.0 = минимум окна, 1.0 = максимум.
+    // Вход разрешён только если позиция ≤ rangeMaxEntryPct. Дефолт OFF — поведение не меняется.
+    val rangeFilterEnabled: Boolean = false,
+    val rangeMaxEntryPct: Double = 0.8,   // не покупать в верхних (1 - 0.8) = 20% диапазона
+    val rangeLookbackBars: Int = 100,
+
     // ── Индикаторы ──
     val rsiPeriod: Int = 14,
     val rsiOverbought: Double = 70.0,

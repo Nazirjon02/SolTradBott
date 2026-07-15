@@ -185,7 +185,7 @@ DB_PATH=soltradbot.db
 Существующий Telegram-код SolTradBot (роутеры, DTO, HTTP-клиент) переносится в `shared/telegram/` и приводится к UX MRX:
 
 - Доступ только с `TG_CHAT_ID` (уже есть `AdminAccessPolicy`).
-- Команды: `/start /menu /status /stop /pause /resume /stats /positions /balance /closeall /strategies /report`.
+- Команды: `/start /menu /status /stop /pause /resume /stats /positions /balance /closeall /strategies /report /scanner /mode /signalonly /help` (регистрируются в Telegram через `setMyCommands`).
 - Inline-меню как в MRX: `🟢 Старт | 🔴 Стоп | ⏸ Пауза | ▶️ Продолжить | 📊 Статус | 💰 Баланс | 📈 Позиции | 📉 Статистика | ⚙️ Стратегии | 📋 Отчёт | 🚨 Закрыть всё` + DEX-специфика: `🔍 Сканер` (текущие кандидаты).
 - Подменю «⚙️ Стратегии» — вкл/выкл каждой (✅/⭕), как в MRX.
 - `TelegramNotifier`: алерты об открытии/закрытии (с PnL, причиной выхода), ошибки, дневной отчёт.

@@ -69,8 +69,8 @@ fun main() {
     val tokenCache = TokenCache(db)
     val scanner = TokenScanner(client, tokenCache)
     val activityLog = ActivityLog()
-    val riskManager = RiskManager(db, accountCache)
     val executor = TradeExecutor(client, db, settingsStore, accountCache, activityLog)
+    val riskManager = RiskManager(db, accountCache, executor::isDemo)
 
     // Telegram: токен из БД (приоритет) или из env. Пусто — нотификации глушатся.
     val tgToken = settingsStore.getTelegramToken() ?: config.telegramToken

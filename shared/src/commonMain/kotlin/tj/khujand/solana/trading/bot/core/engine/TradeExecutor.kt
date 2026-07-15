@@ -46,17 +46,17 @@ class TradeExecutor(
     // ─── DEMO-баланс (в account_cache, coin=DEMO_USD) ────────────────────────
 
     fun demoBalanceUsd(): Double {
-        val existing = accountCache.get(COIN_DEMO)
+        val existing = accountCache.get(AccountCache.COIN_DEMO)
         if (existing != null) return existing.balanceUsd
-        accountCache.set(COIN_DEMO, DEMO_START_BALANCE, DEMO_START_BALANCE)
+        accountCache.set(AccountCache.COIN_DEMO, DEMO_START_BALANCE, DEMO_START_BALANCE)
         return DEMO_START_BALANCE
     }
 
     fun resetDemoBalance() {
-        accountCache.set(COIN_DEMO, DEMO_START_BALANCE, DEMO_START_BALANCE)
+        accountCache.set(AccountCache.COIN_DEMO, DEMO_START_BALANCE, DEMO_START_BALANCE)
     }
 
-    private fun setDemoBalance(v: Double) = accountCache.set(COIN_DEMO, v, v)
+    private fun setDemoBalance(v: Double) = accountCache.set(AccountCache.COIN_DEMO, v, v)
 
     // ─── Кошелёк (REAL) ──────────────────────────────────────────────────────
 
@@ -285,8 +285,4 @@ class TradeExecutor(
 
     private fun newTradeId(symbol: String): String =
         "trade-${symbol.lowercase()}-${Clock.System.now().toEpochMilliseconds()}-${Random.nextInt(1000, 9999)}"
-
-    companion object {
-        const val COIN_DEMO = "DEMO_USD"
-    }
 }

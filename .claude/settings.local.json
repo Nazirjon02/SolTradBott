@@ -95,7 +95,8 @@
       "PowerShell(& \"C:\\\\Users\\\\Virtual\\\\AndroidStudioProjects\\\\SolTradBot\\\\gradlew.bat\" -p \"C:\\\\Users\\\\Virtual\\\\AndroidStudioProjects\\\\SolTradBot\" :shared:jvmTest 2>&1)",
       "PowerShell(& \"C:\\\\Users\\\\Virtual\\\\AndroidStudioProjects\\\\SolTradBot\\\\gradlew.bat\" -p \"C:\\\\Users\\\\Virtual\\\\AndroidStudioProjects\\\\SolTradBot\" :shared:jvmTest --tests \"tj.khujand.solana.trading.bot.domain.dars.DarsAnalysisTest\" --rerun-tasks 2>&1)",
       "PowerShell(& \"C:\\\\Users\\\\Virtual\\\\AndroidStudioProjects\\\\SolTradBot\\\\gradlew.bat\" -p \"C:\\\\Users\\\\Virtual\\\\AndroidStudioProjects\\\\SolTradBot\" :server:build 2>&1)",
-      "Bash(grep -iE \"\\\\.sq$\")"
+      "Bash(grep -iE \"\\\\.sq$\")",
+      "PowerShell(.\\\\gradlew.bat :shared:compileKotlinJvm -q --console=plain 2>&1)"
     ]
   }
 }

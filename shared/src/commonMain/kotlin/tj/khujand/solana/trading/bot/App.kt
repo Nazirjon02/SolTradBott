@@ -1744,6 +1744,11 @@ fun StrategyFormScreen(
     var rugcheckEnabled by remember { mutableStateOf(c?.rugcheckEnabled ?: true) }
     var rugcheckMax by remember { mutableStateOf((c?.rugcheckMaxScore ?: 5_000).toString()) }
 
+    // Фильтр по диапазону (общий для всех типов)
+    var rangeFilter by remember { mutableStateOf(c?.rangeFilterEnabled ?: false) }
+    var rangeMaxEntry by remember { mutableStateOf(c?.rangeMaxEntryPct?.toFloat() ?: 0.8f) }
+    var rangeLookback by remember { mutableStateOf((c?.rangeLookbackBars ?: 100).toString()) }
+
     // ── Индикаторы ──
     var rsiPeriod by remember { mutableStateOf((c?.rsiPeriod ?: 14).toString()) }
     var rsiOverbought by remember { mutableStateOf(c?.rsiOverbought?.toFloat() ?: 70f) }
@@ -1902,6 +1907,25 @@ fun StrategyFormScreen(
                 }
             }
 
+            // 7b. Фильтр по диапазону (общий для всех типов стратегий)
+            FormSection("📊  Фильтр по диапазону") {
+                FormToggle("Не покупать у верха диапазона", rangeFilter) { rangeFilter = it }
+                if (rangeFilter) {
+                    FormSlider("Не входить выше уровня диапазона", rangeMaxEntry, 0.5f, 1.0f,
+                        "${"%.0f".format(rangeMaxEntry * 100)}%") { rangeMaxEntry = it }
+                    FormTextField("Окно диапазона, свечей", rangeLookback, isNumber = true) { rangeLookback = it }
+                    Surface(color = Blue.copy(alpha = 0.08f), shape = RoundedCornerShape(8.dp)) {
+                        Text(
+                            "Позиция входа считается по последним N свечам рабочего ТФ: 0% = минимум окна, " +
+                                "100% = максимум. Вход отклоняется, если цена выше порога — чтобы не покупать " +
+                                "на локальной вершине. Работает для любой стратегии.",
+                            fontSize = 11.sp, color = TextSecondary,
+                            modifier = Modifier.padding(10.dp), lineHeight = 16.sp
+                        )
+                    }
+                }
+            }
+
             // 8. Индикаторы (по типу стратегии)
             if (type == StrategyType.RSI_EMA.name) {
                 FormSection("📊  RSI") {
@@ -1999,6 +2023,9 @@ fun StrategyFormScreen(
                     minBuySellRatio = minRatio.toDouble(),
                     rugcheckEnabled = rugcheckEnabled,
                     rugcheckMaxScore = rugcheckMax.toIntOrNull() ?: 5_000,
+                    rangeFilterEnabled = rangeFilter,
+                    rangeMaxEntryPct = rangeMaxEntry.toDouble(),
+                    rangeLookbackBars = rangeLookback.toIntOrNull() ?: 100,
                     rsiPeriod = rsiPeriod.toIntOrNull() ?: 14,
                     rsiOverbought = rsiOverbought.toDouble(),
                     rsiOversold = rsiOversold.toDouble(),

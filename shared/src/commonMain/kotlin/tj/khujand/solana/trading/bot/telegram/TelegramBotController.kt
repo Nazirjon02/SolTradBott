@@ -2,6 +2,7 @@ package tj.khujand.solana.trading.bot.telegram
 
 import io.ktor.client.HttpClient
 import io.ktor.client.call.body
+import io.ktor.client.plugins.HttpTimeout
 import io.ktor.client.plugins.contentnegotiation.ContentNegotiation
 import io.ktor.client.request.get
 import io.ktor.client.request.parameter
@@ -11,13 +12,13 @@ import io.ktor.http.ContentType
 import io.ktor.http.contentType
 import io.ktor.serialization.kotlinx.json.json
 import kotlinx.coroutines.delay
-import kotlin.math.roundToLong
 import kotlin.time.Clock
 import kotlinx.datetime.TimeZone
 import kotlinx.datetime.atStartOfDayIn
 import kotlinx.datetime.toLocalDateTime
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
@@ -28,6 +29,8 @@ import tj.khujand.solana.trading.bot.data.BotStatus
 import tj.khujand.solana.trading.bot.data.SettingsStore
 import tj.khujand.solana.trading.bot.data.db.DrxDatabase
 import tj.khujand.solana.trading.bot.exchange.dex.TokenCache
+import tj.khujand.solana.trading.bot.util.formatLargeNumber
+import tj.khujand.solana.trading.bot.util.formatNumber
 
 private val BotStatus.emoji: String
     get() = when (this) {
@@ -36,10 +39,33 @@ private val BotStatus.emoji: String
         BotStatus.STOPPED -> "🔴"
     }
 
+/** Команды в меню-подсказке Telegram (setMyCommands). */
+private val BOT_COMMANDS = listOf(
+    "menu" to "Панель управления",
+    "status" to "Статус бота",
+    "positions" to "Открытые позиции",
+    "balance" to "Баланс",
+    "stats" to "Статистика",
+    "report" to "Отчёт за день",
+    "scanner" to "Кандидаты сканера",
+    "strategies" to "Управление стратегиями",
+    "mode" to "Режим DEMO / REAL",
+    "signalonly" to "Режим «только сигнал»",
+    "pause" to "Пауза",
+    "resume" to "Продолжить",
+    "stop" to "Остановить бота",
+    "closeall" to "Закрыть все позиции",
+    "help" to "Помощь по командам",
+)
+
 /**
- * Telegram-бот управления (порт TelegramBotController из MRX):
- * long-polling, inline-меню, доступ только с allowedChatId.
- * DEX-специфика: кнопки «🔍 Сканер» и «🎮 Режим» (DEMO/REAL).
+ * Telegram-бот управления: long-polling, inline-меню, доступ только с allowedChatId.
+ *
+ * Одни и те же действия доступны и текстовой командой (`/status`), и кнопкой
+ * (`cmd:status`) — оба маршрута сходятся в [runAction], поэтому подтверждения
+ * и поведение всегда одинаковы. Исключение — `/start`/`/menu`, которые по
+ * соглашению Telegram открывают панель, тогда как кнопка «🟢 Старт» (`cmd:start`)
+ * запускает движок.
  */
 class TelegramBotController(
     private val botToken: String,
@@ -54,15 +80,21 @@ class TelegramBotController(
     private val apiUrl = "https://api.telegram.org/bot$botToken"
     private val client = HttpClient {
         install(ContentNegotiation) { json(Json { ignoreUnknownKeys = true }) }
+        // Таймаут запроса должен превышать long-poll timeout (30 c), иначе каждый цикл падает.
+        install(HttpTimeout) { requestTimeoutMillis = 40_000 }
     }
 
     suspend fun startPolling() {
-        var offset = 0L
+        registerCommands()
+        // Пропускаем накопившийся за простой бэклог — иначе устаревшие команды
+        // (например, /stop, отправленный вчера) выполнятся при перезапуске.
+        var offset = skipBacklog()
         while (true) {
             try {
                 val response = client.get("$apiUrl/getUpdates") {
                     parameter("offset", offset)
                     parameter("timeout", 30)
+                    parameter("allowed_updates", """["message","callback_query"]""")
                 }
                 val updates = response.body<TgUpdatesResponse>()
                 updates.result.forEach { update ->
@@ -77,51 +109,97 @@ class TelegramBotController(
         }
     }
 
+    /** Возвращает offset за последним ожидающим апдейтом, подтверждая весь бэклог. */
+    private suspend fun skipBacklog(): Long = runCatching {
+        val resp = client.get("$apiUrl/getUpdates") {
+            parameter("offset", -1)
+            parameter("timeout", 0)
+        }
+        resp.body<TgUpdatesResponse>().result.lastOrNull()?.let { it.updateId + 1 } ?: 0L
+    }.getOrDefault(0L)
+
+    private suspend fun registerCommands() {
+        runCatching {
+            client.post("$apiUrl/setMyCommands") {
+                contentType(ContentType.Application.Json)
+                setBody(buildJsonObject {
+                    put("commands", buildJsonArray {
+                        BOT_COMMANDS.forEach { (cmd, desc) ->
+                            add(buildJsonObject {
+                                put("command", cmd)
+                                put("description", desc)
+                            })
+                        }
+                    })
+                })
+            }
+        }
+    }
+
     private suspend fun processUpdate(update: TgUpdate) {
         val chatId = update.message?.chat?.id
             ?: update.callbackQuery?.message?.chat?.id
             ?: return
 
-        if (chatId != allowedChatId) {
-            send(chatId, "⛔ Доступ запрещён")
-            return
-        }
+        // Чужие чаты игнорируем молча — не выдаём существование бота и не даём спамить.
+        if (chatId != allowedChatId) return
 
-        val text = update.message?.text ?: ""
-        val callbackData = update.callbackQuery?.data ?: ""
+        update.message?.text?.let { handleTextCommand(chatId, it) }
 
-        when {
-            text == "/start" || text == "/menu" -> sendMainMenu(chatId)
-            text == "/status" -> sendStatus(chatId)
-            text == "/stop" -> { engine.stop(); send(chatId, "🔴 Бот остановлен") }
-            text == "/pause" -> { engine.pause(); send(chatId, "⏸ Бот на паузе") }
-            text == "/resume" -> { engine.resume(); send(chatId, "▶️ Бот возобновлён") }
-            text == "/stats" -> sendStats(chatId)
-            text == "/positions" -> sendPositions(chatId)
-            text == "/balance" -> sendBalance(chatId)
-            text == "/closeall" -> { engine.closeAllPositions(); send(chatId, "🚨 Команда на закрытие всех позиций отправлена") }
-            text == "/strategies" -> sendStrategiesMenu(chatId)
-            text == "/report" -> sendDailyReport(chatId)
-            text == "/scanner" -> sendScanner(chatId)
-            text == "/mode" -> sendModeMenu(chatId)
-            text == "/demo_on" -> setMode(chatId, demo = true)
-            text == "/real_on" -> setMode(chatId, demo = false)
-            text == "/signalonly" -> sendSignalOnlyMenu(chatId)
-            text == "/signalonly_on" -> setSignalOnly(chatId, true)
-            text == "/signalonly_off" -> setSignalOnly(chatId, false)
-            callbackData.startsWith("cmd:") -> handleCallback(chatId, callbackData)
-            callbackData.startsWith("strategy:") -> handleStrategyCallback(chatId, callbackData)
-            callbackData.startsWith("mode:") -> handleModeCallback(chatId, callbackData)
-            callbackData.startsWith("signal:") -> handleSignalCallback(chatId, callbackData)
-        }
-
-        if (callbackData.isNotEmpty()) {
+        update.callbackQuery?.let { cb ->
+            val data = cb.data ?: ""
+            when {
+                data.startsWith("cmd:") -> handleCmd(chatId, data.removePrefix("cmd:"))
+                data.startsWith("strategy:") -> handleStrategyCallback(chatId, data)
+                data.startsWith("mode:") -> handleModeCallback(chatId, data)
+                data.startsWith("signal:") -> handleSignalCallback(chatId, data)
+            }
             runCatching {
                 client.post("$apiUrl/answerCallbackQuery") {
                     contentType(ContentType.Application.Json)
-                    setBody(buildJsonObject { put("callback_query_id", update.callbackQuery!!.id) })
+                    setBody(buildJsonObject { put("callback_query_id", cb.id) })
                 }
             }
+        }
+    }
+
+    // ─── Маршрутизация команд ────────────────────────────────────────────────
+
+    /** Текстовые команды: `/start` и `/menu` открывают панель, остальное — общие действия. */
+    private suspend fun handleTextCommand(chatId: Long, text: String) {
+        when (val cmd = text.trim().substringBefore(' ').removePrefix("/").lowercase()) {
+            "start", "menu" -> sendMainMenu(chatId)
+            "help" -> sendHelp(chatId)
+            else -> runAction(chatId, cmd)
+        }
+    }
+
+    /** Кнопки `cmd:*`: «Старт» запускает движок, «Меню» открывает панель, остальное — общие действия. */
+    private suspend fun handleCmd(chatId: Long, action: String) {
+        when (action) {
+            "start" -> { engine.start(); send(chatId, "🟢 Бот запущен") }
+            "menu" -> sendMainMenu(chatId)
+            else -> runAction(chatId, action)
+        }
+    }
+
+    /** Действия, общие для текстовых команд и кнопок — единый источник поведения. */
+    private suspend fun runAction(chatId: Long, action: String) {
+        when (action) {
+            "stop" -> { engine.stop(); send(chatId, "🔴 Бот остановлен") }
+            "pause" -> { engine.pause(); send(chatId, "⏸ Бот на паузе") }
+            "resume" -> { engine.resume(); send(chatId, "▶️ Бот возобновлён") }
+            "closeall" -> { engine.closeAllPositions(); send(chatId, "🚨 Команда на закрытие всех позиций отправлена") }
+            "status" -> sendStatus(chatId)
+            "balance" -> sendBalance(chatId)
+            "positions" -> sendPositions(chatId)
+            "stats" -> sendStats(chatId)
+            "strategies" -> sendStrategiesMenu(chatId)
+            "report" -> sendDailyReport(chatId)
+            "scanner" -> sendScanner(chatId)
+            "mode" -> sendModeMenu(chatId)
+            "signalonly" -> sendSignalOnlyMenu(chatId)
+            // Неизвестные команды игнорируем — не засоряем чат ответами об ошибке.
         }
     }
 
@@ -143,6 +221,11 @@ class TelegramBotController(
         send(chatId, "🤖 *DRX Bot* — Панель управления\n\nСтатус: ${status.emoji} ${status.name}\nРежим: $mode$signalNote", keyboard)
     }
 
+    private suspend fun sendHelp(chatId: Long) {
+        val lines = BOT_COMMANDS.joinToString("\n") { (cmd, desc) -> "/$cmd — $desc" }
+        send(chatId, "ℹ️ *Команды DRX Bot*\n\n$lines")
+    }
+
     private suspend fun sendStatus(chatId: Long) {
         val stats = engine.getStats()
         val positions = engine.getPositions()
@@ -150,7 +233,7 @@ class TelegramBotController(
         val todayTotal = stats.todayWins + stats.todayLosses
         val winRate = if (todayTotal > 0) (stats.todayWins * 100 / todayTotal).toInt() else 0
         val posStr = if (positions.isEmpty()) "Нет открытых позиций"
-        else positions.joinToString("\n") { "• ${it.symbol}: PnL ${fmt(it.pnlUsd)} USD (${fmt(it.pnlPercent)}%)" }
+        else positions.joinToString("\n") { "• ${it.symbol.escapeMarkdown()}: PnL ${fmt(it.pnlUsd)} USD (${fmt(it.pnlPercent)}%)" }
         send(chatId, """
             🤖 *DRX Bot Status*
 
@@ -195,8 +278,8 @@ class TelegramBotController(
             return
         }
         val text = positions.joinToString("\n\n") {
-            "📌 ${it.symbol} ${if (it.isDemo) "(DEMO)" else ""}\n" +
-                "🧠 ${it.strategyName}\n" +
+            "📌 ${it.symbol.escapeMarkdown()} ${if (it.isDemo) "(DEMO)" else ""}\n" +
+                "🧠 ${it.strategyName.escapeMarkdown()}\n" +
                 "Вход: ${fmt(it.entryPrice)} → Сейчас: ${fmt(it.currentPrice)}\n" +
                 "PnL: ${fmt(it.pnlUsd)} USD (${fmt(it.pnlPercent)}%)\n" +
                 "SL: ${fmt(it.stopLoss)} | TP: ${fmt(it.takeProfit)}"
@@ -273,7 +356,7 @@ class TelegramBotController(
             return
         }
         val text = candidates.joinToString("\n\n") { c ->
-            "🪙 *${c.symbol}* — score ${c.score.toInt()}\n" +
+            "🪙 *${c.symbol.escapeMarkdown()}* — score ${c.score.toInt()}\n" +
                 "💵 ${fmt(c.priceUsd)} | MC ${fmtShort(c.marketCap)} | LIQ ${fmtShort(c.liquidityUsd)}\n" +
                 "⏱ возраст ${c.tokenAgeMinutes}м | 1ч: ${fmt(c.priceChangeH1)}%" +
                 (c.rugScore?.let { "\n🛡 RugCheck: $it" } ?: "")
@@ -338,38 +421,16 @@ class TelegramBotController(
         """.trimIndent(), keyboard)
     }
 
-    private suspend fun setSignalOnly(chatId: Long, value: Boolean) {
-        strategyManager.setSignalOnly(value)
-        send(chatId, if (value) "📣 Режим «только сигнал» ВКЛЮЧЁН — сделки не открываются" else "✅ Режим «только сигнал» ВЫКЛЮЧЕН — бот снова торгует")
-    }
-
     private suspend fun handleSignalCallback(chatId: Long, data: String) {
         if (data.removePrefix("signal:") == "toggle") {
-            setSignalOnly(chatId, !strategyManager.signalOnly.value)
+            val value = !strategyManager.signalOnly.value
+            strategyManager.setSignalOnly(value)
+            send(chatId, if (value) "📣 Режим «только сигнал» ВКЛЮЧЁН — сделки не открываются" else "✅ Режим «только сигнал» ВЫКЛЮЧЕН — бот снова торгует")
+            sendSignalOnlyMenu(chatId)
         }
     }
 
-    // ─── Callbacks ───────────────────────────────────────────────────────────
-
-    private suspend fun handleCallback(chatId: Long, data: String) {
-        when (data.removePrefix("cmd:")) {
-            "start" -> { engine.start(); send(chatId, "🟢 Бот запущен") }
-            "stop" -> { engine.stop(); send(chatId, "🔴 Бот остановлен") }
-            "pause" -> { engine.pause(); send(chatId, "⏸ Бот на паузе") }
-            "resume" -> { engine.resume() }
-            "status" -> sendStatus(chatId)
-            "balance" -> sendBalance(chatId)
-            "positions" -> sendPositions(chatId)
-            "stats" -> sendStats(chatId)
-            "strategies" -> sendStrategiesMenu(chatId)
-            "report" -> sendDailyReport(chatId)
-            "scanner" -> sendScanner(chatId)
-            "mode" -> sendModeMenu(chatId)
-            "signalonly" -> sendSignalOnlyMenu(chatId)
-            "closeall" -> { engine.closeAllPositions() }
-            "menu" -> sendMainMenu(chatId)
-        }
-    }
+    // ─── Стратегии ───────────────────────────────────────────────────────────
 
     private suspend fun handleStrategyCallback(chatId: Long, data: String) {
         val parts = data.split(":")
@@ -387,7 +448,7 @@ class TelegramBotController(
             BotEngine.StrategyToggle.PENDING_STOP -> ""
             BotEngine.StrategyToggle.LIMIT_REACHED -> "⚠️ но лимит одновременных стратегий достигнут"
         }
-        send(chatId, "${if (newActive == 1L) "✅ Включена" else "⭕ Выключена"} «${s.name}» $note")
+        send(chatId, "${if (newActive == 1L) "✅ Включена" else "⭕ Выключена"} «${s.name.escapeMarkdown()}» $note")
         sendStrategiesMenu(chatId)
     }
 
@@ -406,7 +467,7 @@ class TelegramBotController(
         put("inline_keyboard", buildJsonArray { rows.forEach { add(it) } })
     }
 
-    private suspend fun send(chatId: Long, text: String, keyboard: kotlinx.serialization.json.JsonObject? = null) {
+    private suspend fun send(chatId: Long, text: String, keyboard: JsonObject? = null) {
         runCatching {
             client.post("$apiUrl/sendMessage") {
                 contentType(ContentType.Application.Json)
@@ -426,23 +487,11 @@ class TelegramBotController(
         return today.atStartOfDayIn(TimeZone.currentSystemDefault()).toEpochMilliseconds()
     }
 
-    private fun fmt(v: Double): String {
-        var factor = 1L
-        repeat(4) { factor *= 10 }
-        val scaled = (v * factor).roundToLong()
-        val intPart = scaled / factor
-        val frac = (if (scaled < 0) -scaled else scaled) % factor
-        if (frac == 0L) return intPart.toString()
-        val fracStr = frac.toString().padStart(4, '0').trimEnd('0')
-        return "$intPart.$fracStr"
-    }
+    /** Локале-независимое форматирование (точка, без хвостовых нулей, до 4 знаков). */
+    private fun fmt(v: Double): String = formatNumber(v, 4)
 
     /** $1.2K / $3.4M — короткий формат для MC/LIQ. */
-    private fun fmtShort(v: Double): String = when {
-        v >= 1_000_000 -> "$${fmt(v / 1_000_000)}M"
-        v >= 1_000 -> "$${fmt(v / 1_000)}K"
-        else -> "$${fmt(v)}"
-    }
+    private fun fmtShort(v: Double): String = "$" + formatLargeNumber(v)
 
     fun close() = client.close()
 }

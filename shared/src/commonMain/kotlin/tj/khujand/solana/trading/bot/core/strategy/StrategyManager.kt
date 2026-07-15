@@ -151,6 +151,14 @@ class StrategyManager(
             }.getOrDefault(emptyList())
 
             val signal = strategy.analyze(candidate, candles, emptyList()) ?: continue
+
+            // Общий фильтр входа: не покупаем у верха диапазона (спот, только лонг).
+            // Опционален и настраивается на стратегии; при выключенном/недостаточных данных — пропускает.
+            if (!config.rangeAllowsEntry(candles, signal.entryPrice)) {
+                activityLog.info("○ ${candidate.symbol}: цена у верха диапазона — пропуск (range-фильтр)")
+                continue
+            }
+
             if (signal.confidence < MIN_CONFIDENCE) {
                 activityLog.info("○ ${candidate.symbol}: уверенность ${(signal.confidence * 100).toInt()}% < 60%")
                 continue

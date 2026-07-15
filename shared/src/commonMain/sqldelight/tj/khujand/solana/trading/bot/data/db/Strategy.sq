@@ -45,6 +45,11 @@ CREATE TABLE IF NOT EXISTS strategy (
     rugcheck_enabled INTEGER NOT NULL DEFAULT 1,
     rugcheck_max_score INTEGER NOT NULL DEFAULT 5000,
 
+    -- Фильтр по позиции цены в диапазоне (общий для всех стратегий; спот → только «не покупать у верха»)
+    range_filter_enabled INTEGER NOT NULL DEFAULT 0,
+    range_max_entry_pct REAL NOT NULL DEFAULT 0.8,
+    range_lookback_bars INTEGER NOT NULL DEFAULT 100,
+
     -- Индикаторы
     rsi_period INTEGER NOT NULL DEFAULT 14,
     rsi_overbought REAL NOT NULL DEFAULT 70.0,
@@ -123,6 +128,13 @@ INSERT INTO strategy (
 
 updateActive:
 UPDATE strategy SET is_active = ?, updated_at = ? WHERE id = ?;
+
+-- Фильтр по диапазону не входит в insert/updateStrategy (там колонки берут DEFAULT) —
+-- пишется отдельным запросом из StrategyStore.save, чтобы не трогать большой список колонок.
+updateRangeParams:
+UPDATE strategy SET
+    range_filter_enabled = ?, range_max_entry_pct = ?, range_lookback_bars = ?
+WHERE id = ?;
 
 -- Одноразовая нормализация уже засеянных Dars-стратегий к значениям методички
 -- (Урок 4: коррекция ≥70% импульса; minLegs=4 для сравнения с прошлыми волнами;

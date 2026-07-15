@@ -26,8 +26,15 @@ class AccountCache(private val db: DrxDatabase) {
         db.accountCacheQueries.setBalance(coin, balance, balanceUsd, Clock.System.now().toEpochMilliseconds())
     }
 
-    /** Суммарный баланс в USD — база для расчёта размера позиции (% от баланса). */
-    fun totalUsd(): Double = all().sumOf { it.balanceUsd }
+    /** Виртуальный демо-счёт в USD (0, если ещё не инициализирован). */
+    fun demoUsd(): Double = get(COIN_DEMO)?.balanceUsd ?: 0.0
+
+    /**
+     * Реальный баланс кошелька в USD — сумма всех монет, КРОМЕ виртуального демо-счёта.
+     * Демо-счёт (DEMO_USD) хранится в этом же кеше, поэтому в REAL-режиме его нужно
+     * исключать, иначе фантомные $10 000 раздули бы размер реальной позиции и риск-лимиты.
+     */
+    fun realUsd(): Double = all().filter { it.coin != COIN_DEMO }.sumOf { it.balanceUsd }
 
     /** Обновить SOL-баланс из RPC + цену SOL из Jupiter (REAL-режим). */
     suspend fun refreshSol(client: DexClient, walletPublicKey: String): CoinBalance? {
@@ -42,5 +49,6 @@ class AccountCache(private val db: DrxDatabase) {
     companion object {
         const val COIN_SOL = "SOL"
         const val COIN_USDC = "USDC"
+        const val COIN_DEMO = "DEMO_USD"
     }
 }

@@ -20,6 +20,13 @@ class StrategyStore(private val db: DrxDatabase) {
     fun save(cfg: StrategyConfig) {
         val exists = db.strategyQueries.getById(cfg.id).executeAsOneOrNull() != null
         if (exists) update(cfg) else insert(cfg)
+        // Фильтр по диапазону не входит в insert/updateStrategy — пишем отдельным запросом.
+        db.strategyQueries.updateRangeParams(
+            range_filter_enabled = if (cfg.rangeFilterEnabled) 1L else 0L,
+            range_max_entry_pct = cfg.rangeMaxEntryPct,
+            range_lookback_bars = cfg.rangeLookbackBars.toLong(),
+            id = cfg.id,
+        )
     }
 
     private fun update(cfg: StrategyConfig) = db.strategyQueries.updateStrategy(

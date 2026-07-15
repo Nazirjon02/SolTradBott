@@ -99,6 +99,19 @@ class RiskManagerTest {
     }
 
     @Test
+    fun realModeExcludesDemoBalance() {
+        val db = inMemoryDb()
+        val cache = AccountCache(db)
+        // Реальный кошелёк $500 + фантомный демо-счёт $10 000, оставшийся в кеше.
+        cache.set("SOL", 5.0, 500.0)
+        cache.set("DEMO_USD", 10_000.0, 10_000.0)
+        val rm = RiskManager(db, cache, isDemo = { false })
+        // В REAL размер считается ТОЛЬКО от реального баланса: 5% от $500 = $25 (не от $10 500).
+        val size = rm.calculatePositionSizeUsd(StrategyConfig(id = "s1", positionSize = 5.0))
+        assertEquals(25.0, size, 0.001)
+    }
+
+    @Test
     fun seedCreatesThreeStrategies() {
         val db = inMemoryDb()
         seedDefaultStrategies(db)
