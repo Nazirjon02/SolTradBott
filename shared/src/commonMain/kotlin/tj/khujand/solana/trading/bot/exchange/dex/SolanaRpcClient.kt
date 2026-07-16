@@ -361,6 +361,56 @@ class SolanaRpcClient(
         }
     }
 
+    /**
+     * Суммарный баланс SPL-токена на кошельке в raw-единицах.
+     * null — RPC недоступен/ошибка, 0 — токена на кошельке нет.
+     */
+    suspend fun getTokenBalanceRaw(owner: String, mint: String): Long? {
+        return semaphore.withPermit {
+            try {
+                val requestJson = """
+                {
+                    "jsonrpc": "2.0",
+                    "id": 1,
+                    "method": "getTokenAccountsByOwner",
+                    "params": [
+                        "$owner",
+                        { "mint": "$mint" },
+                        { "encoding": "jsonParsed", "commitment": "confirmed" }
+                    ]
+                }
+                """.trimIndent()
+
+                val response = postRpcWithRetry(requestJson, "getTokenAccountsByOwner")
+                    ?: return@withPermit null
+
+                val jsonElement = json.parseToJsonElement(response.bodyAsText())
+                val accounts = jsonElement.jsonObject["result"]
+                    ?.jsonObject
+                    ?.get("value")
+                    ?.jsonArray
+                    ?: return@withPermit null
+
+                var total = 0L
+                for (acc in accounts) {
+                    val amount = acc.jsonObject["account"]?.jsonObject
+                        ?.get("data")?.jsonObject
+                        ?.get("parsed")?.jsonObject
+                        ?.get("info")?.jsonObject
+                        ?.get("tokenAmount")?.jsonObject
+                        ?.get("amount")?.jsonPrimitive?.content?.toLongOrNull() ?: 0L
+                    total += amount
+                }
+                total
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                println("⚠️ getTokenAccountsByOwner error: ${e.message}")
+                null
+            }
+        }
+    }
+
     suspend fun sendTransaction(base64Tx: String): String? {
         return semaphore.withPermit {
             try {

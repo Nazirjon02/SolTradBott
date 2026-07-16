@@ -108,17 +108,21 @@ class TradeExecutor(
             activityLog.error("❌ REAL: seed-фраза не задана или некорректна")
             return null
         }
+        val pubkey = s.publicKeyBase58()
         val solPrice = client.getSolPriceUsd() ?: run {
             activityLog.error("❌ REAL: не удалось получить цену SOL")
             return null
         }
         val lamports = (sizeUsd / solPrice * LAMPORTS_PER_SOL).toLong().coerceAtLeast(1L)
-        val balance = client.rpc.getBalanceLamports(s.publicKeyBase58()) ?: 0L
-        val feeBuffer = 300_000L
+        val balance = client.rpc.getBalanceLamports(pubkey) ?: 0L
+        // Запас: приоритетная комиссия (auto) + рента ATA нового токена (~2.04 млн lamports).
+        val feeBuffer = 5_000_000L
         if (balance < lamports + feeBuffer) {
             activityLog.warn("⚠️ REAL: недостаточно SOL (balance=$balance, need=${lamports + feeBuffer})")
             return null
         }
+        // Баланс токена ДО покупки — чтобы после узнать фактический приход.
+        val tokenBefore = client.rpc.getTokenBalanceRaw(pubkey, signal.mint)
 
         val quote = client.jupiter.getQuote(
             inputMint = SOL_MINT,
@@ -127,18 +131,33 @@ class TradeExecutor(
             slippageBps = (config.slippagePercent * 100).toInt().coerceAtLeast(1),
         ) ?: run { activityLog.error("❌ REAL: Jupiter quote не получен (${signal.symbol})"); return null }
 
-        val swap = client.jupiter.getSwap(quote = quote, userPublicKey = s.publicKeyBase58())
+        val swap = client.jupiter.getSwap(quote = quote, userPublicKey = pubkey)
             ?: run { activityLog.error("❌ REAL: сборка swap не удалась"); return null }
         val unsigned = swap.swapTransaction ?: return null
         val signed = signTransactionBase64(unsigned, s) ?: return null
         val txId = client.rpc.sendTransaction(signed) ?: return null
-        if (!client.rpc.confirmTransaction(txId)) {
-            activityLog.error("❌ REAL: транзакция покупки не подтверждена ($txId)")
-            return null
+        val confirmed = client.rpc.confirmTransaction(txId)
+
+        // Фактический приход токенов: quoted outAmount может завышать (slippage),
+        // а «неподтверждённая» tx могла исполниться после таймаута.
+        val tokenAfter = client.rpc.getTokenBalanceRaw(pubkey, signal.mint)
+        val receivedRaw = if (tokenBefore != null && tokenAfter != null && tokenAfter > tokenBefore)
+            tokenAfter - tokenBefore else -1L
+        if (!confirmed) {
+            if (receivedRaw <= 0) {
+                activityLog.error(
+                    "❌ REAL: транзакция покупки не подтверждена ($txId) — " +
+                        "проверьте в эксплорере; если токены пришли, продайте вручную"
+                )
+                return null
+            }
+            activityLog.warn("⚠️ REAL: подтверждение опоздало, но токены получены — записываю сделку ($txId)")
         }
 
-        // Кол-во токенов храним в raw-единицах Jupiter — продажа оперирует ими же.
-        val outRaw = quote["outAmount"]?.jsonPrimitive?.content?.toLongOrNull() ?: 0L
+        // Кол-во токенов храним в raw-единицах — продажа оперирует ими же.
+        // Приоритет — фактический приход с кошелька, quoted outAmount — fallback.
+        val quotedOut = quote["outAmount"]?.jsonPrimitive?.content?.toLongOrNull() ?: 0L
+        val outRaw = if (receivedRaw > 0) receivedRaw else quotedOut
         val inLamports = quote["inAmount"]?.jsonPrimitive?.content?.toLongOrNull() ?: lamports
         val id = newTradeId(signal.symbol)
         insertTrade(
@@ -254,13 +273,22 @@ class TradeExecutor(
         return CloseResult(exitPrice, requestedQty, pnlUsd, isFull)
     }
 
-    /** Продажа raw-количества токена через Jupiter. Возвращает (выручка USD) или null. */
+    /** Продажа raw-количества токена через Jupiter. Возвращает (выручка USD, txId) или null. */
     private suspend fun sellReal(trade: TradeRow, qtyRaw: Double): Pair<Double, String>? {
         val s = signer() ?: run {
             activityLog.error("❌ REAL sell: кошелёк недоступен")
             return null
         }
-        val amount = qtyRaw.toLong().coerceAtLeast(1L)
+        val pubkey = s.publicKeyBase58()
+        // Продаём не больше, чем реально лежит на кошельке: qty в БД могло быть
+        // записано по котировке покупки, а фактический приход был меньше (slippage).
+        val onChain = client.rpc.getTokenBalanceRaw(pubkey, trade.mint)
+        if (onChain == 0L) {
+            activityLog.error("❌ REAL sell: на кошельке нет ${trade.symbol} — проверьте позицию вручную")
+            return null
+        }
+        var amount = qtyRaw.toLong().coerceAtLeast(1L)
+        if (onChain != null && amount > onChain) amount = onChain
         val quote = client.jupiter.getQuote(
             inputMint = trade.mint,
             outputMint = SOL_MINT,
@@ -268,13 +296,19 @@ class TradeExecutor(
             slippageBps = 300, // выходим с запасом по slippage — важнее выйти, чем сэкономить
         ) ?: run { activityLog.error("❌ REAL sell: quote не получен (${trade.symbol})"); return null }
 
-        val swap = client.jupiter.getSwap(quote = quote, userPublicKey = s.publicKeyBase58()) ?: return null
+        val swap = client.jupiter.getSwap(quote = quote, userPublicKey = pubkey) ?: return null
         val unsigned = swap.swapTransaction ?: return null
         val signed = signTransactionBase64(unsigned, s) ?: return null
         val txId = client.rpc.sendTransaction(signed) ?: return null
         if (!client.rpc.confirmTransaction(txId)) {
-            activityLog.error("❌ REAL sell: транзакция не подтверждена ($txId)")
-            return null
+            // Tx могла исполниться после таймаута — проверяем по списанию баланса.
+            val after = client.rpc.getTokenBalanceRaw(pubkey, trade.mint)
+            val landed = onChain != null && after != null && after <= onChain - amount
+            if (!landed) {
+                activityLog.error("❌ REAL sell: транзакция не подтверждена ($txId) — проверьте в эксплорере")
+                return null
+            }
+            activityLog.warn("⚠️ REAL sell: подтверждение опоздало, баланс списан — считаю исполненной ($txId)")
         }
 
         val outLamports = quote["outAmount"]?.jsonPrimitive?.content?.toLongOrNull() ?: 0L

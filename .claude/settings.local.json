@@ -96,7 +96,17 @@
       "PowerShell(& \"C:\\\\Users\\\\Virtual\\\\AndroidStudioProjects\\\\SolTradBot\\\\gradlew.bat\" -p \"C:\\\\Users\\\\Virtual\\\\AndroidStudioProjects\\\\SolTradBot\" :shared:jvmTest --tests \"tj.khujand.solana.trading.bot.domain.dars.DarsAnalysisTest\" --rerun-tasks 2>&1)",
       "PowerShell(& \"C:\\\\Users\\\\Virtual\\\\AndroidStudioProjects\\\\SolTradBot\\\\gradlew.bat\" -p \"C:\\\\Users\\\\Virtual\\\\AndroidStudioProjects\\\\SolTradBot\" :server:build 2>&1)",
       "Bash(grep -iE \"\\\\.sq$\")",
-      "PowerShell(.\\\\gradlew.bat :shared:compileKotlinJvm -q --console=plain 2>&1)"
+      "PowerShell(.\\\\gradlew.bat :shared:compileKotlinJvm -q --console=plain 2>&1)",
+      "Bash(curl -s -o /dev/null -w \"api.jup.ag quote: HTTP %{http_code}\\\\n\" \"https://api.jup.ag/swap/v1/quote?inputMint=So11111111111111111111111111111111111111112&outputMint=EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v&amount=10000000&slippageBps=50\")",
+      "Bash(curl -s -o /dev/null -w \"lite-api.jup.ag quote: HTTP %{http_code}\\\\n\" \"https://lite-api.jup.ag/swap/v1/quote?inputMint=So11111111111111111111111111111111111111112&outputMint=EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v&amount=10000000&slippageBps=50\")",
+      "Bash(curl -s -o /dev/null -w \"api.jup.ag price/v3: HTTP %{http_code}\\\\n\" \"https://api.jup.ag/price/v3?ids=So11111111111111111111111111111111111111112\")",
+      "Bash(curl -s -m 15 \"https://api.jup.ag/swap/v1/quote?inputMint=So11111111111111111111111111111111111111112&outputMint=EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v&amount=10000000&slippageBps=50\" -w \"\\\\n---HTTP %{http_code}---\\\\n\")",
+      "Bash(curl -sv -m 15 \"https://api.jup.ag/swap/v1/quote?inputMint=So11111111111111111111111111111111111111112&outputMint=EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v&amount=10000000\")",
+      "Bash(curl -s -m 20 \"https://api.jup.ag/swap/v1/quote?inputMint=So11111111111111111111111111111111111111112&outputMint=EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v&amount=10000000&slippageBps=50\")",
+      "Bash(curl -s -m 20 -X POST https://api.jup.ag/swap/v1/swap -H 'Content-Type: application/json' -d '{\"quoteResponse\":__CMDSUB_OUTPUT__,\"userPublicKey\":\"JUP4Fb2cqiRUcaTHdrPC8h2gNsA2ETXiPDD33WcGuJB\",\"wrapAndUnwrapSol\":true,\"dynamicComputeUnitLimit\":true,\"prioritizationFeeLamports\":\"auto\"}' -w '\\\\n---HTTP %{http_code}---')",
+      "Bash(mkdir -p /c/Users/Virtual/AppData/Local/Temp/claude/C--Users-Virtual-AndroidStudioProjects-SolTradBot/e7da1f88-cba3-4a84-807a-0096cfe403e5/scratchpad)",
+      "Read(//c/Users/Virtual/AppData/Local/Temp/claude/C--Users-Virtual-AndroidStudioProjects-SolTradBot/e7da1f88-cba3-4a84-807a-0096cfe403e5/scratchpad/**)",
+      "Bash(curl -s -m 20 -X POST https://api.jup.ag/swap/v1/swap -H 'Content-Type: application/json' --data @/c/Users/Virtual/AppData/Local/Temp/claude/C--Users-Virtual-AndroidStudioProjects-SolTradBot/e7da1f88-cba3-4a84-807a-0096cfe403e5/scratchpad/swapreq.json -w '\\\\n---HTTP %{http_code}---')"
     ]
   }
 }
