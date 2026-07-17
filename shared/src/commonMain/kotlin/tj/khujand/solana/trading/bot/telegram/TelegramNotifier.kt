@@ -12,8 +12,10 @@ import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import kotlin.math.abs
+import kotlin.time.Clock
 import tj.khujand.solana.trading.bot.core.TradeNotifier
 import tj.khujand.solana.trading.bot.util.formatNumber
+import tj.khujand.solana.trading.bot.util.tradeTimeLine
 
 /**
  * Отправка алертов о сделках в Telegram (порт из MRX).
@@ -87,6 +89,7 @@ class TelegramNotifier(
             🛑 Stop Loss: ${fmt(stopLoss)}
             🎯 Take Profit: ${fmt(takeProfit)}
             ⚖️ R:R ≈ ${fmt(rr)}
+            🕒 ${tradeTimeLine(nowMs())}
             💡 ${reason.escapeMarkdown()}
             """.trimIndent()
         )
@@ -113,6 +116,7 @@ class TelegramNotifier(
             📥 Вход: ${fmt(entryPrice)}
             📤 Выход: ${fmt(exitPrice)}
             $pnlEmoji P&L: ${fmt(pnlUsd)} USD (${fmt(pnlPercent)}%)
+            🕒 ${tradeTimeLine(nowMs())}
             📝 Причина: ${reason.escapeMarkdown()}
             """.trimIndent()
         )
@@ -122,4 +126,7 @@ class TelegramNotifier(
 
     /** Локале-независимое форматирование (точка, без хвостовых нулей, до 6 знаков). */
     private fun fmt(v: Double): String = formatNumber(v, 6)
+
+    /** Момент отправки алерта = момент входа/выхода (пишется той же now(), что и в БД). */
+    private fun nowMs(): Long = Clock.System.now().toEpochMilliseconds()
 }

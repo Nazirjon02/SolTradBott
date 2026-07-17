@@ -28,6 +28,7 @@ import tj.khujand.solana.trading.bot.core.strategy.StrategyManager
 import tj.khujand.solana.trading.bot.data.BotStatus
 import tj.khujand.solana.trading.bot.data.SettingsStore
 import tj.khujand.solana.trading.bot.data.db.DrxDatabase
+import tj.khujand.solana.trading.bot.util.tradeTimeLine
 import tj.khujand.solana.trading.bot.exchange.dex.TokenCache
 import tj.khujand.solana.trading.bot.util.formatLargeNumber
 import tj.khujand.solana.trading.bot.util.formatNumber
@@ -281,6 +282,7 @@ class TelegramBotController(
             "📌 ${it.symbol.escapeMarkdown()} ${if (it.isDemo) "(DEMO)" else ""}\n" +
                 "🧠 ${it.strategyName.escapeMarkdown()}\n" +
                 "Вход: ${fmt(it.entryPrice)} → Сейчас: ${fmt(it.currentPrice)}\n" +
+                "🕒 ${tradeTimeLine(it.openedAt)}\n" +
                 "PnL: ${fmt(it.pnlUsd)} USD (${fmt(it.pnlPercent)}%)\n" +
                 "SL: ${fmt(it.stopLoss)} | TP: ${fmt(it.takeProfit)}"
         }

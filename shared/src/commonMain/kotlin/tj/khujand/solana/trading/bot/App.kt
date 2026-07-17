@@ -88,6 +88,8 @@ import tj.khujand.solana.trading.bot.data.AccountBalance
 import tj.khujand.solana.trading.bot.data.BotStatus
 import tj.khujand.solana.trading.bot.data.db.DrxDatabase
 import tj.khujand.solana.trading.bot.telegram.TelegramBotController
+import tj.khujand.solana.trading.bot.util.formatDexTime
+import tj.khujand.solana.trading.bot.util.formatLocalTime
 
 // ─── Палитра (1-в-1 из MRX) ───────────────────────────────────────────────────
 
@@ -996,14 +998,6 @@ private fun dateLabel(ms: Long): String {
     return "${dt.day.toString().padStart(2, '0')}.${(dt.month.ordinal + 1).toString().padStart(2, '0')}"
 }
 
-/** «06.07 14:32» — дата и время входа/выхода в карточке сделки. */
-private fun fmtDateTime(ms: Long): String {
-    if (ms <= 0) return "—"
-    val dt = Instant.fromEpochMilliseconds(ms).toLocalDateTime(TimeZone.currentSystemDefault())
-    return "${dt.day.toString().padStart(2, '0')}.${(dt.month.ordinal + 1).toString().padStart(2, '0')} " +
-        "${dt.hour.toString().padStart(2, '0')}:${dt.minute.toString().padStart(2, '0')}"
-}
-
 /** «Ab3dEf…7xYz» — короткий вид адреса контракта. */
 private fun shortMint(mint: String): String =
     if (mint.length <= 14) mint else "${mint.take(6)}…${mint.takeLast(6)}"
@@ -1065,12 +1059,12 @@ fun TradeCard(item: TradeHistoryItem) {
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween
             ) {
-                PriceCol("Вход", fmtPrice(item.entryPrice), fmtDateTime(item.openedAt))
+                PriceCol("Вход", fmtPrice(item.entryPrice), item.openedAt)
                 Text(
                     "→", color = TextSecondary, fontSize = 16.sp,
                     modifier = Modifier.align(Alignment.CenterVertically)
                 )
-                PriceCol("Выход", fmtPrice(item.exitPrice), fmtDateTime(item.closedAt))
+                PriceCol("Выход", fmtPrice(item.exitPrice), item.closedAt)
                 Column(horizontalAlignment = Alignment.End) {
                     Text("P&L", fontSize = 10.sp, color = TextSecondary)
                     Text(
@@ -1142,13 +1136,19 @@ fun MintCopyRow(mint: String) {
     }
 }
 
+/**
+ * Колонка «Вход/Выход»: цена + две метки времени одного момента [ms]:
+ *  • DEX  — в UTC, как на сайте/графике DexScreener;
+ *  • наше — в локальной таймзоне (реальное время исполнения у нас).
+ */
 @Composable
-fun PriceCol(label: String, value: String, sub: String? = null) {
+fun PriceCol(label: String, value: String, ms: Long? = null) {
     Column {
         Text(label, fontSize = 10.sp, color = TextSecondary)
         Text(value, fontWeight = FontWeight.SemiBold, color = TextPrimary, fontSize = 13.sp)
-        if (sub != null) {
-            Text(sub, fontSize = 9.sp, color = TextSecondary)
+        if (ms != null) {
+            Text("DEX ${formatDexTime(ms)}", fontSize = 9.sp, color = TextSecondary)
+            Text("наше ${formatLocalTime(ms)}", fontSize = 9.sp, color = TextSecondary)
         }
     }
 }

@@ -106,7 +106,8 @@
       "Bash(curl -s -m 20 -X POST https://api.jup.ag/swap/v1/swap -H 'Content-Type: application/json' -d '{\"quoteResponse\":__CMDSUB_OUTPUT__,\"userPublicKey\":\"JUP4Fb2cqiRUcaTHdrPC8h2gNsA2ETXiPDD33WcGuJB\",\"wrapAndUnwrapSol\":true,\"dynamicComputeUnitLimit\":true,\"prioritizationFeeLamports\":\"auto\"}' -w '\\\\n---HTTP %{http_code}---')",
       "Bash(mkdir -p /c/Users/Virtual/AppData/Local/Temp/claude/C--Users-Virtual-AndroidStudioProjects-SolTradBot/e7da1f88-cba3-4a84-807a-0096cfe403e5/scratchpad)",
       "Read(//c/Users/Virtual/AppData/Local/Temp/claude/C--Users-Virtual-AndroidStudioProjects-SolTradBot/e7da1f88-cba3-4a84-807a-0096cfe403e5/scratchpad/**)",
-      "Bash(curl -s -m 20 -X POST https://api.jup.ag/swap/v1/swap -H 'Content-Type: application/json' --data @/c/Users/Virtual/AppData/Local/Temp/claude/C--Users-Virtual-AndroidStudioProjects-SolTradBot/e7da1f88-cba3-4a84-807a-0096cfe403e5/scratchpad/swapreq.json -w '\\\\n---HTTP %{http_code}---')"
+      "Bash(curl -s -m 20 -X POST https://api.jup.ag/swap/v1/swap -H 'Content-Type: application/json' --data @/c/Users/Virtual/AppData/Local/Temp/claude/C--Users-Virtual-AndroidStudioProjects-SolTradBot/e7da1f88-cba3-4a84-807a-0096cfe403e5/scratchpad/swapreq.json -w '\\\\n---HTTP %{http_code}---')",
+      "Bash(./gradlew :shared:compileKotlinJvm -q)"
     ]
   }
 }
