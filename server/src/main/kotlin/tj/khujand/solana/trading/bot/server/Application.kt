@@ -1,5 +1,6 @@
 package tj.khujand.solana.trading.bot.server
 
+import io.ktor.http.HttpStatusCode
 import io.ktor.serialization.kotlinx.json.json
 import io.ktor.server.application.call
 import io.ktor.server.application.install
@@ -129,6 +130,22 @@ fun main() {
                     get("/stats") { call.respond(engine.getStats()) }
                     get("/positions") { call.respond(engine.getPositions()) }
                     post("/positions/closeall") { engine.closeAllPositions(); call.respond(mapOf("status" to "closed")) }
+                    post("/positions/{id}/close") {
+                        val id = call.parameters["id"]
+                        if (id.isNullOrBlank()) {
+                            call.respond(HttpStatusCode.BadRequest, mapOf("error" to "missing id"))
+                            return@post
+                        }
+                        val result = engine.closePosition(id)
+                        when (result.status) {
+                            BotEngine.ClosePositionStatus.CLOSED -> call.respond(
+                                mapOf("status" to "closed", "symbol" to (result.symbol ?: ""), "pnlUsd" to result.pnlUsd.toString())
+                            )
+                            BotEngine.ClosePositionStatus.NOT_FOUND -> call.respond(HttpStatusCode.NotFound, mapOf("status" to "not_found"))
+                            BotEngine.ClosePositionStatus.NOT_OPEN -> call.respond(HttpStatusCode.Conflict, mapOf("status" to "not_open"))
+                            BotEngine.ClosePositionStatus.FAILED -> call.respond(HttpStatusCode.InternalServerError, mapOf("status" to "failed"))
+                        }
+                    }
                     get("/balance") { call.respond(engine.getBalance()) }
 
                     get("/strategies") {

@@ -107,7 +107,11 @@
       "Bash(mkdir -p /c/Users/Virtual/AppData/Local/Temp/claude/C--Users-Virtual-AndroidStudioProjects-SolTradBot/e7da1f88-cba3-4a84-807a-0096cfe403e5/scratchpad)",
       "Read(//c/Users/Virtual/AppData/Local/Temp/claude/C--Users-Virtual-AndroidStudioProjects-SolTradBot/e7da1f88-cba3-4a84-807a-0096cfe403e5/scratchpad/**)",
       "Bash(curl -s -m 20 -X POST https://api.jup.ag/swap/v1/swap -H 'Content-Type: application/json' --data @/c/Users/Virtual/AppData/Local/Temp/claude/C--Users-Virtual-AndroidStudioProjects-SolTradBot/e7da1f88-cba3-4a84-807a-0096cfe403e5/scratchpad/swapreq.json -w '\\\\n---HTTP %{http_code}---')",
-      "Bash(./gradlew :shared:compileKotlinJvm -q)"
+      "Bash(./gradlew :shared:compileKotlinJvm -q)",
+      "PowerShell(.\\\\gradlew.bat :server:compileKotlin :shared:compileKotlinJvm --console=plain -q 2>&1)",
+      "PowerShell(.\\\\gradlew.bat :server:compileKotlin :shared:compileKotlinJvm --console=plain; Write-Output \"EXIT_CODE=$LASTEXITCODE\")",
+      "PowerShell(.\\\\gradlew.bat :shared:jvmTest --console=plain; Write-Output \"EXIT_CODE=$LASTEXITCODE\")",
+      "PowerShell(.\\\\gradlew.bat :desktopApp:compileKotlin --console=plain; Write-Output \"EXIT_CODE=$LASTEXITCODE\")"
     ]
   }
 }

@@ -45,6 +45,7 @@ private val BOT_COMMANDS = listOf(
     "menu" to "Панель управления",
     "status" to "Статус бота",
     "positions" to "Открытые позиции",
+    "close" to "Закрыть позицию: /close СИМВОЛ",
     "balance" to "Баланс",
     "stats" to "Статистика",
     "report" to "Отчёт за день",
@@ -151,6 +152,7 @@ class TelegramBotController(
             val data = cb.data ?: ""
             when {
                 data.startsWith("cmd:") -> handleCmd(chatId, data.removePrefix("cmd:"))
+                data.startsWith("close:") -> handleCloseCallback(chatId, data.removePrefix("close:"))
                 data.startsWith("strategy:") -> handleStrategyCallback(chatId, data)
                 data.startsWith("mode:") -> handleModeCallback(chatId, data)
                 data.startsWith("signal:") -> handleSignalCallback(chatId, data)
@@ -171,6 +173,7 @@ class TelegramBotController(
         when (val cmd = text.trim().substringBefore(' ').removePrefix("/").lowercase()) {
             "start", "menu" -> sendMainMenu(chatId)
             "help" -> sendHelp(chatId)
+            "close" -> handleCloseCommand(chatId, text)
             else -> runAction(chatId, cmd)
         }
     }
@@ -286,7 +289,40 @@ class TelegramBotController(
                 "PnL: ${fmt(it.pnlUsd)} USD (${fmt(it.pnlPercent)}%)\n" +
                 "SL: ${fmt(it.stopLoss)} | TP: ${fmt(it.takeProfit)}"
         }
-        send(chatId, "📈 *Открытые позиции:*\n\n$text")
+        // По кнопке на каждую позицию — закрытие вручную; внизу общий «Закрыть всё».
+        val closeRows = positions.map { p -> row("🔴 Закрыть ${p.symbol}" to "close:${p.tradeId}") }.toTypedArray()
+        val keyboard = keyboard(*closeRows, row("🚨 Закрыть всё" to "cmd:closeall", "↩️ Меню" to "cmd:menu"))
+        send(chatId, "📈 *Открытые позиции:*\n\n$text", keyboard)
+    }
+
+    /** `/close СИМВОЛ` (или id сделки). Без аргумента — показываем позиции с кнопками. */
+    private suspend fun handleCloseCommand(chatId: Long, text: String) {
+        val arg = text.trim().substringAfter(' ', "").trim()
+        if (arg.isEmpty()) { sendPositions(chatId); return }
+        val matches = engine.getPositions().filter {
+            it.symbol.equals(arg, ignoreCase = true) || it.tradeId == arg
+        }
+        when {
+            matches.isEmpty() -> send(chatId, "❓ Открытая позиция «${arg.escapeMarkdown()}» не найдена. /positions — список.")
+            matches.size > 1 -> send(chatId, "⚠️ Несколько открытых позиций «${arg.escapeMarkdown()}» — закройте кнопкой в /positions.")
+            else -> closeOne(chatId, matches.first().tradeId)
+        }
+    }
+
+    private suspend fun handleCloseCallback(chatId: Long, tradeId: String) {
+        closeOne(chatId, tradeId)
+        sendPositions(chatId) // обновляем список после закрытия
+    }
+
+    private suspend fun closeOne(chatId: Long, tradeId: String) {
+        val result = engine.closePosition(tradeId)
+        val sym = result.symbol?.escapeMarkdown() ?: "позиция"
+        send(chatId, when (result.status) {
+            BotEngine.ClosePositionStatus.CLOSED -> "✅ $sym закрыта вручную. PnL ${fmt(result.pnlUsd)} USD"
+            BotEngine.ClosePositionStatus.NOT_FOUND -> "❓ Позиция не найдена (возможно, уже закрыта)."
+            BotEngine.ClosePositionStatus.NOT_OPEN -> "ℹ️ $sym уже закрыта."
+            BotEngine.ClosePositionStatus.FAILED -> "❌ Не удалось закрыть $sym — проверьте вручную."
+        })
     }
 
     private suspend fun sendStats(chatId: Long) {

@@ -220,6 +220,46 @@ class BotEngine(
         )
     }
 
+    /** Исход ручного закрытия одной позиции — для внятного ответа в Telegram/REST. */
+    enum class ClosePositionStatus { CLOSED, NOT_FOUND, NOT_OPEN, FAILED }
+
+    data class ClosePositionResult(
+        val status: ClosePositionStatus,
+        val symbol: String? = null,
+        val pnlUsd: Double = 0.0,
+    )
+
+    /**
+     * Закрыть ОДНУ позицию вручную (рыночно, по текущей цене) по id сделки.
+     * Уведомление и запись в БД — как при авто-выходе (см. TradeMonitor.closeFull).
+     */
+    suspend fun closePosition(tradeId: String): ClosePositionResult {
+        val t = db.tradeQueries.getById(tradeId).executeAsOneOrNull()
+            ?: return ClosePositionResult(ClosePositionStatus.NOT_FOUND)
+        if (t.status != "OPEN") return ClosePositionResult(ClosePositionStatus.NOT_OPEN, symbol = t.symbol)
+
+        val price = runCatching { client.getTokenPriceUsd(t.mint) }.getOrNull() ?: t.entry_price
+        val result = executor.closeTrade(t, price, 100.0, "Закрыто вручную") ?: run {
+            activityLog.error("⚠️ ${t.symbol}: не удалось закрыть вручную — проверьте позицию")
+            return ClosePositionResult(ClosePositionStatus.FAILED, symbol = t.symbol)
+        }
+
+        val pnlUsd = kotlin.math.round(result.pnlUsd * 100) / 100
+        val pnlPercent = if (t.size_usd > 0) ((t.pnl ?: 0.0) + result.pnlUsd) / t.size_usd * 100 else 0.0
+        activityLog.success("🏁 ${t.symbol}: закрыта вручную, PnL $pnlUsd USD")
+        notifier.sendCloseAlert(
+            symbol = t.symbol,
+            strategyName = t.strategy_name,
+            entryPrice = t.entry_price,
+            exitPrice = result.exitPrice,
+            pnlUsd = pnlUsd,
+            pnlPercent = kotlin.math.round(pnlPercent * 10) / 10,
+            reason = "Закрыто вручную",
+            isDemo = t.is_demo == 1L,
+        )
+        return ClosePositionResult(ClosePositionStatus.CLOSED, symbol = t.symbol, pnlUsd = pnlUsd)
+    }
+
     private fun startOfDayMillis(): Long {
         val now = Clock.System.now()
         val today = now.toLocalDateTime(TimeZone.currentSystemDefault()).date

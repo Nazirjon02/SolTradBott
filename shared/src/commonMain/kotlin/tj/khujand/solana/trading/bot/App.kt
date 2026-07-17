@@ -86,6 +86,7 @@ import tj.khujand.solana.trading.bot.core.strategy.StrategyConfig
 import tj.khujand.solana.trading.bot.core.strategy.StrategyType
 import tj.khujand.solana.trading.bot.data.AccountBalance
 import tj.khujand.solana.trading.bot.data.BotStatus
+import tj.khujand.solana.trading.bot.data.OpenPosition
 import tj.khujand.solana.trading.bot.data.db.DrxDatabase
 import tj.khujand.solana.trading.bot.telegram.TelegramBotController
 import tj.khujand.solana.trading.bot.util.formatDexTime
@@ -210,6 +211,22 @@ fun DrxApp(runtime: DrxRuntime? = null) {
         }
     }
 
+    // «Живые» открытые позиции с текущим PnL — для секции на дашборде и ручного закрытия.
+    val openPositions = remember { mutableStateListOf<OpenPosition>() }
+    suspend fun refreshPositions() {
+        val e = engine ?: return
+        runCatching { e.getPositions() }.getOrNull()?.let {
+            openPositions.clear(); openPositions.addAll(it)
+        }
+    }
+    LaunchedEffect(engine, demoMode) {
+        if (engine == null) return@LaunchedEffect
+        while (true) {
+            refreshPositions()
+            delay(15_000)
+        }
+    }
+
     fun reload() {
         val store = runtime?.strategyStore ?: return
         strategies.clear()
@@ -242,7 +259,14 @@ fun DrxApp(runtime: DrxRuntime? = null) {
                         connected = runtime != null,
                         activity = activity,
                         stats = activityStats,
-                        trades = closedTrades
+                        trades = closedTrades,
+                        openPositions = openPositions,
+                        onClosePosition = { tradeId ->
+                            scope.launch {
+                                engine?.closePosition(tradeId)
+                                refreshPositions() // сразу обновляем список после закрытия
+                            }
+                        }
                     ) { target ->
                         scope.launch {
                             when (target) {
@@ -373,6 +397,8 @@ fun DashboardScreen(
     activity: List<ActivityEvent> = emptyList(),
     stats: ActivityStats = ActivityStats(),
     trades: List<TradeHistoryItem> = emptyList(),
+    openPositions: List<OpenPosition> = emptyList(),
+    onClosePosition: (String) -> Unit = {},
     onStatusChange: (BotStatus) -> Unit
 ) {
     val pnlData = equityCurve(trades)
@@ -423,6 +449,17 @@ fun DashboardScreen(
             items(strategies) { cfg ->
                 Spacer(Modifier.height(6.dp))
                 DashStrategyCard(cfg, trades)
+            }
+        }
+
+        if (openPositions.isNotEmpty()) {
+            item {
+                Spacer(Modifier.height(16.dp))
+                SectionHeader("Открытые позиции", "${openPositions.size} шт.")
+            }
+            items(openPositions, key = { it.tradeId }) { p ->
+                Spacer(Modifier.height(6.dp))
+                PositionCard(p, onClose = { onClosePosition(p.tradeId) })
             }
         }
 
@@ -1007,6 +1044,110 @@ private fun fmtPrice(v: Double): String {
     if (v == 0.0) return "0"
     if (v >= 1) return "%.4f".format(v).trimEnd('0').trimEnd('.')
     return "%.8f".format(v).trimEnd('0').trimEnd('.')
+}
+
+/** Карточка «живой» открытой позиции: текущий PnL + ручное закрытие с подтверждением. */
+@Composable
+fun PositionCard(pos: OpenPosition, onClose: () -> Unit) {
+    val pnlColor = if (pos.pnlUsd >= 0) Green else Red
+    var confirm by remember(pos.tradeId) { mutableStateOf(false) }
+
+    Surface(
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
+        color = SurfaceCard, shape = RoundedCornerShape(14.dp)
+    ) {
+        Column(modifier = Modifier.padding(14.dp)) {
+
+            // Строка 1: OPEN + символ + режим + PnL%
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Surface(color = GreenDim, shape = RoundedCornerShape(6.dp)) {
+                        Text(
+                            "OPEN", color = Green, fontWeight = FontWeight.Bold, fontSize = 12.sp,
+                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
+                        )
+                    }
+                    Text(pos.symbol, fontWeight = FontWeight.ExtraBold, color = TextPrimary, fontSize = 15.sp)
+                    Tag(if (pos.isDemo) "DEMO" else "REAL", if (pos.isDemo) Purple else Amber)
+                }
+                Text(
+                    "${if (pos.pnlPercent >= 0) "+" else ""}${"%.1f".format(pos.pnlPercent)}%",
+                    color = pnlColor, fontWeight = FontWeight.Bold, fontSize = 14.sp
+                )
+            }
+
+            Spacer(Modifier.height(10.dp))
+
+            // Строка 2: Вход → Сейчас + P&L
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                PriceCol("Вход", fmtPrice(pos.entryPrice), pos.openedAt)
+                Text(
+                    "→", color = TextSecondary, fontSize = 16.sp,
+                    modifier = Modifier.align(Alignment.CenterVertically)
+                )
+                PriceCol("Сейчас", fmtPrice(pos.currentPrice))
+                Column(horizontalAlignment = Alignment.End) {
+                    Text("P&L", fontSize = 10.sp, color = TextSecondary)
+                    Text(
+                        "${if (pos.pnlUsd > 0) "+" else ""}${"%.2f".format(pos.pnlUsd)} USD",
+                        fontWeight = FontWeight.ExtraBold, color = pnlColor, fontSize = 14.sp
+                    )
+                }
+            }
+
+            Spacer(Modifier.height(8.dp))
+            Text(
+                "SL ${fmtPrice(pos.stopLoss)}  •  TP ${fmtPrice(pos.takeProfit)}",
+                fontSize = 11.sp, color = TextSecondary
+            )
+
+            Spacer(Modifier.height(10.dp))
+
+            // Ручное закрытие: рыночный выход необратим — подтверждаем вторым тапом.
+            if (!confirm) {
+                Surface(
+                    color = RedDim, shape = RoundedCornerShape(10.dp),
+                    modifier = Modifier.fillMaxWidth().clickable { confirm = true }
+                ) {
+                    Text(
+                        "🔴 Закрыть позицию", color = Red, fontSize = 13.sp, fontWeight = FontWeight.Bold,
+                        modifier = Modifier.padding(10.dp), textAlign = TextAlign.Center
+                    )
+                }
+            } else {
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Surface(
+                        color = Red, shape = RoundedCornerShape(10.dp),
+                        modifier = Modifier.weight(1f).clickable { confirm = false; onClose() }
+                    ) {
+                        Text(
+                            "Да, закрыть", color = Color.White, fontSize = 13.sp, fontWeight = FontWeight.Bold,
+                            modifier = Modifier.padding(10.dp), textAlign = TextAlign.Center
+                        )
+                    }
+                    Surface(
+                        color = BgDark, shape = RoundedCornerShape(10.dp),
+                        modifier = Modifier.weight(1f).clickable { confirm = false }
+                    ) {
+                        Text(
+                            "Отмена", color = TextSecondary, fontSize = 13.sp,
+                            modifier = Modifier.padding(10.dp), textAlign = TextAlign.Center
+                        )
+                    }
+                }
+            }
+        }
+    }
 }
 
 @Composable
