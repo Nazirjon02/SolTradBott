@@ -122,11 +122,22 @@ class TokenScanner(
         return sorted
     }
 
-    private fun List<TokenCandidate>.filterBy(f: ScanFilters): List<TokenCandidate> = filter {
-        it.liquidityUsd >= f.minLiquidityUsd &&
-            it.marketCap in f.minMarketCap..f.maxMarketCap &&
-            it.tokenAgeMinutes in f.minTokenAgeMinutes..f.maxTokenAgeMinutes &&
-            it.volumeH1Usd >= f.minVolumeH1Usd
+    /**
+     * Кеш token_cache общий для всех стратегий, а наполняет его та, что сканировала первой,
+     * СВОИМИ фильтрами. Поэтому здесь применяем ПОЛНЫЙ набор фильтров вызывающей стратегии —
+     * включая давление покупок и RugCheck, которые раньше проверялись только при живом скане
+     * (строгая по RugCheck стратегия могла получить кандидата, прошедшего чужой мягкий порог).
+     */
+    private fun List<TokenCandidate>.filterBy(f: ScanFilters): List<TokenCandidate> = filter { c ->
+        val ratio = if (c.sellsH1 == 0) c.buysH1.toDouble() else c.buysH1.toDouble() / c.sellsH1
+        // rugScore == null означает «этот кандидат сканировался без RugCheck» → fail-closed.
+        val rugOk = !f.rugcheckEnabled || (c.rugScore != null && c.rugScore <= f.rugcheckMaxScore)
+        c.liquidityUsd >= f.minLiquidityUsd &&
+            c.marketCap in f.minMarketCap..f.maxMarketCap &&
+            c.tokenAgeMinutes in f.minTokenAgeMinutes..f.maxTokenAgeMinutes &&
+            c.volumeH1Usd >= f.minVolumeH1Usd &&
+            ratio >= f.minBuySellRatio &&
+            rugOk
     }
 
     /** DexScreener иногда отдаёт createdAt в секундах — нормализуем в миллисекунды. */

@@ -71,6 +71,25 @@ class TradeExecutor(
 
     fun walletPublicKey(): String? = signer()?.publicKeyBase58()
 
+    private var lastBalanceRefreshMs: Long = 0L
+
+    /**
+     * Подтягивает реальный баланс кошелька в account_cache, но не чаще раза в [minIntervalMs].
+     *
+     * Без этого в REAL-режиме кеш заполнялся ТОЛЬКО когда кто-то вручную открывал «Баланс»,
+     * а RiskManager считает размер позиции именно из кеша: пустой кеш → размер 0 → бот
+     * не открывал ни одной сделки. В DEMO — no-op (там своя виртуальная касса).
+     */
+    suspend fun refreshRealBalanceIfStale(minIntervalMs: Long = 60_000L) {
+        if (isDemo()) return
+        val now = Clock.System.now().toEpochMilliseconds()
+        if (now - lastBalanceRefreshMs < minIntervalMs) return
+        val pubkey = walletPublicKey() ?: return
+        runCatching { accountCache.refreshSol(client, pubkey) }
+            .onSuccess { lastBalanceRefreshMs = now }
+            .onFailure { activityLog.warn("⚠️ Не удалось обновить баланс кошелька: ${it.message}") }
+    }
+
     // ─── Открытие ────────────────────────────────────────────────────────────
 
     /**

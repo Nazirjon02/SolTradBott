@@ -258,7 +258,7 @@ Inline-меню после `/menu`:
 | `GET` | `/api/v1/trades` | Количество сделок. |
 | `GET` | `/api/v1/tokens/scanner` | Кандидаты сканера из кеша. |
 | `POST` | `/api/v1/mode/demo` `/mode/real` | Переключение DEMO/REAL. |
-| `WS` | `/ws` | Пуш смены статуса: `{"type":"status","value":"RUNNING"}` |
+| `WS` | `/ws` | Пуш смены статуса: `{"type":"status","value":"RUNNING"}`. Требует тот же Bearer-токен. |
 
 ```bash
 curl -X POST http://localhost:8080/api/v1/bot/start -H "Authorization: Bearer soltrad-secret"
@@ -297,7 +297,8 @@ SELECT symbol, pnl, close_reason FROM trade ORDER BY opened_at DESC LIMIT 10;
 Перед каждым входом `RiskManager.canTrade()` проверяет:
 
 1. **Дневной убыток** — если P&L за сегодня хуже `-(balance × maxDailyLoss%)` — вход блокируется до следующего дня.
-2. **Максимальная просадка** — худший `pnl_percent` по стратегии хуже `-maxDrawdown%` — блокировка.
+2. **Максимальная просадка** — худшая закрытая сделка **за последние 24 часа** хуже `-maxDrawdown%` — блокировка. Окно скользящее: через сутки лимит сам отпускает.
+   > ⚠️ `maxDrawdown` обязан быть заметно **больше** `stopLossPercent`, иначе штатный выход по стоп-лоссу сам упирается в лимит и глушит стратегию. Дефолт — 30% при SL 15%.
 3. **Лимит позиций** — не больше `maxPositions` открытых по стратегии.
 
 Размер позиции: `usdAmount = balance × positionSize / 100` (спот, плеча нет). Баланс из кеша (DEMO-счёт или SOL×цена).

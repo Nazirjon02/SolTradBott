@@ -8,6 +8,9 @@ import tj.khujand.solana.trading.bot.core.strategy.StrategyConfig
 import tj.khujand.solana.trading.bot.data.db.DrxDatabase
 import tj.khujand.solana.trading.bot.exchange.dex.AccountCache
 
+/** Скользящее окно, в котором ищется худшая сделка для проверки просадки. */
+private const val DRAWDOWN_WINDOW_MS = 24 * 60 * 60_000L
+
 /**
  * Риск-менеджер (порт из MRX): перед каждым входом проверяет
  * дневной убыток, просадку и лимит открытых позиций стратегии.
@@ -31,7 +34,7 @@ class RiskManager(
     /** Причина блокировки для логов/Telegram, null = торговать можно. */
     fun blockReason(config: StrategyConfig): String? = when {
         !checkDailyLoss(config) -> "дневной лимит убытка ${config.maxDailyLoss}% достигнут"
-        !checkDrawdown(config) -> "просадка превысила ${config.maxDrawdown}%"
+        !checkDrawdown(config) -> "просадка за сутки превысила ${config.maxDrawdown}%"
         !checkMaxPositions(config) -> "лимит позиций (${config.maxPositions}) достигнут"
         else -> null
     }
@@ -44,8 +47,14 @@ class RiskManager(
         return todayPnl > -maxLossAmount
     }
 
+    /**
+     * Худшая закрытая сделка за последние сутки хуже -maxDrawdown% → вход блокируется.
+     * Окно обязательно: запрос без него смотрел на всю историю, поэтому один стоп-лосс
+     * (а SL по умолчанию равен maxDrawdown) выключал стратегию НАВСЕГДА.
+     */
     private fun checkDrawdown(config: StrategyConfig): Boolean {
-        val maxDrawdown = db.tradeQueries.getMaxDrawdown(config.id).executeAsOneOrNull() ?: 0.0
+        val windowStart = Clock.System.now().toEpochMilliseconds() - DRAWDOWN_WINDOW_MS
+        val maxDrawdown = db.tradeQueries.getMaxDrawdown(config.id, windowStart).executeAsOneOrNull() ?: 0.0
         return maxDrawdown > -config.maxDrawdown
     }
 

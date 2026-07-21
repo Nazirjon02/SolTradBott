@@ -20,8 +20,10 @@ import io.ktor.server.routing.routing
 import io.ktor.server.websocket.WebSockets
 import io.ktor.server.websocket.webSocket
 import io.ktor.websocket.send
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
@@ -87,7 +89,10 @@ fun main() {
     val tradeMonitor = TradeMonitor(client, db, executor, notifier, activityLog)
     tradeMonitor.start()
 
-    val scope = CoroutineScope(Dispatchers.Default)
+    // SupervisorJob обязателен: в этом scope живёт и long-polling Telegram, и коллекторы
+    // статуса для каждого WebSocket. С обычным Job падение одной корутины (например,
+    // send в отвалившийся сокет) отменяло весь scope и молча убивало Telegram-управление.
+    val scope = CoroutineScope(Dispatchers.Default + SupervisorJob())
 
     // Telegram-управление: long-polling запускается только при заданном токене.
     if (tgToken.isNotBlank()) {
@@ -185,16 +190,28 @@ fun main() {
                         call.respond(mapOf("mode" to "REAL"))
                     }
                 }
-            }
 
-            webSocket("/ws") {
-                val job = scope.launch {
-                    engine.status.collect { status ->
-                        send(Json.encodeToString(mapOf("type" to "status", "value" to status.name)))
+                // Под авторизацией, как и остальной API: без ключа наружу отдаём только /health.
+                webSocket("/ws") {
+                    // Коллектор живёт в scope самой сессии, а не приложения: при обрыве сокета
+                    // он гаснет вместе с ней и не тащит ошибку в общий scope.
+                    val job = launch {
+                        try {
+                            engine.status.collect { status ->
+                                send(Json.encodeToString(mapOf("type" to "status", "value" to status.name)))
+                            }
+                        } catch (e: CancellationException) {
+                            throw e
+                        } catch (_: Exception) {
+                            // сокет закрылся на середине отправки — просто гасим коллектор
+                        }
+                    }
+                    try {
+                        for (frame in incoming) { /* входящие команды от UI */ }
+                    } finally {
+                        job.cancel()
                     }
                 }
-                for (frame in incoming) { /* входящие команды от UI */ }
-                job.cancel()
             }
         }
     }.start(wait = true)

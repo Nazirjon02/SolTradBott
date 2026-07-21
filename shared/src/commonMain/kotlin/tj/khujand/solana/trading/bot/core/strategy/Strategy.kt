@@ -82,7 +82,9 @@ data class StrategyConfig(
 
     // ── Риск ──
     val maxDailyLoss: Double = 5.0,
-    val maxDrawdown: Double = 15.0,
+    // Заметно больше stopLossPercent: иначе штатный выход по SL сам упирается
+    // в лимит просадки и блокирует стратегию (см. RiskManager.checkDrawdown).
+    val maxDrawdown: Double = 30.0,
     val cooldownSeconds: Int = 300,
 
     // ── Фильтры токенов ──

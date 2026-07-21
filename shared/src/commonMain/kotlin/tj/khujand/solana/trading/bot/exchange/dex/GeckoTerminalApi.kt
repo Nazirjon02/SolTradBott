@@ -6,6 +6,7 @@ import io.ktor.client.request.get
 import io.ktor.client.request.header
 import io.ktor.client.statement.HttpResponse
 import io.ktor.client.statement.bodyAsText
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlin.time.Clock
@@ -108,6 +109,8 @@ object GeckoTerminalApi {
                 "?aggregate=$aggregate&limit=$limit&currency=usd"
             val resp: HttpResponse = client.get(url) { header("Accept", "application/json") }
             parse(resp.bodyAsText())
+        } catch (e: CancellationException) {
+            throw e
         } catch (e: Exception) {
             println("GeckoTerminal error ($pool/$timeframe): ${e.message}")
             emptyList()

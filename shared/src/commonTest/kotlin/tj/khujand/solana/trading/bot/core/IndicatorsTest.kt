@@ -37,6 +37,18 @@ class IndicatorsTest {
     }
 
     @Test
+    fun rsiReactsToLastBar() {
+        // Регрессия: окно RSI не включало последнее изменение цены, поэтому свежая свеча
+        // вообще не влияла на результат и сигнал приходил с опозданием на бар.
+        val rising = (1..40).map { it.toDouble() }
+        val withDump = rising.dropLast(1) + 10.0   // тот же ряд, но последний бар — резкий провал
+
+        val calm = Indicators.rsi(rising, 14).last()
+        val dumped = Indicators.rsi(withDump, 14).last()
+        assertTrue(dumped < calm, "последний бар обязан влиять на RSI ($dumped не меньше $calm)")
+    }
+
+    @Test
     fun atrPositiveOnVolatileSeries() {
         val candles = (1..30).map { i ->
             val base = 100.0 + i

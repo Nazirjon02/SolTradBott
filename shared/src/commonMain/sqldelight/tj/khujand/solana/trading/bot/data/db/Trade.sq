@@ -83,15 +83,18 @@ getTodayPnlTotal:
 SELECT COALESCE(SUM(pnl), 0.0) FROM trade
 WHERE closed_at >= ? AND status = 'CLOSED';
 
+-- Худшая закрытая сделка стратегии в СКОЛЬЗЯЩЕМ окне (closed_at >= ?).
+-- Окно обязательно: без него одна плохая сделка блокировала бы стратегию навсегда,
+-- т.к. история сделок не «рассасывается».
 getMaxDrawdown:
 SELECT COALESCE(MIN(pnl_percent), 0.0) FROM trade
-WHERE strategy_id = ? AND status = 'CLOSED';
+WHERE strategy_id = ? AND status = 'CLOSED' AND closed_at >= ?;
 
 getStats:
 SELECT
     COUNT(*) AS total_trades,
     SUM(CASE WHEN pnl > 0 THEN 1 ELSE 0 END) AS wins,
-    SUM(CASE WHEN pnl <= 0 THEN 1 ELSE 0 END) AS losses,
+    SUM(CASE WHEN pnl < 0 THEN 1 ELSE 0 END) AS losses,
     COALESCE(SUM(pnl), 0.0) AS total_pnl,
     COALESCE(SUM(fee), 0.0) AS total_fees
 FROM trade WHERE status = 'CLOSED';
@@ -100,7 +103,7 @@ getTodayStats:
 SELECT
     COUNT(*) AS total_trades,
     SUM(CASE WHEN pnl > 0 THEN 1 ELSE 0 END) AS wins,
-    SUM(CASE WHEN pnl <= 0 THEN 1 ELSE 0 END) AS losses,
+    SUM(CASE WHEN pnl < 0 THEN 1 ELSE 0 END) AS losses,
     COALESCE(SUM(pnl), 0.0) AS total_pnl
 FROM trade WHERE status = 'CLOSED' AND closed_at >= ?;
 

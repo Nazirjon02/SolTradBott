@@ -425,7 +425,10 @@ class DexScreenerApi {
                 if (token.baseToken?.symbol.isNullOrEmpty()) return@filter false
 
                 // 1. 🔗 Проверка цепочки (только Solana)
-                if (!settings.chains.contains("solana") && token.chainId != "solana") {
+                // Раньше здесь было `!chains.contains("solana") && chainId != "solana"`:
+                // левая часть всегда false (chains = ["solana"]), поэтому условие не срабатывало
+                // никогда и пары чужих сетей не отсеивались вовсе.
+                if (settings.chains.isNotEmpty() && token.chainId !in settings.chains) {
                     return@filter false
                 }
 

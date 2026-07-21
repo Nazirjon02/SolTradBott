@@ -13,6 +13,7 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlin.math.abs
 import kotlin.random.Random
 import kotlin.time.Clock
 import tj.khujand.solana.trading.bot.core.TradeNotifier
@@ -31,6 +32,16 @@ private const val SCAN_INTERVAL_MS = 30_000L
 
 /** Минимальная уверенность сигнала для входа (как в MRX). */
 private const val MIN_CONFIDENCE = 0.6
+
+/**
+ * Максимальный допустимый разбег между ценой кандидата из кеша сканера и живой ценой
+ * в момент входа. Кеш живёт до 5 минут — на мемкоинах цена за это время успевает уйти,
+ * а от неё считаются qty, SL и TP. Разбег больше порога = «цена убежала», вход отменяем.
+ */
+private const val MAX_ENTRY_PRICE_DRIFT = 0.03
+
+/** Предел размера карты пер-mint локов, чтобы за месяцы работы она не росла бесконечно. */
+private const val MINT_LOCKS_LIMIT = 500
 
 /**
  * Менеджер стратегий (модель MRX): держит по джобу на активную стратегию.
@@ -74,8 +85,14 @@ class StrategyManager(
     private var lastErrorNotifiedAt: Long = 0L
     private val errorNotifyMinIntervalMs = 60_000L
 
-    private suspend fun mintLock(mint: String): Mutex =
-        mutex.withLock { mintLocks.getOrPut(mint) { Mutex() } }
+    private suspend fun mintLock(mint: String): Mutex = mutex.withLock {
+        // Сбрасываем незанятые локи, когда карта разрослась: бот живёт месяцами,
+        // а каждый новый mint иначе оставался бы в памяти навсегда.
+        if (mintLocks.size >= MINT_LOCKS_LIMIT) {
+            mintLocks.entries.removeAll { !it.value.isLocked && it.key != mint }
+        }
+        mintLocks.getOrPut(mint) { Mutex() }
+    }
 
     private suspend fun notifyErrorThrottled(text: String) {
         val now = now()
@@ -122,6 +139,9 @@ class StrategyManager(
 
         // Риск-лимиты (в режиме «только сигнал» не проверяем — сделок нет).
         if (!_signalOnly.value) {
+            // Размер позиции считается из кеша баланса — в REAL его нужно освежить,
+            // иначе кеш пустой/протухший и вход отваливается с «нулевым размером».
+            executor.refreshRealBalanceIfStale()
             val block = riskManager.blockReason(config)
             if (block != null) {
                 activityLog.warn("⏸ ${config.name}: $block")
@@ -175,13 +195,46 @@ class StrategyManager(
                 val alreadyTraded = db.tradeQueries.hasTradedMint(candidate.mint, demoFlag).executeAsOne() > 0L
                 if (alreadyTraded) return@withLock false
                 if (!riskManager.canTrade(config)) return@withLock false
-                executeSignal(signal, config, candidate)
+                val fresh = withFreshEntryPrice(signal) ?: return@withLock false
+                executeSignal(fresh, config, candidate)
             }
             if (opened) {
                 mutex.withLock { lastTradeAt[config.id] = now() }
                 return // одна сделка за цикл — дальше кулдаун
             }
         }
+    }
+
+    /**
+     * Перед входом заменяет цену кандидата (из кеша сканера, до 5 минут давности) на живую.
+     * SL/TP тянутся за ней пропорционально, поэтому проценты риска сохраняются.
+     * Если цена ушла больше чем на [MAX_ENTRY_PRICE_DRIFT] — сетап уже не тот, вход отменяем.
+     * Живой цены нет → идём по цене сканера (лучше вход по старой цене, чем пропуск вслепую).
+     */
+    private suspend fun withFreshEntryPrice(signal: Signal): Signal? {
+        if (signal.entryPrice <= 0.0) return null
+        val live = try {
+            client.getTokenPriceUsd(signal.mint)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (_: Exception) {
+            null
+        }
+        if (live == null || live <= 0.0) return signal
+
+        val drift = abs(live - signal.entryPrice) / signal.entryPrice
+        if (drift > MAX_ENTRY_PRICE_DRIFT) {
+            activityLog.info(
+                "○ ${signal.symbol}: цена ушла на ${(drift * 100).toInt()}% с момента скана — вход отменён"
+            )
+            return null
+        }
+        val k = live / signal.entryPrice
+        return signal.copy(
+            entryPrice = live,
+            stopLoss = signal.stopLoss * k,
+            takeProfit = signal.takeProfit * k,
+        )
     }
 
     private suspend fun executeSignal(signal: Signal, config: StrategyConfig, candidate: TokenCandidate): Boolean {

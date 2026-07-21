@@ -111,7 +111,15 @@
       "PowerShell(.\\\\gradlew.bat :server:compileKotlin :shared:compileKotlinJvm --console=plain -q 2>&1)",
       "PowerShell(.\\\\gradlew.bat :server:compileKotlin :shared:compileKotlinJvm --console=plain; Write-Output \"EXIT_CODE=$LASTEXITCODE\")",
       "PowerShell(.\\\\gradlew.bat :shared:jvmTest --console=plain; Write-Output \"EXIT_CODE=$LASTEXITCODE\")",
-      "PowerShell(.\\\\gradlew.bat :desktopApp:compileKotlin --console=plain; Write-Output \"EXIT_CODE=$LASTEXITCODE\")"
+      "PowerShell(.\\\\gradlew.bat :desktopApp:compileKotlin --console=plain; Write-Output \"EXIT_CODE=$LASTEXITCODE\")",
+      "WebFetch(domain:terminalbytes.com)",
+      "Bash(python -c ' *)",
+      "Bash(./gradlew :shared:jvmTest :server:compileKotlin --console=plain)",
+      "Bash(./gradlew :shared:jvmTest --console=plain --rerun-tasks -x :shared:compileKotlinIosArm64)",
+      "Bash(./gradlew :shared:cleanJvmTest :shared:jvmTest --console=plain)",
+      "Bash(git --no-pager diff --stat)",
+      "Bash(git --no-pager diff shared/src/commonMain/kotlin/tj/khujand/solana/trading/bot/core/strategy/StrategyManager.kt)",
+      "Bash(./gradlew :shared:cleanJvmTest :shared:jvmTest :server:compileKotlin --console=plain)"
     ]
   }
 }

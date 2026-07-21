@@ -6,6 +6,7 @@ import io.ktor.client.plugins.contentnegotiation.*
 import io.ktor.client.request.*
 import io.ktor.client.statement.*
 import io.ktor.serialization.kotlinx.json.*
+import kotlinx.coroutines.CancellationException
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
@@ -77,6 +78,8 @@ object RugCheckApi {
                 topRisks = topRisks,
                 passed   = level != RugRiskLevel.DANGER && report.score <= maxScoreAllowed,
             )
+        } catch (e: CancellationException) {
+            throw e // отмена цикла сканера — не «недоступность API»
         } catch (e: Exception) {
             // API недоступен: fail-closed = отклоняем токен; fail-open = пропускаем
             RugCheckResult(

@@ -20,8 +20,14 @@ class RiskManagerTest {
         return DrxDatabase(driver)
     }
 
-    private fun insertClosedTrade(db: DrxDatabase, strategyId: String, pnl: Double, pnlPercent: Double) {
-        val now = Clock.System.now().toEpochMilliseconds()
+    private fun insertClosedTrade(
+        db: DrxDatabase,
+        strategyId: String,
+        pnl: Double,
+        pnlPercent: Double,
+        closedAt: Long = Clock.System.now().toEpochMilliseconds(),
+    ) {
+        val now = closedAt
         db.tradeQueries.insert(
             id = "t-$pnl-${kotlin.random.Random.nextInt()}",
             strategy_id = strategyId, strategy_name = "test", mint = "m", symbol = "TST",
@@ -86,6 +92,33 @@ class RiskManagerTest {
         val config = StrategyConfig(id = "s1", maxDrawdown = 15.0)
         insertClosedTrade(db, "s1", pnl = -20.0, pnlPercent = -20.0)
         assertFalse(rm.canTrade(config), "просадка -20% при лимите 15% должна блокировать")
+    }
+
+    @Test
+    fun drawdownBlockExpiresAfterWindow() {
+        val db = inMemoryDb()
+        val cache = AccountCache(db)
+        cache.set("DEMO_USD", 100_000.0, 100_000.0)
+        val rm = RiskManager(db, cache)
+        val config = StrategyConfig(id = "s1", maxDrawdown = 15.0)
+        // Плохая сделка двухдневной давности не должна блокировать вход сегодня:
+        // раньше запрос смотрел на всю историю и стратегия выключалась навсегда.
+        val twoDaysAgo = Clock.System.now().toEpochMilliseconds() - 2 * 24 * 60 * 60_000L
+        insertClosedTrade(db, "s1", pnl = -20.0, pnlPercent = -20.0, closedAt = twoDaysAgo)
+        assertTrue(rm.canTrade(config), "просадка старше суток не должна блокировать стратегию навсегда")
+    }
+
+    @Test
+    fun seededDrawdownLimitExceedsStopLoss() {
+        val db = inMemoryDb()
+        seedDefaultStrategies(db)
+        // Иначе штатный выход по стоп-лоссу сам упирается в лимит просадки.
+        db.strategyQueries.getAll().executeAsList().forEach {
+            assertTrue(
+                it.max_drawdown > it.stop_loss_percent,
+                "«${it.name}»: max_drawdown ${it.max_drawdown} должен быть больше SL ${it.stop_loss_percent}",
+            )
+        }
     }
 
     @Test

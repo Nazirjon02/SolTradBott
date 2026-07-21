@@ -21,8 +21,10 @@ object Indicators {
         if (prices.size < period + 1) return emptyList()
         val changes = prices.zipWithNext { a, b -> b - a }
         val result = mutableListOf<Double>()
-        for (i in period until changes.size) {
-            val window = changes.subList(i - period, i)
+        // Окно ВКЛЮЧАЕТ изменение с индексом i: иначе последнее движение цены
+        // не попадало в расчёт и RSI отставал ровно на одну свечу.
+        for (i in period - 1 until changes.size) {
+            val window = changes.subList(i - period + 1, i + 1)
             val gains = window.filter { it > 0 }.average().let { if (it.isNaN()) 0.0 else it }
             val losses = window.filter { it < 0 }.map { -it }.average().let { if (it.isNaN()) 0.0 else it }
             val rs = if (losses == 0.0) 100.0 else gains / losses
@@ -59,8 +61,9 @@ object Indicators {
         val upper = mutableListOf<Double>()
         val middle = mutableListOf<Double>()
         val lower = mutableListOf<Double>()
-        for (i in period until prices.size) {
-            val window = prices.subList(i - period, i)
+        // Как и в rsi: окно включает текущую цену prices[i], иначе полосы отстают на бар.
+        for (i in period - 1 until prices.size) {
+            val window = prices.subList(i - period + 1, i + 1)
             val sma = window.average()
             val std = sqrt(window.map { (it - sma).pow(2) }.average())
             middle.add(sma)

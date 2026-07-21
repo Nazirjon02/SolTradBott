@@ -31,7 +31,9 @@ CREATE TABLE IF NOT EXISTS strategy (
 
     -- Риск
     max_daily_loss REAL NOT NULL DEFAULT 5.0,
-    max_drawdown REAL NOT NULL DEFAULT 15.0,
+    -- Должен быть заметно БОЛЬШЕ stop_loss_percent, иначе обычный стоп-лосс
+    -- сам по себе перекрывает лимит просадки и блокирует стратегию.
+    max_drawdown REAL NOT NULL DEFAULT 30.0,
     cooldown_seconds INTEGER NOT NULL DEFAULT 300,
 
     -- Фильтры токенов (сканер мемкоинов)
@@ -150,6 +152,16 @@ WHERE type = 'DARS'
     AND dars_min_correction_len_pct = 30.0
     AND dars_min_legs = 2
     AND dars_dominance_ratio = 1.3;
+
+-- Одноразовая починка конфигов, где лимит просадки не больше стоп-лосса: в такой
+-- конфигурации ЛЮБОЙ штатный выход по SL сразу упирается в лимит просадки и
+-- блокирует стратегию. Поднимаем до двойного SL, пользовательские (корректные)
+-- значения не трогаем.
+normalizeDrawdownLimits:
+UPDATE strategy SET
+    max_drawdown = stop_loss_percent * 2.0,
+    updated_at = ?
+WHERE max_drawdown <= stop_loss_percent;
 
 updateStrategy:
 UPDATE strategy SET

@@ -1,5 +1,6 @@
 package tj.khujand.solana.trading.bot.domain.dars
 
+import kotlinx.coroutines.CancellationException
 import tj.khujand.solana.trading.bot.exchange.dex.Candle
 import tj.khujand.solana.trading.bot.exchange.dex.FilterSettings
 import tj.khujand.solana.trading.bot.exchange.dex.GeckoTerminalApi
@@ -29,6 +30,8 @@ class DarsEntryEngine(
 
         return try {
             evaluateInternal(pool, cfg)
+        } catch (e: CancellationException) {
+            throw e // отмена стратегии — не «ошибка анализа»
         } catch (e: Exception) {
             DarsSignal.reject("ошибка анализа Dars: ${e.message}")
         }

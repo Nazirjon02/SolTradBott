@@ -16,6 +16,7 @@ import tj.khujand.solana.trading.bot.data.db.DrxDatabase
 fun seedDefaultStrategies(db: DrxDatabase) {
     // Уже засеянные БД подтягиваем к значениям методички один раз (см. ниже).
     normalizeDarsDefaults(db)
+    normalizeDrawdownLimits(db)
 
     val existing = db.strategyQueries.getAll().executeAsList()
     if (existing.isNotEmpty()) return  // уже есть стратегии — не добавляем
@@ -49,7 +50,7 @@ fun seedDefaultStrategies(db: DrxDatabase) {
         time_stop_minutes = 0L,
         liquidity_exit_drop_percent = 50.0,
         max_daily_loss = 5.0,
-        max_drawdown = 15.0,
+        max_drawdown = 30.0,
         cooldown_seconds = 300L,
         min_liquidity_usd = 10_000.0,
         min_market_cap = 50_000.0,
@@ -111,7 +112,7 @@ fun seedDefaultStrategies(db: DrxDatabase) {
         time_stop_minutes = 60L,     // скальпинг: висим не дольше часа
         liquidity_exit_drop_percent = 40.0,
         max_daily_loss = 5.0,
-        max_drawdown = 15.0,
+        max_drawdown = 30.0,
         cooldown_seconds = 180L,
         min_liquidity_usd = 15_000.0,
         min_market_cap = 30_000.0,
@@ -173,7 +174,7 @@ fun seedDefaultStrategies(db: DrxDatabase) {
         time_stop_minutes = 0L,
         liquidity_exit_drop_percent = 50.0,
         max_daily_loss = 5.0,
-        max_drawdown = 15.0,
+        max_drawdown = 30.0,
         cooldown_seconds = 300L,
         min_liquidity_usd = 50_000.0,
         min_market_cap = 500_000.0,
@@ -211,6 +212,22 @@ fun seedDefaultStrategies(db: DrxDatabase) {
 
 /** Ключ-флаг: нормализация Dars-дефолтов к методичке выполнена (чтобы не повторять). */
 private const val DARS_DEFAULTS_MIGRATION_KEY = "dars_defaults_normalized_v1"
+
+/** Ключ-флаг: лимиты просадки приведены в согласие со стоп-лоссом. */
+private const val DRAWDOWN_LIMITS_MIGRATION_KEY = "drawdown_limits_normalized_v1"
+
+/**
+ * Одноразовая починка: в конфигах, где `max_drawdown <= stop_loss_percent`, штатный выход
+ * по стоп-лоссу сам по себе перекрывал лимит просадки — и RiskManager блокировал стратегию.
+ * Поднимаем такие лимиты до двойного SL; корректные пользовательские значения не трогаем.
+ */
+private fun normalizeDrawdownLimits(db: DrxDatabase) {
+    val alreadyDone = db.settingsQueries.get(DRAWDOWN_LIMITS_MIGRATION_KEY).executeAsOneOrNull() != null
+    if (alreadyDone) return
+    val now = Clock.System.now().toEpochMilliseconds()
+    db.strategyQueries.normalizeDrawdownLimits(now)
+    db.settingsQueries.set(DRAWDOWN_LIMITS_MIGRATION_KEY, "1", now)
+}
 
 /**
  * Одноразовая миграция: подтягивает уже засеянные Dars-стратегии к значениям методички

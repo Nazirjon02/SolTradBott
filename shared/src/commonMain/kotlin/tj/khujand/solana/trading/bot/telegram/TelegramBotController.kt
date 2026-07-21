@@ -168,9 +168,15 @@ class TelegramBotController(
 
     // ─── Маршрутизация команд ────────────────────────────────────────────────
 
-    /** Текстовые команды: `/start` и `/menu` открывают панель, остальное — общие действия. */
+    /**
+     * Текстовые команды: `/start` и `/menu` открывают панель, остальное — общие действия.
+     * Слэш обязателен — иначе обычное сообщение «stop» или «closeall» в чате
+     * останавливало движок и закрывало позиции.
+     */
     private suspend fun handleTextCommand(chatId: Long, text: String) {
-        when (val cmd = text.trim().substringBefore(' ').removePrefix("/").lowercase()) {
+        val trimmed = text.trim()
+        if (!trimmed.startsWith("/")) return
+        when (val cmd = trimmed.substringBefore(' ').removePrefix("/").substringBefore('@').lowercase()) {
             "start", "menu" -> sendMainMenu(chatId)
             "help" -> sendHelp(chatId)
             "close" -> handleCloseCommand(chatId, text)

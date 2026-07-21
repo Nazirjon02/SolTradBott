@@ -94,7 +94,9 @@ class BotEngine(
         if (_status.value != BotStatus.PAUSED) return
         _status.value = BotStatus.STOPPED // start() проверяет != RUNNING
         start()
-        notifier.send("▶️ DRX Bot возобновлён")
+        // start() мог не подняться (нет активных стратегий) и уже сказал об этом сам —
+        // «возобновлён» в таком случае было бы враньём сразу после «не запущен».
+        if (_status.value == BotStatus.RUNNING) notifier.send("▶️ DRX Bot возобновлён")
     }
 
     fun getStatus(): BotStatus = _status.value
