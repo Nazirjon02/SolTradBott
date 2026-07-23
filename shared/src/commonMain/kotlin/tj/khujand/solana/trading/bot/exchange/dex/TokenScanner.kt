@@ -14,17 +14,14 @@ data class ScanFilters(
     val maxMarketCap: Double = 10_000_000.0,
     val minTokenAgeMinutes: Long = 30,
     val maxTokenAgeMinutes: Long = 43_200,
-    val minVolumeH1Usd: Double = 5_000.0,
     val minBuySellRatio: Double = 1.0,
-    val rugcheckEnabled: Boolean = true,
-    val rugcheckMaxScore: Int = 5_000,
     val maxCandidates: Int = 10,
 )
 
 /**
  * Сканер новых мемкоинов (аналог TopSymbolCache-скана в MRX, источник — DexScreener).
  *
- * Пайплайн: DexScreener (boosts/profiles) → фильтры стратегии → RugCheck → скоринг →
+ * Пайплайн: DexScreener (boosts/profiles) → фильтры стратегии → скоринг →
  * запись в TokenCache. Стратегии и UI читают кандидатов из кеша.
  */
 class TokenScanner(
@@ -79,20 +76,11 @@ class TokenScanner(
             val sellsH1 = pair.txns?.h1?.sells ?: 0
             val ratio = if (sellsH1 == 0) buysH1.toDouble() else buysH1.toDouble() / sellsH1
 
-            // RugCheck последним — это самый дорогой вызов (отдельный API на каждый mint).
-            val passesCheap = liquidity >= filters.minLiquidityUsd &&
+            val passes = liquidity >= filters.minLiquidityUsd &&
                 marketCap in filters.minMarketCap..filters.maxMarketCap &&
                 ageMinutes in filters.minTokenAgeMinutes..filters.maxTokenAgeMinutes &&
-                volumeH1 >= filters.minVolumeH1Usd &&
                 ratio >= filters.minBuySellRatio
-            if (!passesCheap) continue
-
-            var rugScore: Int? = null
-            if (filters.rugcheckEnabled) {
-                val rug = client.rugCheck(mint, filters.rugcheckMaxScore)
-                rugScore = rug.score
-                if (!rug.passed) continue
-            }
+            if (!passes) continue
 
             candidates += TokenCandidate(
                 mint = mint,
@@ -110,7 +98,6 @@ class TokenScanner(
                 priceChangeH1 = pair.priceChange?.h1 ?: 0.0,
                 tokenAgeMinutes = ageMinutes,
                 score = computeScanScore(liquidity, volumeH1, ratio, pair.priceChange?.h1 ?: 0.0),
-                rugScore = rugScore,
                 scannedAt = now,
             )
             if (candidates.size >= filters.maxCandidates) break
@@ -125,19 +112,14 @@ class TokenScanner(
     /**
      * Кеш token_cache общий для всех стратегий, а наполняет его та, что сканировала первой,
      * СВОИМИ фильтрами. Поэтому здесь применяем ПОЛНЫЙ набор фильтров вызывающей стратегии —
-     * включая давление покупок и RugCheck, которые раньше проверялись только при живом скане
-     * (строгая по RugCheck стратегия могла получить кандидата, прошедшего чужой мягкий порог).
+     * включая давление покупок, которое раньше проверялось только при живом скане.
      */
     private fun List<TokenCandidate>.filterBy(f: ScanFilters): List<TokenCandidate> = filter { c ->
         val ratio = if (c.sellsH1 == 0) c.buysH1.toDouble() else c.buysH1.toDouble() / c.sellsH1
-        // rugScore == null означает «этот кандидат сканировался без RugCheck» → fail-closed.
-        val rugOk = !f.rugcheckEnabled || (c.rugScore != null && c.rugScore <= f.rugcheckMaxScore)
         c.liquidityUsd >= f.minLiquidityUsd &&
             c.marketCap in f.minMarketCap..f.maxMarketCap &&
             c.tokenAgeMinutes in f.minTokenAgeMinutes..f.maxTokenAgeMinutes &&
-            c.volumeH1Usd >= f.minVolumeH1Usd &&
-            ratio >= f.minBuySellRatio &&
-            rugOk
+            ratio >= f.minBuySellRatio
     }
 
     /** DexScreener иногда отдаёт createdAt в секундах — нормализуем в миллисекунды. */

@@ -19,7 +19,7 @@
 | | MRX (образец) | SolTradBot 2.0 (цель) |
 |---|---|---|
 | Рынок | Bybit USDT-Perpetual (фьючерсы) | Solana DEX — мемкоины (спот) |
-| Биржевой клиент | `BybitClient` (REST+WS, HMAC) | `DexClient`: DexScreener + Jupiter + GeckoTerminal + RugCheck + Solana RPC |
+| Биржевой клиент | `BybitClient` (REST+WS, HMAC) | `DexClient`: DexScreener + Jupiter + GeckoTerminal + Solana RPC |
 | Направление | LONG + SHORT, плечо 1–125x | Только LONG (покупка токена за SOL/USDC), без плеча |
 | Модули | shared / server / desktopApp / androidApp / iosApp | shared / server / desktopApp / androidApp (iOS — не делаем) |
 | БД | SQLDelight (SQLite): Strategy, Trade, AccountCache, Report, Settings, OptimizationResult | То же самое + TokenCache (кеш сканера токенов) |
@@ -57,7 +57,6 @@ SolTradBott/
 │       │   ├── DexScreenerApi.kt         ← цены, пары, поиск новых токенов (перенос)
 │       │   ├── JupiterApi.kt             ← котировки и свопы (перенос)
 │       │   ├── GeckoTerminalApi.kt       ← OHLCV-свечи (перенос)
-│       │   ├── RugCheckApi.kt            ← проверка на скам (перенос)
 │       │   ├── SolanaRpcClient.kt        ← баланс, отправка транзакций (перенос)
 │       │   ├── TokenScanner.kt           ← скан новых мемкоинов + фильтры (из TokenMonitor)
 │       │   └── TokenCache.kt             ← кеш топ-токенов в БД (аналог TopSymbolCache)
@@ -92,7 +91,7 @@ SolTradBott/
 
 | Таблица | Содержимое |
 |---|---|
-| `Strategy` | Конфиги стратегий: имя, тип, активность, размер позиции (% от баланса), SL/TP/partial TP/trailing/break-even, фильтры токенов (ликвидность, MC, возраст, объём, RugCheck score), параметры Dars/индикаторов, режим (DEMO/REAL) |
+| `Strategy` | Конфиги стратегий: имя, тип, активность, размер позиции (% от баланса), SL/TP/partial TP/trailing/break-even, фильтры токенов (ликвидность, MC, возраст, объём), параметры Dars/индикаторов, режим (DEMO/REAL) |
 | `Trade` | Журнал сделок: mint-адрес, символ, вход (цена/время/размер SOL и USD), выход, PnL, комиссии+slippage, причина выхода (TP/SL/TRAILING/MANUAL), стратегия, demo-флаг |
 | `AccountCache` | Кеш баланса SOL + USDC (одна строка) — чтобы не дёргать RPC на каждый расчёт |
 | `TokenCache` | Кеш результатов сканера DexScreener (топ-кандидаты с метриками, TTL) |
@@ -113,12 +112,11 @@ SolTradBott/
 
 ### 4.2 Вход в позицию (pipeline)
 1. `TokenScanner` отдаёт кандидатов из `TokenCache` (свежие мемкоины с DexScreener, прошедшие фильтры: ликвидность, MC, возраст, объём, соотношение buy/sell).
-2. **RugCheck-фильтр** — кандидаты со скам-признаками отбрасываются (аналог новостного фильтра MRX: если API недоступен — фильтр прозрачен, пишем warning).
-3. Стратегия анализирует OHLCV (GeckoTerminal) → сигнал BUY + confidence.
-4. `RiskManager.canTrade()` — дневной убыток, просадка, лимит открытых позиций.
-5. Расчёт размера: `usdAmount = balance * positionSize / 100` (баланс из `AccountCache`).
-6. Исполнение: **DEMO** → `DemoAccountManager`; **REAL** → котировка Jupiter → своп SOL→token (slippage и priority fee из настроек) → подтверждение транзакции через RPC.
-7. Запись `Trade` (OPEN) + `TelegramNotifier` алерт + `ActivityLog`.
+2. Стратегия анализирует OHLCV (GeckoTerminal) → сигнал BUY + confidence.
+3. `RiskManager.canTrade()` — дневной убыток, просадка, лимит открытых позиций.
+4. Расчёт размера: `usdAmount = balance * positionSize / 100` (баланс из `AccountCache`).
+5. Исполнение: **DEMO** → `DemoAccountManager`; **REAL** → котировка Jupiter → своп SOL→token (slippage и priority fee из настроек) → подтверждение транзакции через RPC.
+6. Запись `Trade` (OPEN) + `TelegramNotifier` алерт + `ActivityLog`.
 
 ### 4.3 Выход из позиции — TradeMonitor (как в MRX)
 Отдельный корутин-монитор, каждые N секунд (настройка) сверяет OPEN-сделки из БД с текущей ценой DexScreener и исполняет:
@@ -224,7 +222,7 @@ BorderColor   = Color(0xFF1E2D45)
    - Последние 3 сделки.
 2. **HISTORY** — журнал сделок с фильтрами (как MRX HistoryScreen), карточка сделки: токен, вход→выход, PnL, причина выхода.
 3. **STATS** — winrate, profit factor, средняя прибыль/убыток, распределение по стратегиям, лучшая/худшая сделка (как MRX StatsScreen).
-4. **STRATEGIES** — список + **StrategyFormScreen** (полноэкранная форма как в MRX): основное, размер позиции, SL (+trailing, break-even), TP (+partial), фильтры токенов (ликвидность/MC/возраст/RugCheck), параметры Dars/индикаторов, риск.
+4. **STRATEGIES** — список + **StrategyFormScreen** (полноэкранная форма как в MRX): основное, размер позиции, SL (+trailing, break-even), TP (+partial), фильтры токенов (ликвидность/MC/возраст/объём), параметры Dars/индикаторов, риск.
 5. **SETTINGS** — как MRX SettingsScreen: кошелёк/RPC, URL сервера, Telegram, глобальный риск (дневной убыток, просадка, макс позиций, авто-стоп), управление ботом (интервалы, кулдаун), уведомления (по типам), DEMO/REAL переключатель, сброс бота.
 
 Desktop и Android рендерят один и тот же `shared/App.kt` (как в MRX).

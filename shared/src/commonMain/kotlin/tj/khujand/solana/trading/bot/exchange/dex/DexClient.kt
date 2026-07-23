@@ -8,7 +8,6 @@ package tj.khujand.solana.trading.bot.exchange.dex
  *  - DexScreener — цены, пары, поиск новых токенов;
  *  - Jupiter     — котировки и свопы (REAL-режим);
  *  - GeckoTerminal — OHLCV-свечи;
- *  - RugCheck    — проверка на скам;
  *  - Solana RPC  — баланс кошелька, отправка/подтверждение транзакций.
  */
 class DexClient(
@@ -42,11 +41,6 @@ class DexClient(
         val (tf, aggregate) = parseTimeframe(timeframe)
         return GeckoTerminalApi.getCandles(poolAddress, tf, aggregate, limit)
     }
-
-    // ─── Безопасность ────────────────────────────────────────────────────────
-
-    suspend fun rugCheck(mint: String, maxScoreAllowed: Int): RugCheckResult =
-        RugCheckApi.check(mint, maxScoreAllowed)
 
     // ─── Кошелёк ─────────────────────────────────────────────────────────────
 

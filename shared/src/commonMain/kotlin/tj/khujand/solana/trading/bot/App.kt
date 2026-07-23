@@ -1880,10 +1880,7 @@ fun StrategyFormScreen(
     var maxMc by remember { mutableStateOf((c?.maxMarketCap ?: 10_000_000.0).toLong().toString()) }
     var minAge by remember { mutableStateOf((c?.minTokenAgeMinutes ?: 30L).toString()) }
     var maxAge by remember { mutableStateOf((c?.maxTokenAgeMinutes ?: 43_200L).toString()) }
-    var minVolH1 by remember { mutableStateOf((c?.minVolumeH1Usd ?: 5_000.0).toLong().toString()) }
     var minRatio by remember { mutableStateOf(c?.minBuySellRatio?.toFloat() ?: 1f) }
-    var rugcheckEnabled by remember { mutableStateOf(c?.rugcheckEnabled ?: true) }
-    var rugcheckMax by remember { mutableStateOf((c?.rugcheckMaxScore ?: 5_000).toString()) }
 
     // Фильтр по диапазону (общий для всех типов)
     var rangeFilter by remember { mutableStateOf(c?.rangeFilterEnabled ?: false) }
@@ -2039,13 +2036,8 @@ fun StrategyFormScreen(
                 FormTextField("Макс. Market Cap, USD", maxMc, isNumber = true) { maxMc = it }
                 FormTextField("Мин. возраст токена, мин", minAge, isNumber = true) { minAge = it }
                 FormTextField("Макс. возраст токена, мин", maxAge, isNumber = true) { maxAge = it }
-                FormTextField("Мин. объём за 1ч, USD", minVolH1, isNumber = true) { minVolH1 = it }
                 FormSlider("Мин. buys/sells за 1ч", minRatio, 0.5f, 3f,
                     "${"%.1f".format(minRatio)}") { minRatio = it }
-                FormToggle("RugCheck-проверка", rugcheckEnabled) { rugcheckEnabled = it }
-                if (rugcheckEnabled) {
-                    FormTextField("Макс. risk score (RugCheck)", rugcheckMax, isNumber = true) { rugcheckMax = it }
-                }
             }
 
             // 7b. Фильтр по диапазону (общий для всех типов стратегий)
@@ -2160,10 +2152,7 @@ fun StrategyFormScreen(
                     maxMarketCap = maxMc.toDoubleOrNull() ?: 10_000_000.0,
                     minTokenAgeMinutes = minAge.toLongOrNull() ?: 30L,
                     maxTokenAgeMinutes = maxAge.toLongOrNull() ?: 43_200L,
-                    minVolumeH1Usd = minVolH1.toDoubleOrNull() ?: 5_000.0,
                     minBuySellRatio = minRatio.toDouble(),
-                    rugcheckEnabled = rugcheckEnabled,
-                    rugcheckMaxScore = rugcheckMax.toIntOrNull() ?: 5_000,
                     rangeFilterEnabled = rangeFilter,
                     rangeMaxEntryPct = rangeMaxEntry.toDouble(),
                     rangeLookbackBars = rangeLookback.toIntOrNull() ?: 100,

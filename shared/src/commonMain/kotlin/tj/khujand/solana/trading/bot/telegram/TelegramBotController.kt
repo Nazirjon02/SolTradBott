@@ -402,8 +402,7 @@ class TelegramBotController(
         val text = candidates.joinToString("\n\n") { c ->
             "🪙 *${c.symbol.escapeMarkdown()}* — score ${c.score.toInt()}\n" +
                 "💵 ${fmt(c.priceUsd)} | MC ${fmtShort(c.marketCap)} | LIQ ${fmtShort(c.liquidityUsd)}\n" +
-                "⏱ возраст ${c.tokenAgeMinutes}м | 1ч: ${fmt(c.priceChangeH1)}%" +
-                (c.rugScore?.let { "\n🛡 RugCheck: $it" } ?: "")
+                "⏱ возраст ${c.tokenAgeMinutes}м | 1ч: ${fmt(c.priceChangeH1)}%"
         }
         send(chatId, "🔍 *Кандидаты сканера:*\n\n$text")
     }

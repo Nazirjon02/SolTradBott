@@ -119,7 +119,11 @@
       "Bash(./gradlew :shared:cleanJvmTest :shared:jvmTest --console=plain)",
       "Bash(git --no-pager diff --stat)",
       "Bash(git --no-pager diff shared/src/commonMain/kotlin/tj/khujand/solana/trading/bot/core/strategy/StrategyManager.kt)",
-      "Bash(./gradlew :shared:cleanJvmTest :shared:jvmTest :server:compileKotlin --console=plain)"
+      "Bash(./gradlew :shared:cleanJvmTest :shared:jvmTest :server:compileKotlin --console=plain)",
+      "Bash(./gradlew :shared:compileKotlinJvm -q --console=plain)",
+      "Bash(echo \"exit_grep=$?  \\(1 = no matches, good\\)\")",
+      "Bash(git --no-pager diff HEAD -- \"shared/src/commonMain/sqldelight/tj/khujand/solana/trading/bot/data/db/Strategy.sq\" \"shared/src/commonMain/sqldelight/tj/khujand/solana/trading/bot/data/db/TokenCache.sq\")",
+      "PowerShell(.\\\\gradlew.bat :shared:compileKotlinJvm --console=plain 2>&1)"
     ]
   }
 }

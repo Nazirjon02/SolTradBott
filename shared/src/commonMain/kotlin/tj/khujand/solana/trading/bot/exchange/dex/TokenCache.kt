@@ -23,7 +23,6 @@ data class TokenCandidate(
     val priceChangeH1: Double,
     val tokenAgeMinutes: Long,
     val score: Double,
-    val rugScore: Int?,
     val scannedAt: Long,
 )
 
@@ -53,7 +52,6 @@ class TokenCache(
                 priceChangeH1 = row.price_change_h1,
                 tokenAgeMinutes = row.token_age_minutes,
                 score = row.score,
-                rugScore = row.rug_score?.toInt(),
                 scannedAt = row.scanned_at,
             )
         }
@@ -82,7 +80,6 @@ class TokenCache(
                 price_change_h1 = c.priceChangeH1,
                 token_age_minutes = c.tokenAgeMinutes,
                 score = c.score,
-                rug_score = c.rugScore?.toLong(),
                 scanned_at = c.scannedAt,
             )
         }

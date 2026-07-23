@@ -93,10 +93,7 @@ data class StrategyConfig(
     val maxMarketCap: Double = 10_000_000.0,
     val minTokenAgeMinutes: Long = 30,
     val maxTokenAgeMinutes: Long = 43_200,
-    val minVolumeH1Usd: Double = 5_000.0,
     val minBuySellRatio: Double = 1.0,
-    val rugcheckEnabled: Boolean = true,
-    val rugcheckMaxScore: Int = 5_000,
 
     // ── Фильтр по позиции в диапазоне (общий, для любой стратегии) ──
     // Спот, только лонг → «не покупать у верха диапазона». Позиция входа считается по
@@ -136,10 +133,7 @@ data class StrategyConfig(
         maxMarketCap = maxMarketCap,
         minTokenAgeMinutes = minTokenAgeMinutes,
         maxTokenAgeMinutes = maxTokenAgeMinutes,
-        minVolumeH1Usd = minVolumeH1Usd,
         minBuySellRatio = minBuySellRatio,
-        rugcheckEnabled = rugcheckEnabled,
-        rugcheckMaxScore = rugcheckMaxScore,
     )
 
     /** SL/TP-цены от цены входа (спот, только лонг). */

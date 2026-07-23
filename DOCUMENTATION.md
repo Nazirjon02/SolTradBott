@@ -25,11 +25,11 @@
 
 ## 1. Что это за проект
 
-**DRX** — автоматический торговый робот для **мемкоинов на Solana DEX**. Он сам сканирует новые токены (DexScreener), фильтрует скам (RugCheck), анализирует график (GeckoTerminal OHLCV), принимает решения по стратегиям, покупает через **Jupiter** (или виртуально в DEMO), сопровождает позицию (SL/TP/trailing) и считает статистику.
+**DRX** — автоматический торговый робот для **мемкоинов на Solana DEX**. Он сам сканирует новые токены (DexScreener), анализирует график (GeckoTerminal OHLCV), принимает решения по стратегиям, покупает через **Jupiter** (или виртуально в DEMO), сопровождает позицию (SL/TP/trailing) и считает статистику.
 
 ### Что бот умеет
 
-- **Сканировать новые мемкоины** — DexScreener boosts/profiles + фильтры (ликвидность, MC, возраст, объём, давление покупок) + RugCheck.
+- **Сканировать новые мемкоины** — DexScreener boosts/profiles + фильтры (ликвидность, MC, возраст, объём, давление покупок).
 - **Торговать на DEX** — свопы SOL→token→SOL через Jupiter Aggregator (REAL) или paper-trading (DEMO, счёт $10 000).
 - **Запускать до 3 стратегий параллельно** — каждая со своими фильтрами и параметрами выхода.
 - **Сопровождать позиции** — Stop Loss, Take Profit, частичные фиксации, trailing, break-even, time-stop и **ликвидность-стоп** (защита от rug pull).
@@ -73,7 +73,7 @@ SolTradBott/
 | `core/strategy/` | `Strategy`-интерфейс, `StrategyManager`, фабрика + 3 стратегии. |
 | `core/risk/RiskManager` | Дневной убыток, просадка, лимит позиций, размер позиции. |
 | `core/Indicators` | EMA, RSI, MACD, Bollinger, ATR (порт из MRX). |
-| `exchange/dex/DexClient` | Фасад: DexScreener + Jupiter + GeckoTerminal + RugCheck + Solana RPC. |
+| `exchange/dex/DexClient` | Фасад: DexScreener + Jupiter + GeckoTerminal + Solana RPC. |
 | `exchange/dex/TokenScanner` | Скан новых мемкоинов + фильтры + скоринг → TokenCache. |
 | `exchange/dex/TokenCache`, `AccountCache` | Кеши в БД (кандидаты сканера, балансы). |
 | `domain/dars/` | Движок методики «Dars»: импульс/коррекция, ложный пробой, треугольник, уровни. |
@@ -102,7 +102,7 @@ SolTradBott/
 | Размер позиции | 5% от баланса |
 | Stop Loss | 15% |
 | Take Profit | 30% (RR ≈ 2) |
-| Фильтры | LIQ ≥ $10K, MC $50K–$10M, возраст 30м–30д, объём 1ч ≥ $5K, RugCheck ≤ 5000 |
+| Фильтры | LIQ ≥ $10K, MC $50K–$10M, возраст 30м–30д, объём 1ч ≥ $5K |
 
 ### 3.2 Momentum Scalping — свежие мемкоины
 
@@ -134,7 +134,7 @@ SolTradBott/
 
 ### Вход (pipeline)
 
-1. `TokenScanner` раз в ~30с отдаёт кандидатов (DexScreener → фильтры стратегии → RugCheck → скоринг). Кеш TTL 5 минут.
+1. `TokenScanner` раз в ~30с отдаёт кандидатов (DexScreener → фильтры стратегии → скоринг). Кеш TTL 5 минут.
 2. Стратегия анализирует свечи GeckoTerminal → сигнал BUY + уверенность (нужно ≥ 60%).
 3. `RiskManager.canTrade()` — дневной убыток, просадка, лимит позиций.
 4. Размер: `balance × positionSize%`.
@@ -178,7 +178,7 @@ SolTradBott/
 ### Требования
 
 - **JDK 17+** (https://adoptium.net). Проверить: `java -version`.
-- Исходящий доступ к `api.dexscreener.com`, `api.geckoterminal.com`, `*.jup.ag`, `api.rugcheck.xyz`, Solana RPC и `api.telegram.org`.
+- Исходящий доступ к `api.dexscreener.com`, `api.geckoterminal.com`, `*.jup.ag`, Solana RPC и `api.telegram.org`.
 
 ### Windows (самый простой путь)
 
@@ -303,7 +303,7 @@ SELECT symbol, pnl, close_reason FROM trade ORDER BY opened_at DESC LIMIT 10;
 
 Размер позиции: `usdAmount = balance × positionSize / 100` (спот, плеча нет). Баланс из кеша (DEMO-счёт или SOL×цена).
 
-Плюс DEX-специфика: RugCheck-фильтр на входе, ликвидность-стоп и time-stop на выходе, slippage-лимит в свопах.
+Плюс DEX-специфика: ликвидность-стоп и time-stop на выходе, slippage-лимит в свопах.
 
 ---
 
@@ -370,7 +370,7 @@ sudo journalctl -u drx -f
 3. **Поменяй `SOLTRAD_API_KEY`** — дефолтный `soltrad-secret` в проде нельзя.
 4. **Один `TG_CHAT_ID`** — чужой аккаунт не сможет управлять ботом.
 5. **Сначала DEMO, потом REAL.** Минимум 1–2 недели наблюдений.
-6. **Мемкоины — экстремально рискованный рынок.** Rug pull, honeypot и осушение ликвидности случаются постоянно; RugCheck и ликвидность-стоп снижают риск, но не убирают его.
+6. **Мемкоины — экстремально рискованный рынок.** Rug pull, honeypot и осушение ликвидности случаются постоянно; ликвидность-стоп снижает риск, но не убирает его.
 
 ---
 

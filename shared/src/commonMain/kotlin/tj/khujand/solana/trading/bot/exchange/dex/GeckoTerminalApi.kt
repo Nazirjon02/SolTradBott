@@ -46,7 +46,7 @@ data class Candle(
 
 /**
  * Источник свечей OHLCV — GeckoTerminal (бесплатно, без ключа).
- * По шаблону [RugCheckApi]: Ktor-клиент + ленивый разбор JSON.
+ * Ktor-клиент + ленивый разбор JSON.
  *
  * Rate limit ~30 req/min, поэтому есть in-memory кэш по ключу пул+ТФ+агрегат с TTL.
  */
