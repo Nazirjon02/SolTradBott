@@ -36,7 +36,6 @@ fun StrategyRow.toStrategyConfig(): StrategyConfig = StrategyConfig(
     maxMarketCap = max_market_cap,
     minTokenAgeMinutes = min_token_age_minutes,
     maxTokenAgeMinutes = max_token_age_minutes,
-    minBuySellRatio = min_buy_sell_ratio,
     rangeFilterEnabled = range_filter_enabled == 1L,
     rangeMaxEntryPct = range_max_entry_pct,
     rangeLookbackBars = range_lookback_bars.toInt(),

@@ -42,7 +42,6 @@ CREATE TABLE IF NOT EXISTS strategy (
     max_market_cap REAL NOT NULL DEFAULT 10000000.0,
     min_token_age_minutes INTEGER NOT NULL DEFAULT 30,
     max_token_age_minutes INTEGER NOT NULL DEFAULT 43200,
-    min_buy_sell_ratio REAL NOT NULL DEFAULT 1.0,
 
     -- Фильтр по позиции цены в диапазоне (общий для всех стратегий; спот → только «не покупать у верха»)
     range_filter_enabled INTEGER NOT NULL DEFAULT 0,
@@ -98,7 +97,6 @@ INSERT INTO strategy (
     max_daily_loss, max_drawdown, cooldown_seconds,
     min_liquidity_usd, min_market_cap, max_market_cap,
     min_token_age_minutes, max_token_age_minutes,
-    min_buy_sell_ratio,
     rsi_period, rsi_overbought, rsi_oversold, ema_fast, ema_slow, atr_period, volume_threshold,
     dars_higher_tf, dars_candle_limit, dars_swing_pivot_pct, dars_require_htf_trend,
     dars_dominance_ratio, dars_min_correction_len_pct, dars_reject_at_resistance,
@@ -116,7 +114,6 @@ INSERT INTO strategy (
     ?, ?, ?,
     ?, ?, ?,
     ?, ?,
-    ?,
     ?, ?, ?, ?, ?, ?, ?,
     ?, ?, ?, ?,
     ?, ?, ?,
@@ -172,7 +169,6 @@ UPDATE strategy SET
     max_daily_loss = ?, max_drawdown = ?, cooldown_seconds = ?,
     min_liquidity_usd = ?, min_market_cap = ?, max_market_cap = ?,
     min_token_age_minutes = ?, max_token_age_minutes = ?,
-    min_buy_sell_ratio = ?,
     rsi_period = ?, rsi_overbought = ?, rsi_oversold = ?, ema_fast = ?, ema_slow = ?,
     atr_period = ?, volume_threshold = ?,
     dars_higher_tf = ?, dars_candle_limit = ?, dars_swing_pivot_pct = ?, dars_require_htf_trend = ?,

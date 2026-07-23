@@ -14,7 +14,6 @@ data class ScanFilters(
     val maxMarketCap: Double = 10_000_000.0,
     val minTokenAgeMinutes: Long = 30,
     val maxTokenAgeMinutes: Long = 43_200,
-    val minBuySellRatio: Double = 1.0,
     val maxCandidates: Int = 10,
 )
 
@@ -78,8 +77,7 @@ class TokenScanner(
 
             val passes = liquidity >= filters.minLiquidityUsd &&
                 marketCap in filters.minMarketCap..filters.maxMarketCap &&
-                ageMinutes in filters.minTokenAgeMinutes..filters.maxTokenAgeMinutes &&
-                ratio >= filters.minBuySellRatio
+                ageMinutes in filters.minTokenAgeMinutes..filters.maxTokenAgeMinutes
             if (!passes) continue
 
             candidates += TokenCandidate(
@@ -111,15 +109,13 @@ class TokenScanner(
 
     /**
      * Кеш token_cache общий для всех стратегий, а наполняет его та, что сканировала первой,
-     * СВОИМИ фильтрами. Поэтому здесь применяем ПОЛНЫЙ набор фильтров вызывающей стратегии —
-     * включая давление покупок, которое раньше проверялось только при живом скане.
+     * СВОИМИ фильтрами. Поэтому здесь повторно применяем фильтры вызывающей стратегии
+     * (ликвидность, market cap, возраст) к уже накопленным кандидатам.
      */
     private fun List<TokenCandidate>.filterBy(f: ScanFilters): List<TokenCandidate> = filter { c ->
-        val ratio = if (c.sellsH1 == 0) c.buysH1.toDouble() else c.buysH1.toDouble() / c.sellsH1
         c.liquidityUsd >= f.minLiquidityUsd &&
             c.marketCap in f.minMarketCap..f.maxMarketCap &&
-            c.tokenAgeMinutes in f.minTokenAgeMinutes..f.maxTokenAgeMinutes &&
-            ratio >= f.minBuySellRatio
+            c.tokenAgeMinutes in f.minTokenAgeMinutes..f.maxTokenAgeMinutes
     }
 
     /** DexScreener иногда отдаёт createdAt в секундах — нормализуем в миллисекунды. */

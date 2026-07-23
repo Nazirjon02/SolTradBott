@@ -57,7 +57,6 @@ fun seedDefaultStrategies(db: DrxDatabase) {
         max_market_cap = 10_000_000.0,
         min_token_age_minutes = 30L,
         max_token_age_minutes = 43_200L,
-        min_buy_sell_ratio = 1.0,
         rsi_period = 14L,
         rsi_overbought = 70.0,
         rsi_oversold = 30.0,
@@ -116,7 +115,6 @@ fun seedDefaultStrategies(db: DrxDatabase) {
         max_market_cap = 3_000_000.0,
         min_token_age_minutes = 10L,
         max_token_age_minutes = 2_880L,  // не старше 2 суток
-        min_buy_sell_ratio = 1.3,
         rsi_period = 14L,
         rsi_overbought = 70.0,
         rsi_oversold = 30.0,
@@ -175,7 +173,6 @@ fun seedDefaultStrategies(db: DrxDatabase) {
         max_market_cap = 100_000_000.0,
         min_token_age_minutes = 10_080L, // старше недели
         max_token_age_minutes = 10_000_000L,
-        min_buy_sell_ratio = 1.0,
         rsi_period = 14L,
         rsi_overbought = 70.0,
         rsi_oversold = 30.0,

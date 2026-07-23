@@ -111,7 +111,7 @@ SolTradBott/
 - После старта сервер НЕ торгует сам — ждёт `/bot/start` (REST) или «🟢 Старт» в Telegram (как в MRX).
 
 ### 4.2 Вход в позицию (pipeline)
-1. `TokenScanner` отдаёт кандидатов из `TokenCache` (свежие мемкоины с DexScreener, прошедшие фильтры: ликвидность, MC, возраст, объём, соотношение buy/sell).
+1. `TokenScanner` отдаёт кандидатов из `TokenCache` (свежие мемкоины с DexScreener, прошедшие фильтры: ликвидность, MC, возраст).
 2. Стратегия анализирует OHLCV (GeckoTerminal) → сигнал BUY + confidence.
 3. `RiskManager.canTrade()` — дневной убыток, просадка, лимит открытых позиций.
 4. Расчёт размера: `usdAmount = balance * positionSize / 100` (баланс из `AccountCache`).
