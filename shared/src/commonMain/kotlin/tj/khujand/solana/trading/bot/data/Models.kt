@@ -28,6 +28,8 @@ data class OpenPosition(
     val currentPrice: Double,
     val qtyRemaining: Double,
     val sizeUsd: Double,
+    /** Текущая рыночная стоимость оставшихся токенов (обновляется вместе с ценой). */
+    val valueUsd: Double = 0.0,
     val pnlUsd: Double,
     val pnlPercent: Double,
     val stopLoss: Double,

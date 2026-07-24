@@ -91,6 +91,8 @@ import tj.khujand.solana.trading.bot.data.db.DrxDatabase
 import tj.khujand.solana.trading.bot.telegram.TelegramBotController
 import tj.khujand.solana.trading.bot.util.formatDexTime
 import tj.khujand.solana.trading.bot.util.formatLocalTime
+import tj.khujand.solana.trading.bot.util.formatLargeNumber
+import tj.khujand.solana.trading.bot.util.formatNumber
 
 // ─── Палитра (1-в-1 из MRX) ───────────────────────────────────────────────────
 
@@ -1110,6 +1112,27 @@ fun PositionCard(pos: OpenPosition, onClose: () -> Unit) {
                 "SL ${fmtPrice(pos.stopLoss)}  •  TP ${fmtPrice(pos.takeProfit)}",
                 fontSize = 11.sp, color = TextSecondary
             )
+
+            Spacer(Modifier.height(8.dp))
+            // Строка 3: кол-во токенов • текущая стоимость • вложено
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                InfoChip("🪙", formatLargeNumber(pos.qtyRemaining))
+                InfoChip("💰", "$${formatNumber(pos.valueUsd, 2)}")
+                InfoChip("📥", "$${formatNumber(pos.sizeUsd, 2)}")
+            }
+
+            Spacer(Modifier.height(6.dp))
+            // Строка 4: стратегия входа
+            InfoChip("📊", pos.strategyName)
+
+            // Строка 5: адрес токена (mint) — тап копирует полный адрес
+            if (pos.mint.isNotEmpty()) {
+                Spacer(Modifier.height(6.dp))
+                MintCopyRow(pos.mint)
+            }
 
             Spacer(Modifier.height(10.dp))
 

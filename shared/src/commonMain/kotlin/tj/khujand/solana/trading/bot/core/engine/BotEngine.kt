@@ -195,6 +195,7 @@ class BotEngine(
                 currentPrice = price,
                 qtyRemaining = t.qty_remaining,
                 sizeUsd = t.size_usd,
+                valueUsd = kotlin.math.round(valueRemaining * 100) / 100,
                 pnlUsd = kotlin.math.round(pnlUsd * 100) / 100,
                 pnlPercent = if (t.size_usd > 0) kotlin.math.round(pnlUsd / t.size_usd * 1000) / 10 else 0.0,
                 stopLoss = t.stop_loss,
