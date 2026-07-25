@@ -126,7 +126,9 @@
       "PowerShell(.\\\\gradlew.bat :shared:compileKotlinJvm --console=plain 2>&1)",
       "PowerShell(.\\\\gradlew.bat :shared:compileTestKotlinJvm --console=plain 2>&1)",
       "Bash(./gradlew :shared:compileKotlinDesktop -q)",
-      "Bash(./gradlew :shared:tasks --all -q)"
+      "Bash(./gradlew :shared:tasks --all -q)",
+      "Bash(./gradlew :shared:compileDebugKotlinAndroid -q)",
+      "Bash(./gradlew :shared:tasks -q)"
     ]
   }
 }

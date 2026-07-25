@@ -8,6 +8,7 @@ import android.app.Service
 import android.content.Intent
 import android.os.Build
 import android.os.IBinder
+import android.os.PowerManager
 import androidx.core.app.NotificationCompat
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -24,16 +25,36 @@ import tj.khujand.solana.trading.bot.DrxRuntimeHolder
 class TokenMonitorService : Service() {
 
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private var wakeLock: PowerManager.WakeLock? = null
 
     override fun onCreate() {
         super.onCreate()
         createNotificationChannels()
-        // Сразу показываем foreground — иначе ForegroundServiceDidNotStartInTimeException
+        // Сразу показываем foreground — иначе ForegroundServiceDidNotStartInTimeException.
+        // Тип specialUse (а не dataSync): у dataSync с Android 15 лимит ~6 ч/сутки, после
+        // чего система гасит сервис и торговля тихо останавливается. specialUse без лимита.
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
-            startForeground(NOTIFICATION_ID, buildNotification(), android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC)
+            startForeground(NOTIFICATION_ID, buildNotification(), android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)
         } else {
             startForeground(NOTIFICATION_ID, buildNotification())
         }
+        acquireWakeLock()
+    }
+
+    /** Partial wake lock: foreground-сервис сам по себе не спасает от Doze — без него
+     *  CPU засыпает при погашенном экране и реакция движка на рынок задерживается. */
+    private fun acquireWakeLock() {
+        if (wakeLock?.isHeld == true) return
+        val pm = getSystemService(POWER_SERVICE) as? PowerManager ?: return
+        wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "DRX:engine").apply {
+            setReferenceCounted(false)
+            acquire()
+        }
+    }
+
+    private fun releaseWakeLock() {
+        wakeLock?.let { if (it.isHeld) it.release() }
+        wakeLock = null
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -57,6 +78,7 @@ class TokenMonitorService : Service() {
     }
 
     override fun onDestroy() {
+        releaseWakeLock()
         serviceScope.launch { DrxRuntimeHolder.get()?.engine?.stop() }
         serviceScope.cancel()
         super.onDestroy()

@@ -355,36 +355,52 @@ fun BottomNav(current: Screen, onSelect: (Screen) -> Unit) {
             modifier = Modifier
                 .fillMaxWidth()
                 .navigationBarsPadding()
-                .padding(horizontal = 4.dp, vertical = 8.dp),
-            horizontalArrangement = Arrangement.SpaceAround
+                .padding(horizontal = 4.dp, vertical = 6.dp),
+            horizontalArrangement = Arrangement.spacedBy(2.dp),
+            verticalAlignment = Alignment.CenterVertically
         ) {
-            NavItem("📊", "Главная",   current == Screen.DASHBOARD)  { onSelect(Screen.DASHBOARD) }
-            NavItem("📋", "История",   current == Screen.HISTORY)    { onSelect(Screen.HISTORY) }
-            NavItem("📈", "Аналитика", current == Screen.STATS)      { onSelect(Screen.STATS) }
-            NavItem("🤖", "Стратегии", current == Screen.STRATEGIES) { onSelect(Screen.STRATEGIES) }
-            NavItem("⚙️", "Настройки", current == Screen.SETTINGS)   { onSelect(Screen.SETTINGS) }
+            NavItem(Modifier.weight(1f), "📊", "Главная",   current == Screen.DASHBOARD)  { onSelect(Screen.DASHBOARD) }
+            NavItem(Modifier.weight(1f), "📋", "История",   current == Screen.HISTORY)    { onSelect(Screen.HISTORY) }
+            NavItem(Modifier.weight(1f), "📈", "Аналитика", current == Screen.STATS)      { onSelect(Screen.STATS) }
+            NavItem(Modifier.weight(1f), "🤖", "Стратегии", current == Screen.STRATEGIES) { onSelect(Screen.STRATEGIES) }
+            NavItem(Modifier.weight(1f), "⚙️", "Настройки", current == Screen.SETTINGS)   { onSelect(Screen.SETTINGS) }
         }
     }
 }
 
 @Composable
-fun NavItem(icon: String, label: String, selected: Boolean, onClick: () -> Unit) {
+fun NavItem(
+    modifier: Modifier = Modifier,
+    icon: String,
+    label: String,
+    selected: Boolean,
+    onClick: () -> Unit
+) {
     val color = if (selected) Green else TextSecondary
     Column(
-        modifier = Modifier
+        modifier = modifier
             .clip(RoundedCornerShape(12.dp))
             .clickable { onClick() }
-            .padding(horizontal = 16.dp, vertical = 8.dp),
+            .padding(horizontal = 2.dp, vertical = 8.dp),
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
         Text(icon, fontSize = 20.sp)
         Spacer(Modifier.height(2.dp))
-        Text(label, fontSize = 11.sp, color = color,
-            fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal)
-        if (selected) {
-            Spacer(Modifier.height(4.dp))
-            Box(Modifier.size(4.dp).clip(CircleShape).background(Green))
-        }
+        Text(
+            label,
+            fontSize = 10.sp,
+            color = color,
+            maxLines = 1,
+            softWrap = false,
+            overflow = TextOverflow.Ellipsis,
+            textAlign = TextAlign.Center,
+            fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal
+        )
+        Spacer(Modifier.height(4.dp))
+        Box(
+            Modifier.size(4.dp).clip(CircleShape)
+                .background(if (selected) Green else Color.Transparent)
+        )
     }
 }
 
