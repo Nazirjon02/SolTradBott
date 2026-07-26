@@ -1,5 +1,11 @@
 package tj.khujand.solana.trading.bot
 
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.launch
 import tj.khujand.solana.trading.bot.core.engine.ActivityLog
 import tj.khujand.solana.trading.bot.core.engine.BotEngine
 import tj.khujand.solana.trading.bot.core.engine.TradeExecutor
@@ -13,6 +19,7 @@ import tj.khujand.solana.trading.bot.exchange.dex.AccountCache
 import tj.khujand.solana.trading.bot.exchange.dex.DexClient
 import tj.khujand.solana.trading.bot.exchange.dex.TokenCache
 import tj.khujand.solana.trading.bot.exchange.dex.TokenScanner
+import tj.khujand.solana.trading.bot.telegram.TelegramBotController
 import tj.khujand.solana.trading.bot.telegram.TelegramNotifier
 
 /**
@@ -41,15 +48,56 @@ class DrxRuntime(val db: DrxDatabase) {
     val strategyManager = StrategyManager(
         client, riskManager, notifier, db, scanner, executor, activityLog, settingsStore
     )
-    val engine = BotEngine(client, strategyManager, notifier, db, accountCache, executor, activityLog)
+    val engine = BotEngine(client, strategyManager, notifier, db, accountCache, executor, settingsStore, activityLog)
     val tradeMonitor = TradeMonitor(client, db, executor, notifier, activityLog)
+
+    // Собственный scope рантайма: здесь живёт long-polling Telegram-контроллера, чтобы он
+    // переживал уход Activity так же, как движок (раньше polling был привязан к Compose и
+    // умирал вместе с UI). SupervisorJob — падение одной корутины не роняет остальные.
+    private val runtimeScope = CoroutineScope(Dispatchers.Default + SupervisorJob())
+    private var telegramController: TelegramBotController? = null
+    private var telegramJob: Job? = null
 
     init {
         tradeMonitor.start()
+        syncTelegramController()
+    }
+
+    /**
+     * (Пере)создаёт и запускает Telegram-бот управления по текущим настройкам.
+     * Вызывается из init и при сохранении настроек (смена токена/чата). Пустой токен/чат
+     * гасит контроллер. Именно этот метод (а не Compose) владеет жизненным циклом polling.
+     */
+    fun syncTelegramController() {
+        telegramJob?.cancel()
+        telegramController?.close()
+        telegramController = null
+        telegramJob = null
+
+        val token = settingsStore.getTelegramToken()
+        val chatId = settingsStore.getTelegramChatId()
+        if (token.isNullOrBlank() || chatId == null || chatId == 0L) return
+
+        val controller = TelegramBotController(
+            botToken = token,
+            allowedChatId = chatId,
+            engine = engine,
+            strategyManager = strategyManager,
+            executor = executor,
+            db = db,
+            tokenCache = tokenCache,
+            settingsStore = settingsStore,
+        )
+        telegramController = controller
+        telegramJob = runtimeScope.launch { controller.startPolling() }
+        activityLog.info("📲 Telegram подключён — слушаю команды")
     }
 
     /** Полное гашение стека (выход из приложения). После этого объект мёртв. */
     fun shutdown() {
+        telegramJob?.cancel()
+        telegramController?.close()
+        runtimeScope.cancel()
         tradeMonitor.close()
         engine.shutdown()
         notifier.close()

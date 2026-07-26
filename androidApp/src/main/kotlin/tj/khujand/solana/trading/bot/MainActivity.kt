@@ -14,10 +14,10 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         enableEdgeToEdge()
         super.onCreate(savedInstanceState)
-        initServiceController(this)
         requestNotificationPermission()
         requestBatteryOptimizationExemption()
-        val runtime = DrxRuntimeHolder.init("soltradbot.db")
+        // Рантайм уже поднят в DrxApp.onCreate (init идемпотентен — вернёт тот же экземпляр).
+        val runtime = DrxRuntimeHolder.get() ?: DrxRuntimeHolder.init("soltradbot.db")
         setContent { App(runtime) }
     }
 

@@ -20,6 +20,7 @@ import tj.khujand.solana.trading.bot.data.AccountBalance
 import tj.khujand.solana.trading.bot.data.BotStats
 import tj.khujand.solana.trading.bot.data.BotStatus
 import tj.khujand.solana.trading.bot.data.OpenPosition
+import tj.khujand.solana.trading.bot.data.SettingsStore
 import tj.khujand.solana.trading.bot.data.db.DrxDatabase
 import tj.khujand.solana.trading.bot.exchange.dex.AccountCache
 import tj.khujand.solana.trading.bot.exchange.dex.DexClient
@@ -37,6 +38,7 @@ class BotEngine(
     private val db: DrxDatabase,
     private val accountCache: AccountCache,
     private val executor: TradeExecutor,
+    private val settingsStore: SettingsStore,
     val activityLog: ActivityLog = ActivityLog(),
 ) {
     private val scope = CoroutineScope(Dispatchers.Default + SupervisorJob())
@@ -55,10 +57,13 @@ class BotEngine(
         if (running.isEmpty()) {
             // Нечего запускать — не оставляем статус RUNNING, иначе бот «работает» впустую.
             _status.value = BotStatus.STOPPED
+            settingsStore.setDesiredState(BotStatus.STOPPED.name)
             activityLog.warn("⚠️ Нет активных стратегий. Включите стратегию на вкладке «Стратегии».")
             notifier.send("⚠️ Бот не запущен: нет активных стратегий")
             return
         }
+        // Фиксируем «желаемое состояние» — чтобы после kill'а процесса сервис возобновил торговлю.
+        settingsStore.setDesiredState(BotStatus.RUNNING.name)
         activityLog.success("🟢 Движок запущен — стратегий активно: ${running.size}")
         running.forEach { s ->
             scope.launch { strategyManager.run(s.toStrategyConfig()) }
@@ -69,6 +74,7 @@ class BotEngine(
         strategyManager.stopAll()
         scope.coroutineContext.cancelChildren()
         _status.value = BotStatus.STOPPED
+        settingsStore.setDesiredState(BotStatus.STOPPED.name)
         activityLog.info("🔴 Движок остановлен")
         notifier.send("🔴 DRX Bot остановлен")
     }
@@ -86,6 +92,7 @@ class BotEngine(
     suspend fun pause() {
         strategyManager.stopAll()
         _status.value = BotStatus.PAUSED
+        settingsStore.setDesiredState(BotStatus.PAUSED.name)
         activityLog.info("⏸ Пауза — новые сделки не открываются (позиции сопровождаются)")
         notifier.send("⏸ DRX Bot приостановлен (открытые позиции сопровождаются)")
     }

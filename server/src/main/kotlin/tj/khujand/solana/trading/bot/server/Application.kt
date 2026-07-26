@@ -83,7 +83,7 @@ fun main() {
     val strategyManager = StrategyManager(
         client, riskManager, notifier, db, scanner, executor, activityLog, settingsStore
     )
-    val engine = BotEngine(client, strategyManager, notifier, db, accountCache, executor, activityLog)
+    val engine = BotEngine(client, strategyManager, notifier, db, accountCache, executor, settingsStore, activityLog)
 
     // Монитор сопровождения позиций: на DEX нет биржевых SL/TP — выходы исполняет бот.
     val tradeMonitor = TradeMonitor(client, db, executor, notifier, activityLog)

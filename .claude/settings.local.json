@@ -128,7 +128,11 @@
       "Bash(./gradlew :shared:compileKotlinDesktop -q)",
       "Bash(./gradlew :shared:tasks --all -q)",
       "Bash(./gradlew :shared:compileDebugKotlinAndroid -q)",
-      "Bash(./gradlew :shared:tasks -q)"
+      "Bash(./gradlew :shared:tasks -q)",
+      "Bash(adb devices *)",
+      "Bash(./gradlew :androidApp:compileDebugKotlin --console=plain -q)",
+      "Bash(./gradlew :server:compileKotlin :desktopApp:compileKotlin --console=plain -q)",
+      "Bash(echo \"EXIT: $?\")"
     ]
   }
 }

@@ -17,6 +17,7 @@ class SettingsStore(private val db: DrxDatabase) {
         const val TELEGRAM_CHAT_ID = "telegram.chat_id"
         const val DEMO_MODE        = "bot.demo_mode"
         const val SIGNAL_ONLY      = "bot.signal_only"
+        const val DESIRED_STATE    = "bot.desired_state"
         const val RPC_URL          = "solana.rpc_url"
         const val WALLET_SEED      = "wallet.seed_phrase"
         const val AI_API_KEY       = "ai.api_key"
@@ -56,6 +57,12 @@ class SettingsStore(private val db: DrxDatabase) {
     // Режим «только сигнал»: бот не открывает сделки, а лишь шлёт сигнал + параметры входа.
     fun getSignalOnly(): Boolean?    = get(Keys.SIGNAL_ONLY)?.toBooleanStrictOrNull()
     fun setSignalOnly(v: Boolean)    = set(Keys.SIGNAL_ONLY, v.toString())
+
+    // Последнее «желаемое» состояние движка (RUNNING/PAUSED/STOPPED) — хранит имя BotStatus.
+    // Нужно, чтобы после того, как ОС убила и перезапустила процесс, foreground-сервис
+    // восстановил торговлю ровно в том состоянии, в котором её оставил пользователь.
+    fun getDesiredState(): String?   = get(Keys.DESIRED_STATE)?.takeIf { it.isNotBlank() }
+    fun setDesiredState(v: String)   = set(Keys.DESIRED_STATE, v)
 
     // ─── Solana ──────────────────────────────────────────────────────────────
 

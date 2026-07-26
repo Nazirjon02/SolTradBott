@@ -16,6 +16,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
 import tj.khujand.solana.trading.bot.DrxRuntimeHolder
+import tj.khujand.solana.trading.bot.data.BotStatus
 
 /**
  * Foreground-сервис DRX: держит процесс живым, пока движок торгует.
@@ -63,12 +64,28 @@ class TokenMonitorService : Service() {
                 stopMonitoring()
                 return START_NOT_STICKY
             }
+            null -> {
+                // Перезапуск системой после kill'а процесса (sticky-рестарт): Activity могло
+                // не подниматься, движок стоит. Восстанавливаем то состояние, в котором его
+                // оставил пользователь. DrxApp уже поднял рантайм — get() не null.
+                restoreDesiredState()
+            }
             else -> {
-                // ACTION_START или null (перезапуск системой): движок уже запущен из UI,
-                // сервис просто удерживает процесс.
+                // ACTION_START из UI: движок стартует сам в App.kt, сервис лишь держит процесс.
             }
         }
         return START_STICKY
+    }
+
+    private fun restoreDesiredState() {
+        serviceScope.launch {
+            val rt = DrxRuntimeHolder.get() ?: return@launch
+            when (rt.settingsStore.getDesiredState()) {
+                BotStatus.RUNNING.name -> rt.engine.start()
+                BotStatus.PAUSED.name -> rt.engine.pause()
+                else -> { /* STOPPED или не задано — торговлю не поднимаем */ }
+            }
+        }
     }
 
     private fun stopMonitoring() {

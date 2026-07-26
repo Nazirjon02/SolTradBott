@@ -41,7 +41,6 @@ import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -88,7 +87,6 @@ import tj.khujand.solana.trading.bot.data.AccountBalance
 import tj.khujand.solana.trading.bot.data.BotStatus
 import tj.khujand.solana.trading.bot.data.OpenPosition
 import tj.khujand.solana.trading.bot.data.db.DrxDatabase
-import tj.khujand.solana.trading.bot.telegram.TelegramBotController
 import tj.khujand.solana.trading.bot.util.formatDexTime
 import tj.khujand.solana.trading.bot.util.formatLocalTime
 import tj.khujand.solana.trading.bot.util.formatLargeNumber
@@ -161,35 +159,9 @@ fun DrxApp(runtime: DrxRuntime? = null) {
     val fallbackSignalOnly = remember { MutableStateFlow(false) }
     val signalOnly by (runtime?.strategyManager?.signalOnly ?: fallbackSignalOnly).collectAsState()
 
-    // Telegram-контроллер: слушает команды. Пересоздаётся при смене токена/чата.
-    val telegramController = remember(runtime, settings.telegramToken, settings.telegramChatId) {
-        val rt = runtime
-        val token = settings.telegramToken
-        val chatId = settings.telegramChatId.toLongOrNull() ?: 0L
-        if (rt != null && token.isNotBlank() && chatId != 0L) {
-            TelegramBotController(
-                botToken = token,
-                allowedChatId = chatId,
-                engine = rt.engine,
-                strategyManager = rt.strategyManager,
-                executor = rt.executor,
-                db = rt.db,
-                tokenCache = rt.tokenCache,
-                settingsStore = rt.settingsStore,
-            )
-        } else null
-    }
-
-    LaunchedEffect(telegramController) {
-        telegramController?.let {
-            runtime?.activityLog?.info("📲 Telegram подключён — слушаю команды")
-            it.startPolling()
-        }
-    }
-
-    DisposableEffect(telegramController) {
-        onDispose { telegramController?.close() }
-    }
+    // Telegram-контроллером (long-polling команд) владеет DrxRuntime — он живёт вместе с
+    // движком и переживает уход Activity. Здесь его больше не запускаем; при смене токена/чата
+    // UI лишь дёргает runtime.syncTelegramController() в обработчике сохранения настроек.
 
     // Статус бота из движка
     val fallbackStatus = remember { MutableStateFlow(BotStatus.STOPPED) }
@@ -329,6 +301,8 @@ fun DrxApp(runtime: DrxRuntime? = null) {
                                 newSettings.telegramToken.trim(),
                                 newSettings.telegramChatId.trim().toLongOrNull() ?: 0L
                             )
+                            // И перезапускаем long-polling контроллера под новый токен/чат.
+                            runtime?.syncTelegramController()
                             settings = newSettings
                         }
                     )
