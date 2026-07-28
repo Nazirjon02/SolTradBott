@@ -143,6 +143,10 @@ data class MarketContext(
 /** Итог разбора одной монеты. */
 data class CoinAnalysis(
     val symbol: String,
+    /** Адрес смарт-контракта (mint) монеты — для копирования и открытия в explorer. */
+    val mint: String = "",
+    /** URL реальной иконки монеты (лого токена), null — иконки нет. */
+    val iconUrl: String? = null,
     val price: Double,
     val trend: TrendDirection,
     /** Таймфрейм тренда, человекочитаемо ("15m", "1h"). */
@@ -197,6 +201,10 @@ object MarketAnalysis {
         trendCandles: List<Candle>,   // старший ТФ
         market: MarketContext,
         cfg: DarsConfig,
+        /** Адрес смарт-контракта (mint) — прокидывается в отчёт для копирования/иконки. */
+        mint: String = "",
+        /** URL реальной иконки монеты, null — иконки нет. */
+        iconUrl: String? = null,
         /** Момент расчёта. Параметр, а не Clock внутри, — чтобы тесты были детерминированными. */
         now: Long = Clock.System.now().toEpochMilliseconds(),
     ): CoinAnalysis {
@@ -232,7 +240,7 @@ object MarketAnalysis {
             resistance: Level? = null,
             barsSince: Int? = null,
         ) = CoinAnalysis(
-            symbol = symbol, price = price, trend = trend,
+            symbol = symbol, mint = mint, iconUrl = iconUrl, price = price, trend = trend,
             trendTimeframe = trendTf, entryTimeframe = entryTf,
             phase = phase, readiness = readiness,
             score = scoreOf(trend, dominance, opposition, setup, entry, blockers),

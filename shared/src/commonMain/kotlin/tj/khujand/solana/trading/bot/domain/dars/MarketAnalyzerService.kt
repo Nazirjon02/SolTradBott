@@ -39,6 +39,8 @@ class MarketAnalyzerService(
             trendCandles = htfJob.await(),
             market = candidate.toMarketContext(),
             cfg = cfg,
+            mint = candidate.mint,
+            iconUrl = tokenIconUrl(candidate.mint),
         )
     }
 
@@ -83,6 +85,13 @@ class MarketAnalyzerService(
             .sortedByDescending { it.score }
     }
 }
+
+/**
+ * URL реальной иконки токена по адресу смарт-контракта (mint). Используем CDN DexScreener —
+ * тот же, что рисует лого монет на самом сайте. Пусто/404 → в UI показываем запасную иконку.
+ */
+fun tokenIconUrl(mint: String): String? =
+    if (mint.isBlank()) null else "https://dd.dexscreener.com/ds-data/tokens/solana/$mint.png"
 
 /** Рыночный фон для анализатора из строки кеша сканера (метрики DexScreener). */
 fun TokenCandidate.toMarketContext() = MarketContext(

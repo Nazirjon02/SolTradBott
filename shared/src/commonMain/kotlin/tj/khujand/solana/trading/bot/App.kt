@@ -1466,7 +1466,9 @@ fun AnalysisScreen(
     var ran by remember { mutableStateOf(false) }
     var progress by remember { mutableStateOf(0 to 0) }
 
-    val batch = candidates.take(12)
+    // Сколько монет разбирать за раз — пользователь задаёт вручную (Int.MAX_VALUE = все кандидаты).
+    var limit by remember { mutableStateOf(25) }
+    val batch = if (limit == Int.MAX_VALUE) candidates else candidates.take(limit)
 
     fun runAnalysis() {
         val svc = analyzer ?: return
@@ -1507,6 +1509,38 @@ fun AnalysisScreen(
                     modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp)
                 )
             }
+        }
+
+        // Ручной выбор количества монет для разбора.
+        if (candidates.isNotEmpty()) {
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Text("Сколько монет разбирать", fontSize = 12.sp, color = TextSecondary)
+                Text("доступно ${candidates.size} · выбрано ${batch.size}", fontSize = 11.sp, color = TextSecondary)
+            }
+            Spacer(Modifier.height(6.dp))
+            LazyRow(
+                contentPadding = PaddingValues(horizontal = 16.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                items(listOf(10, 25, 50, 100)) { n ->
+                    HistoryFilterChip("$n", selected = limit == n) { if (!loading) limit = n }
+                }
+                item {
+                    HistoryFilterChip("Все", selected = limit == Int.MAX_VALUE) { if (!loading) limit = Int.MAX_VALUE }
+                }
+            }
+            if (batch.size > 30) {
+                Spacer(Modifier.height(6.dp))
+                Text(
+                    "Много монет — разбор дольше из-за лимита API GeckoTerminal (~30 запросов/мин)",
+                    fontSize = 10.sp, color = TextSecondary, modifier = Modifier.padding(horizontal = 16.dp)
+                )
+            }
+            Spacer(Modifier.height(12.dp))
         }
 
         when {
@@ -1566,6 +1600,11 @@ fun AnalysisCard(a: CoinAnalysis) {
         a.score >= 40 -> Amber
         else -> TextSecondary
     }
+    val readinessColor = when (a.readiness) {
+        Readiness.READY -> Green
+        Readiness.WAIT -> Amber
+        Readiness.IGNORE -> TextSecondary
+    }
 
     Surface(
         modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp).clickable { expanded = !expanded },
@@ -1573,12 +1612,25 @@ fun AnalysisCard(a: CoinAnalysis) {
     ) {
         Column(Modifier.padding(14.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(a.readiness.emoji, fontSize = 20.sp)
+                // Реальная иконка монеты (лого токена по mint); пока грузится / нет — 🪙.
+                CoinIcon(
+                    url = a.iconUrl,
+                    modifier = Modifier.size(38.dp).clip(CircleShape).background(BgDark)
+                ) {
+                    Text("🪙", fontSize = 20.sp)
+                }
                 Spacer(Modifier.width(10.dp))
                 Column(Modifier.weight(1f)) {
-                    Text(a.symbol, fontWeight = FontWeight.Bold, color = TextPrimary, fontSize = 15.sp,
-                        maxLines = 1, overflow = TextOverflow.Ellipsis)
-                    Text(a.readiness.label, fontSize = 11.sp, color = TextSecondary)
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        Text(a.symbol, fontWeight = FontWeight.Bold, color = TextPrimary, fontSize = 15.sp,
+                            maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        Text(a.readiness.emoji, fontSize = 12.sp)
+                    }
+                    Text(a.readiness.label, fontSize = 11.sp, color = readinessColor)
+                    if (a.mint.isNotBlank()) {
+                        Spacer(Modifier.height(2.dp))
+                        MintCopyRow(a.mint)
+                    }
                 }
                 Column(horizontalAlignment = Alignment.End) {
                     Surface(color = scoreColor.copy(alpha = 0.15f), shape = RoundedCornerShape(8.dp)) {
