@@ -133,6 +133,8 @@
       "Bash(./gradlew :androidApp:compileDebugKotlin --console=plain -q)",
       "Bash(./gradlew :server:compileKotlin :desktopApp:compileKotlin --console=plain -q)",
       "Bash(echo \"EXIT: $?\")"
+      "Bash(./gradlew :shared:tasks --all -q)",
+      "Bash(ls \"C:/Users/Virtual/AndroidStudioProjects/\")"
     ]
   }
 }

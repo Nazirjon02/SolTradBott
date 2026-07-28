@@ -1,5 +1,6 @@
 package tj.khujand.solana.trading.bot.domain.dars
 
+import tj.khujand.solana.trading.bot.exchange.dex.FilterSettings
 import kotlin.math.abs
 
 /** Направление тренда/ноги. */
@@ -59,7 +60,34 @@ data class DarsConfig(
     val useTrendLevels: Boolean,
     val useFalseBreakout: Boolean,
     val useTriangle: Boolean,
-)
+) {
+    companion object {
+        /**
+         * Единый мост FilterSettings → DarsConfig: один и тот же конфиг питает и торговый
+         * движок [DarsEntryEngine], и информационный анализатор [MarketAnalysis], поэтому
+         * «второе мнение» считается на тех же порогах, что и реальный вход.
+         */
+        fun from(s: FilterSettings) = DarsConfig(
+            higherTf = s.darsHigherTf,
+            higherTfAggregate = s.darsHigherTfAggregate,
+            entryTf = s.darsEntryTf,
+            entryTfAggregate = s.darsEntryTfAggregate,
+            candleLimit = s.darsCandleLimit.coerceIn(30, 1000),
+            swingPivotPct = s.darsSwingPivotPct,
+            requireHtfTrend = s.darsRequireHtfTrend,
+            dominanceRatio = s.darsDominanceRatio.coerceAtLeast(1.0),
+            minCorrectionLenPct = s.darsMinCorrectionLenPct.coerceIn(0.0, 100.0),
+            rejectAtResistance = s.darsRejectAtResistance,
+            resistanceProximityPct = s.darsResistanceProximityPct.coerceAtLeast(0.0),
+            minLegs = s.darsMinLegs.coerceAtLeast(2),
+            failClosed = s.darsFailClosed,
+            useImpulseCorrection = s.darsUseImpulseCorrection,
+            useTrendLevels = s.darsUseTrendLevels,
+            useFalseBreakout = s.darsUseFalseBreakout,
+            useTriangle = s.darsUseTriangle,
+        )
+    }
+}
 
 /** Ценовой уровень (поддержка/сопротивление). */
 data class Level(

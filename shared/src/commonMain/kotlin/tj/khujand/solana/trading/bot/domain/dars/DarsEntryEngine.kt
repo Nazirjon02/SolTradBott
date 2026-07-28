@@ -108,25 +108,7 @@ class DarsEntryEngine(
         return DarsSignal(false, trend, null, 0, rejects.ifEmpty { listOf("ни один сетап не включён") })
     }
 
-    private fun configFrom(s: FilterSettings) = DarsConfig(
-        higherTf = s.darsHigherTf,
-        higherTfAggregate = s.darsHigherTfAggregate,
-        entryTf = s.darsEntryTf,
-        entryTfAggregate = s.darsEntryTfAggregate,
-        candleLimit = s.darsCandleLimit.coerceIn(30, 1000),
-        swingPivotPct = s.darsSwingPivotPct,
-        requireHtfTrend = s.darsRequireHtfTrend,
-        dominanceRatio = s.darsDominanceRatio.coerceAtLeast(1.0),
-        minCorrectionLenPct = s.darsMinCorrectionLenPct.coerceIn(0.0, 100.0),
-        rejectAtResistance = s.darsRejectAtResistance,
-        resistanceProximityPct = s.darsResistanceProximityPct.coerceAtLeast(0.0),
-        minLegs = s.darsMinLegs.coerceAtLeast(2),
-        failClosed = s.darsFailClosed,
-        useImpulseCorrection = s.darsUseImpulseCorrection,
-        useTrendLevels = s.darsUseTrendLevels,
-        useFalseBreakout = s.darsUseFalseBreakout,
-        useTriangle = s.darsUseTriangle,
-    )
+    private fun configFrom(s: FilterSettings) = DarsConfig.from(s)
 
     /**
      * Обогащает прошедший сигнал целью тейк-профита и структурным стопом.

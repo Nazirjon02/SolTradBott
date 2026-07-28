@@ -29,6 +29,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
@@ -83,6 +84,15 @@ import tj.khujand.solana.trading.bot.core.engine.ActivityLevel
 import tj.khujand.solana.trading.bot.core.engine.ActivityStats
 import tj.khujand.solana.trading.bot.core.strategy.StrategyConfig
 import tj.khujand.solana.trading.bot.core.strategy.StrategyType
+import tj.khujand.solana.trading.bot.core.strategy.toDarsFilterSettings
+import tj.khujand.solana.trading.bot.domain.dars.CoinAnalysis
+import tj.khujand.solana.trading.bot.domain.dars.DarsConfig
+import tj.khujand.solana.trading.bot.domain.dars.LegCharacter
+import tj.khujand.solana.trading.bot.domain.dars.MarketAnalysis
+import tj.khujand.solana.trading.bot.domain.dars.MarketAnalyzerService
+import tj.khujand.solana.trading.bot.domain.dars.Readiness
+import tj.khujand.solana.trading.bot.domain.dars.TrendDirection
+import tj.khujand.solana.trading.bot.exchange.dex.TokenCandidate
 import tj.khujand.solana.trading.bot.data.AccountBalance
 import tj.khujand.solana.trading.bot.data.BotStatus
 import tj.khujand.solana.trading.bot.data.OpenPosition
@@ -107,7 +117,7 @@ private val TextPrimary   = Color(0xFFEAF0FB)
 private val TextSecondary = Color(0xFF6B7A99)
 private val BorderColor   = Color(0xFF1E2D45)
 
-enum class Screen { DASHBOARD, HISTORY, STATS, STRATEGIES, SETTINGS }
+enum class Screen { DASHBOARD, ANALYSIS, HISTORY, STATS, STRATEGIES, SETTINGS }
 
 // ─── Root ─────────────────────────────────────────────────────────────────────
 
@@ -256,6 +266,11 @@ fun DrxApp(runtime: DrxRuntime? = null) {
                             }
                         }
                     }
+                    Screen.ANALYSIS -> AnalysisScreen(
+                        candidates = runtime?.tokenCache?.all() ?: emptyList(),
+                        analyzer = runtime?.marketAnalyzer,
+                        darsConfig = strategies.activeDarsConfig(),
+                    )
                     Screen.HISTORY -> HistoryScreen(closedTrades)
                     Screen.STATS -> StatsScreen(closedTrades)
                     Screen.STRATEGIES -> StrategiesScreen(
@@ -334,6 +349,7 @@ fun BottomNav(current: Screen, onSelect: (Screen) -> Unit) {
             verticalAlignment = Alignment.CenterVertically
         ) {
             NavItem(Modifier.weight(1f), "📊", "Главная",   current == Screen.DASHBOARD)  { onSelect(Screen.DASHBOARD) }
+            NavItem(Modifier.weight(1f), "🔬", "Анализ",    current == Screen.ANALYSIS)   { onSelect(Screen.ANALYSIS) }
             NavItem(Modifier.weight(1f), "📋", "История",   current == Screen.HISTORY)    { onSelect(Screen.HISTORY) }
             NavItem(Modifier.weight(1f), "📈", "Аналитика", current == Screen.STATS)      { onSelect(Screen.STATS) }
             NavItem(Modifier.weight(1f), "🤖", "Стратегии", current == Screen.STRATEGIES) { onSelect(Screen.STRATEGIES) }
@@ -1420,6 +1436,229 @@ fun MiniStat(label: String, value: String, color: Color, modifier: Modifier = Mo
             Spacer(Modifier.height(4.dp))
             Text(value, fontSize = 13.sp, fontWeight = FontWeight.Bold, color = color)
         }
+    }
+}
+
+// ─── Analysis screen (порт MarketAnalyzer из MRX) ───────────────────────────────
+
+/** Конфиг Dars для анализатора: активная DARS-стратегия → её пороги; иначе — дефолты. */
+private fun List<StrategyConfig>.activeDarsConfig(): DarsConfig {
+    val cfg = firstOrNull { it.type == StrategyType.DARS.name && it.isActive }
+        ?: firstOrNull { it.type == StrategyType.DARS.name }
+        ?: StrategyConfig(id = "analysis-default")
+    return DarsConfig.from(cfg.toDarsFilterSettings())
+}
+
+/**
+ * Экран «Анализ монет» — информационное «второе мнение» по методике Dars (не торговля).
+ * Разбирает кандидатов сканера через [MarketAnalyzerService] и показывает их по убыванию балла:
+ * тренд, фаза, готовность, зона входа и что мешает войти прямо сейчас.
+ */
+@Composable
+fun AnalysisScreen(
+    candidates: List<TokenCandidate>,
+    analyzer: MarketAnalyzerService?,
+    darsConfig: DarsConfig,
+) {
+    val scope = rememberCoroutineScope()
+    var reports by remember { mutableStateOf<List<CoinAnalysis>>(emptyList()) }
+    var loading by remember { mutableStateOf(false) }
+    var ran by remember { mutableStateOf(false) }
+    var progress by remember { mutableStateOf(0 to 0) }
+
+    val batch = candidates.take(12)
+
+    fun runAnalysis() {
+        val svc = analyzer ?: return
+        if (loading || batch.isEmpty()) return
+        loading = true; ran = true; progress = 0 to batch.size; reports = emptyList()
+        scope.launch {
+            reports = svc.analyzeAll(
+                batch, darsConfig, concurrency = 3,
+                onProgress = { done, total -> progress = done to total },
+            )
+            loading = false
+        }
+    }
+
+    Column(modifier = Modifier.fillMaxSize()) {
+        Row(
+            modifier = Modifier.fillMaxWidth().statusBarsPadding().padding(horizontal = 16.dp, vertical = 16.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Column(Modifier.weight(1f)) {
+                Text("Анализ монет", fontSize = 22.sp, fontWeight = FontWeight.ExtraBold, color = TextPrimary)
+                Text(
+                    "Второе мнение по методике Dars · ${analysisTfShort(darsConfig.higherTf, darsConfig.higherTfAggregate)} → " +
+                        analysisTfShort(darsConfig.entryTf, darsConfig.entryTfAggregate),
+                    fontSize = 12.sp, color = TextSecondary
+                )
+            }
+            Surface(
+                color = if (loading || batch.isEmpty()) SurfaceCard else GreenDim,
+                shape = RoundedCornerShape(10.dp),
+                modifier = Modifier.clickable(enabled = !loading && batch.isNotEmpty()) { runAnalysis() }
+            ) {
+                Text(
+                    if (loading) "⏳ ${progress.first}/${progress.second}" else "⟳ Анализ",
+                    color = if (loading || batch.isEmpty()) TextSecondary else Green,
+                    fontWeight = FontWeight.Bold, fontSize = 13.sp,
+                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp)
+                )
+            }
+        }
+
+        when {
+            candidates.isEmpty() ->
+                EmptyState("Кандидатов сканера нет — запустите бота, чтобы сканер наполнил список")
+            !ran ->
+                EmptyState("Нажмите «Анализ», чтобы разобрать ${batch.size} монет по методике Dars")
+            loading && reports.isEmpty() ->
+                Box(Modifier.fillMaxWidth().padding(top = 48.dp), contentAlignment = Alignment.Center) {
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        CircularProgressIndicator(color = Green)
+                        Spacer(Modifier.height(12.dp))
+                        Text("Разбираю ${progress.first}/${progress.second}…", color = TextSecondary, fontSize = 13.sp)
+                    }
+                }
+            reports.isEmpty() ->
+                EmptyState("Не удалось разобрать монеты — нет свечей (GeckoTerminal не отдал данные)")
+            else -> {
+                val ready = reports.count { it.readiness == Readiness.READY }
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    MiniStat("Разобрано", "${reports.size}", Blue, Modifier.weight(1f))
+                    MiniStat("Готовы", "$ready", if (ready > 0) Green else TextSecondary, Modifier.weight(1f))
+                    MiniStat("Лучший балл", "${reports.firstOrNull()?.score ?: 0}", Amber, Modifier.weight(1f))
+                }
+                Spacer(Modifier.height(12.dp))
+                LazyColumn(
+                    contentPadding = PaddingValues(bottom = 16.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    items(reports) { AnalysisCard(it) }
+                }
+            }
+        }
+    }
+}
+
+private fun analysisTfShort(tf: String, agg: Int): String = when (tf.lowercase()) {
+    "minute" -> "${agg}m"
+    "hour" -> "${agg}h"
+    "day" -> "${agg}d"
+    else -> "$tf×$agg"
+}
+
+@Composable
+fun AnalysisCard(a: CoinAnalysis) {
+    var expanded by remember { mutableStateOf(false) }
+    val (trendText, trendColor) = when (a.trend) {
+        TrendDirection.UP -> "Тренд ▲" to Green
+        TrendDirection.DOWN -> "Тренд ▼" to Red
+        TrendDirection.FLAT -> "Тренд —" to TextSecondary
+    }
+    val scoreColor = when {
+        a.score >= 70 -> Green
+        a.score >= 40 -> Amber
+        else -> TextSecondary
+    }
+
+    Surface(
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp).clickable { expanded = !expanded },
+        color = SurfaceCard, shape = RoundedCornerShape(14.dp)
+    ) {
+        Column(Modifier.padding(14.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(a.readiness.emoji, fontSize = 20.sp)
+                Spacer(Modifier.width(10.dp))
+                Column(Modifier.weight(1f)) {
+                    Text(a.symbol, fontWeight = FontWeight.Bold, color = TextPrimary, fontSize = 15.sp,
+                        maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    Text(a.readiness.label, fontSize = 11.sp, color = TextSecondary)
+                }
+                Column(horizontalAlignment = Alignment.End) {
+                    Surface(color = scoreColor.copy(alpha = 0.15f), shape = RoundedCornerShape(8.dp)) {
+                        Text("${a.score}", color = scoreColor, fontWeight = FontWeight.ExtraBold, fontSize = 15.sp,
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 3.dp))
+                    }
+                    Text(a.timeframeLabel, fontSize = 10.sp, color = TextSecondary)
+                }
+            }
+
+            Spacer(Modifier.height(10.dp))
+            Row(
+                modifier = Modifier.horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                Tag(trendText, trendColor)
+                Tag(a.phase.label, Purple)
+                a.setup?.let { Tag("сетап", Blue) }
+                if (a.blockers.isNotEmpty()) Tag("⛔ ${a.blockers.size}", Red)
+            }
+            a.setup?.let {
+                Spacer(Modifier.height(6.dp))
+                Text(it, fontSize = 12.sp, color = Blue)
+            }
+
+            if (expanded) {
+                Spacer(Modifier.height(12.dp))
+                a.impulse?.let { AnalysisCharLine("Импульс", it) }
+                a.correction?.let { AnalysisCharLine("Коррекция", it) }
+
+                a.entry?.let { e ->
+                    Spacer(Modifier.height(10.dp))
+                    Text("Зона входа (ориентир)", fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = TextPrimary)
+                    Spacer(Modifier.height(4.dp))
+                    AnalysisKeyVal("Зона", "${MarketAnalysis.fmtPrice(e.zoneLow)} – ${MarketAnalysis.fmtPrice(e.zoneHigh)}", TextPrimary)
+                    AnalysisKeyVal("Стоп", "${MarketAnalysis.fmtPrice(e.stopLoss)}  (−${"%.1f".format(e.riskPercent)}%)", Red)
+                    AnalysisKeyVal("Цель", "${MarketAnalysis.fmtPrice(e.takeProfit)}  (+${"%.1f".format(e.rewardPercent)}%)", Green)
+                    AnalysisKeyVal("Риск/прибыль", "%.2f".format(e.riskReward), if (e.riskReward >= 1.5) Green else Amber)
+                    Spacer(Modifier.height(4.dp))
+                    Text("Триггер: ${e.trigger}", fontSize = 11.sp, color = TextSecondary)
+                }
+
+                if (a.blockers.isNotEmpty()) {
+                    Spacer(Modifier.height(10.dp))
+                    Text("Мешает входу (Урок 4):", fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = Amber)
+                    Spacer(Modifier.height(2.dp))
+                    a.blockers.forEach { Text("• $it", fontSize = 11.sp, color = TextSecondary) }
+                }
+
+                if (a.notes.isNotEmpty()) {
+                    Spacer(Modifier.height(10.dp))
+                    a.notes.forEach { Text("• $it", fontSize = 11.sp, color = TextSecondary) }
+                }
+            } else {
+                Spacer(Modifier.height(6.dp))
+                Text("Нажмите, чтобы раскрыть разбор", fontSize = 10.sp, color = TextSecondary)
+            }
+        }
+    }
+}
+
+@Composable
+private fun AnalysisCharLine(title: String, c: LegCharacter) {
+    Row(modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp)) {
+        Text(title, fontSize = 11.sp, color = TextSecondary, modifier = Modifier.width(78.dp))
+        Text(
+            "скорость ${c.speedLabel}, бары ${c.barSizeLabel}, закрытия ${c.closeLabel}, объём ${c.volumeLabel}",
+            fontSize = 11.sp, color = TextPrimary, modifier = Modifier.weight(1f)
+        )
+    }
+}
+
+@Composable
+private fun AnalysisKeyVal(key: String, value: String, valueColor: Color) {
+    Row(
+        modifier = Modifier.fillMaxWidth().padding(vertical = 1.dp),
+        horizontalArrangement = Arrangement.SpaceBetween
+    ) {
+        Text(key, fontSize = 12.sp, color = TextSecondary)
+        Text(value, fontSize = 12.sp, color = valueColor, fontWeight = FontWeight.Medium)
     }
 }
 
