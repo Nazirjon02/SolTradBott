@@ -1708,6 +1708,20 @@ fun AnalysisCard(
                 Text(it, fontSize = 12.sp, color = Blue)
             }
 
+            // Время разбора в двух видах: «наше» — когда мы посчитали (локальная зона устройства);
+            // «DEX» — время открытия последней свечи из GeckoTerminal в UTC (сверять с графиком DexScreener).
+            Spacer(Modifier.height(8.dp))
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                Text("🕒", fontSize = 10.sp)
+                Text(
+                    "наше ${formatLocalTime(a.timing.analyzedAt)} · DEX ${formatDexTime(a.timing.lastBarTime)} UTC",
+                    fontSize = 10.sp, color = TextSecondary
+                )
+            }
+
             if (expanded) {
                 Spacer(Modifier.height(12.dp))
                 a.impulse?.let { AnalysisCharLine("Импульс", it) }
