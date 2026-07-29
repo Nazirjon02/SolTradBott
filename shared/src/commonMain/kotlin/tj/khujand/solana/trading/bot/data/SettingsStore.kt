@@ -21,6 +21,7 @@ class SettingsStore(private val db: DrxDatabase) {
         const val RPC_URL          = "solana.rpc_url"
         const val WALLET_SEED      = "wallet.seed_phrase"
         const val AI_API_KEY       = "ai.api_key"
+        const val ANALYSIS_FAVORITES = "analysis.favorites"
     }
 
     // ─── Raw API ─────────────────────────────────────────────────────────────
@@ -78,4 +79,32 @@ class SettingsStore(private val db: DrxDatabase) {
 
     fun getAiApiKey(): String?       = get(Keys.AI_API_KEY)?.takeIf { it.isNotBlank() }
     fun setAiApiKey(v: String)       = set(Keys.AI_API_KEY, v)
+
+    // ─── Избранное на экране «Анализ» ────────────────────────────────────────
+
+    // Множество mint-адресов монет, отмеченных пользователем как избранные. Храним одной
+    // строкой (адреса через перевод строки) в том же key/value-хранилище, что и остальные
+    // настройки, — отдельная таблица ради списка из нескольких строк избыточна.
+    fun getFavoriteMints(): Set<String> =
+        get(Keys.ANALYSIS_FAVORITES)
+            ?.split('\n')
+            ?.map { it.trim() }
+            ?.filter { it.isNotBlank() }
+            ?.toSet()
+            ?: emptySet()
+
+    fun setFavoriteMints(mints: Set<String>) =
+        set(Keys.ANALYSIS_FAVORITES, mints.joinToString("\n"))
+
+    fun isFavorite(mint: String): Boolean =
+        mint.isNotBlank() && getFavoriteMints().contains(mint)
+
+    /** Переключает избранное для монеты. Возвращает новое состояние (true — теперь в избранном). */
+    fun toggleFavorite(mint: String): Boolean {
+        if (mint.isBlank()) return false
+        val current = getFavoriteMints().toMutableSet()
+        val nowFavorite = if (current.remove(mint)) false else { current.add(mint); true }
+        setFavoriteMints(current)
+        return nowFavorite
+    }
 }

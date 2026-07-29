@@ -96,6 +96,7 @@ import tj.khujand.solana.trading.bot.exchange.dex.TokenCandidate
 import tj.khujand.solana.trading.bot.data.AccountBalance
 import tj.khujand.solana.trading.bot.data.BotStatus
 import tj.khujand.solana.trading.bot.data.OpenPosition
+import tj.khujand.solana.trading.bot.data.SettingsStore
 import tj.khujand.solana.trading.bot.data.db.DrxDatabase
 import tj.khujand.solana.trading.bot.util.formatDexTime
 import tj.khujand.solana.trading.bot.util.formatLocalTime
@@ -270,6 +271,7 @@ fun DrxApp(runtime: DrxRuntime? = null) {
                         candidates = runtime?.tokenCache?.all() ?: emptyList(),
                         analyzer = runtime?.marketAnalyzer,
                         darsConfig = strategies.activeDarsConfig(),
+                        settingsStore = settingsStore,
                     )
                     Screen.HISTORY -> HistoryScreen(closedTrades)
                     Screen.STATS -> StatsScreen(closedTrades)
@@ -1459,12 +1461,24 @@ fun AnalysisScreen(
     candidates: List<TokenCandidate>,
     analyzer: MarketAnalyzerService?,
     darsConfig: DarsConfig,
+    settingsStore: SettingsStore? = null,
 ) {
     val scope = rememberCoroutineScope()
     var reports by remember { mutableStateOf<List<CoinAnalysis>>(emptyList()) }
     var loading by remember { mutableStateOf(false) }
     var ran by remember { mutableStateOf(false) }
     var progress by remember { mutableStateOf(0 to 0) }
+
+    // Избранное — множество mint-адресов, отмеченных пользователем. Читаем один раз из БД,
+    // держим в памяти и синхронизируем при каждом переключении звёздочки.
+    var favorites by remember { mutableStateOf(settingsStore?.getFavoriteMints() ?: emptySet()) }
+    var favoritesOnly by remember { mutableStateOf(false) }
+    fun toggleFavorite(mint: String) {
+        val store = settingsStore ?: return
+        if (mint.isBlank()) return
+        store.toggleFavorite(mint)
+        favorites = store.getFavoriteMints()
+    }
 
     // Сколько монет разбирать за раз — пользователь задаёт вручную (Int.MAX_VALUE = все кандидаты).
     var limit by remember { mutableStateOf(25) }
@@ -1560,20 +1574,41 @@ fun AnalysisScreen(
                 EmptyState("Не удалось разобрать монеты — нет свечей (GeckoTerminal не отдал данные)")
             else -> {
                 val ready = reports.count { it.readiness == Readiness.READY }
+                val favCount = reports.count { it.mint.isNotBlank() && it.mint in favorites }
+                val shown = if (favoritesOnly) reports.filter { it.mint.isNotBlank() && it.mint in favorites } else reports
                 Row(
                     modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     MiniStat("Разобрано", "${reports.size}", Blue, Modifier.weight(1f))
                     MiniStat("Готовы", "$ready", if (ready > 0) Green else TextSecondary, Modifier.weight(1f))
-                    MiniStat("Лучший балл", "${reports.firstOrNull()?.score ?: 0}", Amber, Modifier.weight(1f))
+                    MiniStat("В избранном", "$favCount", if (favCount > 0) Amber else TextSecondary, Modifier.weight(1f))
                 }
                 Spacer(Modifier.height(12.dp))
-                LazyColumn(
-                    contentPadding = PaddingValues(bottom = 16.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                // Фильтр списка: все монеты или только избранные.
+                LazyRow(
+                    contentPadding = PaddingValues(horizontal = 16.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    items(reports) { AnalysisCard(it) }
+                    item { HistoryFilterChip("Все (${reports.size})", selected = !favoritesOnly) { favoritesOnly = false } }
+                    item { HistoryFilterChip("⭐ Избранное ($favCount)", selected = favoritesOnly) { favoritesOnly = true } }
+                }
+                Spacer(Modifier.height(12.dp))
+                if (shown.isEmpty()) {
+                    EmptyState("В избранном пусто — отметьте монеты звёздочкой ⭐ на карточке")
+                } else {
+                    LazyColumn(
+                        contentPadding = PaddingValues(bottom = 16.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        items(shown) { a ->
+                            AnalysisCard(
+                                a = a,
+                                isFavorite = a.mint.isNotBlank() && a.mint in favorites,
+                                onToggleFavorite = { toggleFavorite(a.mint) },
+                            )
+                        }
+                    }
                 }
             }
         }
@@ -1588,7 +1623,11 @@ private fun analysisTfShort(tf: String, agg: Int): String = when (tf.lowercase()
 }
 
 @Composable
-fun AnalysisCard(a: CoinAnalysis) {
+fun AnalysisCard(
+    a: CoinAnalysis,
+    isFavorite: Boolean = false,
+    onToggleFavorite: () -> Unit = {},
+) {
     var expanded by remember { mutableStateOf(false) }
     val (trendText, trendColor) = when (a.trend) {
         TrendDirection.UP -> "Тренд ▲" to Green
@@ -1631,6 +1670,19 @@ fun AnalysisCard(a: CoinAnalysis) {
                         Spacer(Modifier.height(2.dp))
                         MintCopyRow(a.mint)
                     }
+                }
+                // Звёздочка «в избранное» — доступна только когда монету можно опознать по mint.
+                if (a.mint.isNotBlank()) {
+                    Text(
+                        if (isFavorite) "⭐" else "☆",
+                        fontSize = 20.sp,
+                        color = if (isFavorite) Amber else TextSecondary,
+                        modifier = Modifier
+                            .clip(CircleShape)
+                            .clickable { onToggleFavorite() }
+                            .padding(6.dp)
+                    )
+                    Spacer(Modifier.width(4.dp))
                 }
                 Column(horizontalAlignment = Alignment.End) {
                     Surface(color = scoreColor.copy(alpha = 0.15f), shape = RoundedCornerShape(8.dp)) {
