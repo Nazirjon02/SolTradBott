@@ -1,6 +1,8 @@
 package tj.khujand.solana.trading.bot.data
 
 import kotlin.time.Clock
+import kotlinx.serialization.encodeToString
+import kotlinx.serialization.json.Json
 import tj.khujand.solana.trading.bot.data.db.DrxDatabase
 
 /**
@@ -82,29 +84,58 @@ class SettingsStore(private val db: DrxDatabase) {
 
     // ─── Избранное на экране «Анализ» ────────────────────────────────────────
 
-    // Множество mint-адресов монет, отмеченных пользователем как избранные. Храним одной
-    // строкой (адреса через перевод строки) в том же key/value-хранилище, что и остальные
-    // настройки, — отдельная таблица ради списка из нескольких строк избыточна.
-    fun getFavoriteMints(): Set<String> =
-        get(Keys.ANALYSIS_FAVORITES)
-            ?.split('\n')
-            ?.map { it.trim() }
-            ?.filter { it.isNotBlank() }
-            ?.toSet()
-            ?: emptySet()
+    // Избранные монеты храним как JSON-список самодостаточных снимков [FavoriteCoin] в том же
+    // key/value-хранилище. Снимок (символ, иконка, балл, тренд, время разбора) позволяет показать
+    // избранное прямо из БД в любой момент — без запуска анализа и даже когда монета ушла из
+    // сканера. Раньше тут лежали только mint-адреса, а карточка бралась из свежего разбора, поэтому
+    // после ротации кандидатов избранное выглядело «пропавшим». Старый формат читаем для совместимости.
 
-    fun setFavoriteMints(mints: Set<String>) =
-        set(Keys.ANALYSIS_FAVORITES, mints.joinToString("\n"))
+    private val favoritesJson = Json { ignoreUnknownKeys = true; encodeDefaults = true }
+
+    /** Все избранные монеты — снимки из БД. Пусто, если ничего не отмечено. */
+    fun getFavorites(): List<FavoriteCoin> {
+        val raw = get(Keys.ANALYSIS_FAVORITES)?.takeIf { it.isNotBlank() } ?: return emptyList()
+        // Новый формат — JSON-массив. Старый — mint-адреса через перевод строки (мигрируем на лету).
+        return if (raw.trimStart().startsWith("[")) {
+            runCatching { favoritesJson.decodeFromString<List<FavoriteCoin>>(raw) }.getOrDefault(emptyList())
+        } else {
+            raw.split('\n').map { it.trim() }.filter { it.isNotBlank() }
+                .map { FavoriteCoin(mint = it) }
+        }
+    }
+
+    private fun saveFavorites(list: List<FavoriteCoin>) =
+        set(Keys.ANALYSIS_FAVORITES, favoritesJson.encodeToString(list))
+
+    /** Множество mint-адресов избранного — для отметки звёздочки на карточках. */
+    fun getFavoriteMints(): Set<String> = getFavorites().mapTo(mutableSetOf()) { it.mint }
 
     fun isFavorite(mint: String): Boolean =
-        mint.isNotBlank() && getFavoriteMints().contains(mint)
+        mint.isNotBlank() && getFavorites().any { it.mint == mint }
 
-    /** Переключает избранное для монеты. Возвращает новое состояние (true — теперь в избранном). */
-    fun toggleFavorite(mint: String): Boolean {
-        if (mint.isBlank()) return false
-        val current = getFavoriteMints().toMutableSet()
-        val nowFavorite = if (current.remove(mint)) false else { current.add(mint); true }
-        setFavoriteMints(current)
-        return nowFavorite
+    /**
+     * Добавляет монету в избранное или обновляет её снимок свежими данными разбора (по mint).
+     * [FavoriteCoin.addedAt] («когда добавила») ставим один раз при первом добавлении и сохраняем
+     * при последующих обновлениях снимка — чтобы это время не перетиралось авто-разбором. Порядок
+     * сохраняем: обновление не двигает монету в конец списка.
+     */
+    fun upsertFavorite(coin: FavoriteCoin) {
+        if (coin.mint.isBlank()) return
+        val now = Clock.System.now().toEpochMilliseconds()
+        val current = getFavorites()
+        val existing = current.firstOrNull { it.mint == coin.mint }
+        val addedAt = existing?.addedAt?.takeIf { it > 0L } ?: coin.addedAt.takeIf { it > 0L } ?: now
+        val stamped = coin.copy(addedAt = addedAt)
+        val list = if (existing != null) {
+            current.map { if (it.mint == coin.mint) stamped else it }
+        } else {
+            current + stamped
+        }
+        saveFavorites(list)
+    }
+
+    fun removeFavorite(mint: String) {
+        if (mint.isBlank()) return
+        saveFavorites(getFavorites().filter { it.mint != mint })
     }
 }

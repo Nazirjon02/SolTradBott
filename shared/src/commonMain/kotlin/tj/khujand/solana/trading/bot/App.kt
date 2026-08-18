@@ -95,6 +95,7 @@ import tj.khujand.solana.trading.bot.domain.dars.TrendDirection
 import tj.khujand.solana.trading.bot.exchange.dex.TokenCandidate
 import tj.khujand.solana.trading.bot.data.AccountBalance
 import tj.khujand.solana.trading.bot.data.BotStatus
+import tj.khujand.solana.trading.bot.data.FavoriteCoin
 import tj.khujand.solana.trading.bot.data.OpenPosition
 import tj.khujand.solana.trading.bot.data.SettingsStore
 import tj.khujand.solana.trading.bot.data.db.DrxDatabase
@@ -1469,15 +1470,21 @@ fun AnalysisScreen(
     var ran by remember { mutableStateOf(false) }
     var progress by remember { mutableStateOf(0 to 0) }
 
-    // Избранное — множество mint-адресов, отмеченных пользователем. Читаем один раз из БД,
-    // держим в памяти и синхронизируем при каждом переключении звёздочки.
-    var favorites by remember { mutableStateOf(settingsStore?.getFavoriteMints() ?: emptySet()) }
+    // Избранное — самодостаточные снимки монет из БД. Показываем их напрямую, поэтому список
+    // виден в любой момент: без запуска анализа и даже когда монета давно ушла из сканера.
+    var favorites by remember { mutableStateOf(settingsStore?.getFavorites() ?: emptyList()) }
+    val favoriteMints = remember(favorites) { favorites.mapTo(mutableSetOf()) { it.mint } }
     var favoritesOnly by remember { mutableStateOf(false) }
-    fun toggleFavorite(mint: String) {
+    fun toggleFavorite(a: CoinAnalysis) {
         val store = settingsStore ?: return
-        if (mint.isBlank()) return
-        store.toggleFavorite(mint)
-        favorites = store.getFavoriteMints()
+        if (a.mint.isBlank()) return
+        if (store.isFavorite(a.mint)) store.removeFavorite(a.mint) else store.upsertFavorite(a.toFavorite())
+        favorites = store.getFavorites()
+    }
+    fun removeFavorite(mint: String) {
+        val store = settingsStore ?: return
+        store.removeFavorite(mint)
+        favorites = store.getFavorites()
     }
 
     // Сколько монет разбирать за раз — пользователь задаёт вручную (Int.MAX_VALUE = все кандидаты).
@@ -1494,6 +1501,13 @@ fun AnalysisScreen(
                 onProgress = { done, total -> progress = done to total },
             )
             loading = false
+            // Свежий разбор — повод обновить снимки уже избранных монет актуальными данными.
+            settingsStore?.let { store ->
+                val favMints = store.getFavoriteMints()
+                reports.filter { it.mint.isNotBlank() && it.mint in favMints }
+                    .forEach { store.upsertFavorite(it.toFavorite()) }
+                favorites = store.getFavorites()
+            }
         }
     }
 
@@ -1557,7 +1571,42 @@ fun AnalysisScreen(
             Spacer(Modifier.height(12.dp))
         }
 
-        when {
+        // Переключатель «Все / Избранное» — доступен, как только есть избранное или результаты
+        // разбора. Так к сохранённым монетам можно вернуться без запуска анализа.
+        if (favorites.isNotEmpty() || reports.isNotEmpty()) {
+            LazyRow(
+                contentPadding = PaddingValues(horizontal = 16.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                item { HistoryFilterChip("Все (${reports.size})", selected = !favoritesOnly) { favoritesOnly = false } }
+                item { HistoryFilterChip("⭐ Избранное (${favorites.size})", selected = favoritesOnly) { favoritesOnly = true } }
+            }
+            Spacer(Modifier.height(12.dp))
+        }
+
+        if (favoritesOnly) {
+            // Избранное показываем прямо из БД — не зависит от кандидатов сканера и запуска анализа.
+            if (favorites.isEmpty()) {
+                EmptyState("В избранном пусто — отметьте монеты звёздочкой ⭐ на карточке разбора")
+            } else {
+                val now = remember(favorites) { Clock.System.now().toEpochMilliseconds() }
+                LazyColumn(
+                    contentPadding = PaddingValues(bottom = 16.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    item {
+                        Text(
+                            "${favorites.size} монет в избранном · данные из последнего разбора этой монеты",
+                            fontSize = 11.sp, color = TextSecondary,
+                            modifier = Modifier.padding(horizontal = 16.dp, vertical = 2.dp)
+                        )
+                    }
+                    items(favorites) { f ->
+                        FavoriteCard(c = f, now = now, onRemove = { removeFavorite(f.mint) })
+                    }
+                }
+            }
+        } else when {
             candidates.isEmpty() ->
                 EmptyState("Кандидатов сканера нет — запустите бота, чтобы сканер наполнил список")
             !ran ->
@@ -1574,8 +1623,7 @@ fun AnalysisScreen(
                 EmptyState("Не удалось разобрать монеты — нет свечей (GeckoTerminal не отдал данные)")
             else -> {
                 val ready = reports.count { it.readiness == Readiness.READY }
-                val favCount = reports.count { it.mint.isNotBlank() && it.mint in favorites }
-                val shown = if (favoritesOnly) reports.filter { it.mint.isNotBlank() && it.mint in favorites } else reports
+                val favCount = reports.count { it.mint.isNotBlank() && it.mint in favoriteMints }
                 Row(
                     modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
@@ -1585,35 +1633,66 @@ fun AnalysisScreen(
                     MiniStat("В избранном", "$favCount", if (favCount > 0) Amber else TextSecondary, Modifier.weight(1f))
                 }
                 Spacer(Modifier.height(12.dp))
-                // Фильтр списка: все монеты или только избранные.
-                LazyRow(
-                    contentPadding = PaddingValues(horizontal = 16.dp),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                LazyColumn(
+                    contentPadding = PaddingValues(bottom = 16.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    item { HistoryFilterChip("Все (${reports.size})", selected = !favoritesOnly) { favoritesOnly = false } }
-                    item { HistoryFilterChip("⭐ Избранное ($favCount)", selected = favoritesOnly) { favoritesOnly = true } }
-                }
-                Spacer(Modifier.height(12.dp))
-                if (shown.isEmpty()) {
-                    EmptyState("В избранном пусто — отметьте монеты звёздочкой ⭐ на карточке")
-                } else {
-                    LazyColumn(
-                        contentPadding = PaddingValues(bottom = 16.dp),
-                        verticalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        items(shown) { a ->
-                            AnalysisCard(
-                                a = a,
-                                isFavorite = a.mint.isNotBlank() && a.mint in favorites,
-                                onToggleFavorite = { toggleFavorite(a.mint) },
-                            )
-                        }
+                    items(reports) { a ->
+                        AnalysisCard(
+                            a = a,
+                            isFavorite = a.mint.isNotBlank() && a.mint in favoriteMints,
+                            onToggleFavorite = { toggleFavorite(a) },
+                        )
                     }
                 }
             }
         }
     }
 }
+
+/** Снимок карточки разбора для сохранения в избранное. */
+private fun CoinAnalysis.toFavorite(): FavoriteCoin = FavoriteCoin(
+    mint = mint,
+    symbol = symbol,
+    iconUrl = iconUrl,
+    price = price,
+    score = score,
+    trend = trend.name,
+    phaseLabel = phase.label,
+    readinessLabel = readiness.label,
+    readinessEmoji = readiness.emoji,
+    timeframeLabel = timeframeLabel,
+    setup = setup,
+    dominance = dominance,
+    opposition = opposition,
+    impulseDesc = impulse?.let { charDesc(it) },
+    correctionDesc = correction?.let { charDesc(it) },
+    entryZoneLow = entry?.zoneLow ?: 0.0,
+    entryZoneHigh = entry?.zoneHigh ?: 0.0,
+    entryPrice = entry?.entryPrice ?: 0.0,
+    stopLoss = entry?.stopLoss ?: 0.0,
+    takeProfit = entry?.takeProfit ?: 0.0,
+    riskReward = entry?.riskReward ?: 0.0,
+    riskPercent = entry?.riskPercent ?: 0.0,
+    rewardPercent = entry?.rewardPercent ?: 0.0,
+    entryTrigger = entry?.trigger,
+    supportPrice = support?.price ?: 0.0,
+    resistancePrice = resistance?.price ?: 0.0,
+    liquidityUsd = market.liquidityUsd,
+    marketCap = market.marketCap,
+    volumeH1Usd = market.volumeH1Usd,
+    changeM5Percent = market.changeM5Percent,
+    changeH1Percent = market.changeH1Percent,
+    buysH1 = market.buysH1,
+    sellsH1 = market.sellsH1,
+    blockers = blockers,
+    notes = notes,
+    analyzedAt = timing.analyzedAt,
+    lastBarTime = timing.lastBarTime,
+)
+
+private fun charDesc(c: LegCharacter): String =
+    "скорость ${c.speedLabel}, бары ${c.barSizeLabel}, закрытия ${c.closeLabel}, объём ${c.volumeLabel}"
 
 private fun analysisTfShort(tf: String, agg: Int): String = when (tf.lowercase()) {
     "minute" -> "${agg}m"
@@ -1757,6 +1836,212 @@ fun AnalysisCard(
         }
     }
 }
+
+/**
+ * Карточка избранной монеты — рисуется из сохранённого снимка [FavoriteCoin], поэтому доступна
+ * даже без запуска анализа и когда монета ушла из сканера. Свёрнутая показывает главное и время
+ * добавления; по тапу раскрывается полный разбор (фон, ноги, зона входа, что мешало). Звёздочка
+ * снимает монету с избранного.
+ */
+@Composable
+private fun FavoriteCard(
+    c: FavoriteCoin,
+    now: Long,
+    onRemove: () -> Unit,
+) {
+    var expanded by remember { mutableStateOf(false) }
+    val (trendText, trendColor) = when (c.trend) {
+        "UP" -> "Тренд ▲" to Green
+        "DOWN" -> "Тренд ▼" to Red
+        else -> "Тренд —" to TextSecondary
+    }
+    val scoreColor = when {
+        c.score >= 70 -> Green
+        c.score >= 40 -> Amber
+        else -> TextSecondary
+    }
+    val readinessColor = when (c.readinessEmoji) {
+        "🟢" -> Green
+        "🟡" -> Amber
+        else -> TextSecondary
+    }
+    val name = c.symbol.ifBlank {
+        if (c.mint.length > 10) "${c.mint.take(4)}…${c.mint.takeLast(4)}" else c.mint
+    }
+
+    Surface(
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp).clickable { expanded = !expanded },
+        color = SurfaceCard, shape = RoundedCornerShape(14.dp)
+    ) {
+        Column(Modifier.padding(14.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                CoinIcon(
+                    url = c.iconUrl,
+                    modifier = Modifier.size(38.dp).clip(CircleShape).background(BgDark)
+                ) {
+                    Text("🪙", fontSize = 20.sp)
+                }
+                Spacer(Modifier.width(10.dp))
+                Column(Modifier.weight(1f)) {
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        Text(name, fontWeight = FontWeight.Bold, color = TextPrimary, fontSize = 15.sp,
+                            maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        if (c.readinessEmoji.isNotBlank()) Text(c.readinessEmoji, fontSize = 12.sp)
+                    }
+                    if (c.readinessLabel.isNotBlank()) {
+                        Text(c.readinessLabel, fontSize = 11.sp, color = readinessColor)
+                    }
+                    if (c.mint.isNotBlank()) {
+                        Spacer(Modifier.height(2.dp))
+                        MintCopyRow(c.mint)
+                    }
+                }
+                // Заполненная звёздочка — нажатие убирает монету из избранного.
+                Text(
+                    "⭐",
+                    fontSize = 20.sp,
+                    color = Amber,
+                    modifier = Modifier
+                        .clip(CircleShape)
+                        .clickable { onRemove() }
+                        .padding(6.dp)
+                )
+                Spacer(Modifier.width(4.dp))
+                Column(horizontalAlignment = Alignment.End) {
+                    Surface(color = scoreColor.copy(alpha = 0.15f), shape = RoundedCornerShape(8.dp)) {
+                        Text("${c.score}", color = scoreColor, fontWeight = FontWeight.ExtraBold, fontSize = 15.sp,
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 3.dp))
+                    }
+                    if (c.timeframeLabel.isNotBlank()) {
+                        Text(c.timeframeLabel, fontSize = 10.sp, color = TextSecondary)
+                    }
+                }
+            }
+
+            Spacer(Modifier.height(10.dp))
+            Row(
+                modifier = Modifier.horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                if (c.trend.isNotBlank()) Tag(trendText, trendColor)
+                if (c.phaseLabel.isNotBlank()) Tag(c.phaseLabel, Purple)
+                if (c.setup != null) Tag("сетап", Blue)
+                if (c.blockers.isNotEmpty()) Tag("⛔ ${c.blockers.size}", Red)
+                if (c.price > 0.0) Tag(MarketAnalysis.fmtPrice(c.price), TextSecondary)
+            }
+            c.setup?.let {
+                Spacer(Modifier.height(6.dp))
+                Text(it, fontSize = 12.sp, color = Blue)
+            }
+
+            // Время добавления в избранное — именно то, что просили: наше (локально) и DEX (UTC).
+            Spacer(Modifier.height(8.dp))
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                Text("⭐", fontSize = 10.sp)
+                Text(
+                    if (c.addedAt > 0L)
+                        "в избранное: наше ${formatLocalTime(c.addedAt)} · DEX ${formatDexTime(c.addedAt)} UTC"
+                    else "в избранное: время не сохранено",
+                    fontSize = 10.sp, color = TextSecondary
+                )
+            }
+
+            if (expanded) {
+                // ─── Рыночный фон из сканера ───
+                val hasMarket = c.liquidityUsd > 0.0 || c.marketCap > 0.0 || c.volumeH1Usd > 0.0
+                if (hasMarket) {
+                    Spacer(Modifier.height(12.dp))
+                    Text("Рыночный фон", fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = TextPrimary)
+                    Spacer(Modifier.height(4.dp))
+                    if (c.liquidityUsd > 0.0) AnalysisKeyVal("Ликвидность", "$${formatLargeNumber(c.liquidityUsd)}", TextPrimary)
+                    if (c.marketCap > 0.0) AnalysisKeyVal("Капитализация", "$${formatLargeNumber(c.marketCap)}", TextPrimary)
+                    if (c.volumeH1Usd > 0.0) AnalysisKeyVal("Оборот за час", "$${formatLargeNumber(c.volumeH1Usd)}", TextPrimary)
+                    AnalysisKeyVal(
+                        "Изменение", "5м ${signedPct(c.changeM5Percent)} · 1ч ${signedPct(c.changeH1Percent)}",
+                        if (c.changeH1Percent >= 0) Green else Red
+                    )
+                    c.buyRatioH1?.let { r ->
+                        AnalysisKeyVal(
+                            "Покупки за час", "${(r * 100).toInt()}% (${c.buysH1}/${c.sellsH1})",
+                            if (r >= 0.5) Green else Red
+                        )
+                    }
+                }
+
+                // ─── Урок 1: характер ног ───
+                if (c.impulseDesc != null || c.correctionDesc != null) {
+                    Spacer(Modifier.height(10.dp))
+                    c.impulseDesc?.let { AnalysisTextLine("Импульс", it) }
+                    c.correctionDesc?.let { AnalysisTextLine("Коррекция", it) }
+                    AnalysisKeyVal("Доминирование", "${(c.dominance * 100).toInt()}%", if (c.dominance >= 0.5) Green else Amber)
+                    AnalysisKeyVal("Вторая сторона", "${(c.opposition * 100).toInt()}%", if (c.opposition <= 0.5) Green else Amber)
+                }
+
+                // ─── Зона входа (ориентир) ───
+                if (c.hasEntry) {
+                    Spacer(Modifier.height(10.dp))
+                    Text("Зона входа (ориентир)", fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = TextPrimary)
+                    Spacer(Modifier.height(4.dp))
+                    AnalysisKeyVal("Зона", "${MarketAnalysis.fmtPrice(c.entryZoneLow)} – ${MarketAnalysis.fmtPrice(c.entryZoneHigh)}", TextPrimary)
+                    AnalysisKeyVal("Стоп", "${MarketAnalysis.fmtPrice(c.stopLoss)}  (−${"%.1f".format(c.riskPercent)}%)", Red)
+                    AnalysisKeyVal("Цель", "${MarketAnalysis.fmtPrice(c.takeProfit)}  (+${"%.1f".format(c.rewardPercent)}%)", Green)
+                    AnalysisKeyVal("Риск/прибыль", "%.2f".format(c.riskReward), if (c.riskReward >= 1.5) Green else Amber)
+                    if (c.supportPrice > 0.0) AnalysisKeyVal("Поддержка", MarketAnalysis.fmtPrice(c.supportPrice), TextSecondary)
+                    if (c.resistancePrice > 0.0) AnalysisKeyVal("Сопротивление", MarketAnalysis.fmtPrice(c.resistancePrice), TextSecondary)
+                    c.entryTrigger?.let {
+                        Spacer(Modifier.height(4.dp))
+                        Text("Триггер: $it", fontSize = 11.sp, color = TextSecondary)
+                    }
+                }
+
+                // ─── Что мешало входу ───
+                if (c.blockers.isNotEmpty()) {
+                    Spacer(Modifier.height(10.dp))
+                    Text("Мешало входу (Урок 4):", fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = Amber)
+                    Spacer(Modifier.height(2.dp))
+                    c.blockers.forEach { Text("• $it", fontSize = 11.sp, color = TextSecondary) }
+                }
+
+                // ─── Заметки ───
+                if (c.notes.isNotEmpty()) {
+                    Spacer(Modifier.height(10.dp))
+                    c.notes.forEach { Text("• $it", fontSize = 11.sp, color = TextSecondary) }
+                }
+
+                // ─── Время разбора и свежесть данных ───
+                if (c.analyzedAt > 0L) {
+                    Spacer(Modifier.height(10.dp))
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        Text("🕒", fontSize = 10.sp)
+                        Text(
+                            "разбор: наше ${formatLocalTime(c.analyzedAt)} · DEX ${formatDexTime(c.lastBarTime)} UTC · ${MarketAnalysis.formatSpan(now - c.analyzedAt)} назад",
+                            fontSize = 10.sp, color = TextSecondary
+                        )
+                    }
+                    Text(
+                        "Данные обновятся автоматически, когда монета снова попадёт в разбор",
+                        fontSize = 10.sp, color = TextSecondary
+                    )
+                }
+            } else {
+                Spacer(Modifier.height(6.dp))
+                Text("Нажмите, чтобы раскрыть разбор", fontSize = 10.sp, color = TextSecondary)
+            }
+        }
+    }
+}
+
+/** Строка «заголовок: текст» — как [AnalysisCharLine], но текст уже готовой строкой (из снимка). */
+@Composable
+private fun AnalysisTextLine(title: String, text: String) {
+    Row(modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp)) {
+        Text(title, fontSize = 11.sp, color = TextSecondary, modifier = Modifier.width(78.dp))
+        Text(text, fontSize = 11.sp, color = TextPrimary, modifier = Modifier.weight(1f))
+    }
+}
+
+/** «+3.4%» / «−1.2%» — знак и один знак после запятой для процентных изменений. */
+private fun signedPct(v: Double): String = "${if (v >= 0) "+" else "−"}${"%.1f".format(kotlin.math.abs(v))}%"
 
 @Composable
 private fun AnalysisCharLine(title: String, c: LegCharacter) {
