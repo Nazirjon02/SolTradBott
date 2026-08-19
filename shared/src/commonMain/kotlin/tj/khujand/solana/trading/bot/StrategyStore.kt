@@ -33,6 +33,12 @@ class StrategyStore(private val db: DrxDatabase) {
             scan_filters_enabled = if (cfg.scanFiltersEnabled) 1L else 0L,
             id = cfg.id,
         )
+        // Выключатели риск-лимитов — тоже вне insert/updateStrategy.
+        db.strategyQueries.updateRiskToggles(
+            max_daily_loss_enabled = if (cfg.maxDailyLossEnabled) 1L else 0L,
+            max_drawdown_enabled = if (cfg.maxDrawdownEnabled) 1L else 0L,
+            id = cfg.id,
+        )
     }
 
     private fun update(cfg: StrategyConfig) = db.strategyQueries.updateStrategy(

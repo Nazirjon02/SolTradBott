@@ -2525,7 +2525,9 @@ fun StrategyFormScreen(
     var liqExit by remember { mutableStateOf(c?.liquidityExitDropPercent?.toFloat() ?: 50f) }
 
     // ── Риск ──
+    var maxDailyLossEnabled by remember { mutableStateOf(c?.maxDailyLossEnabled ?: true) }
     var maxDailyLoss by remember { mutableStateOf(c?.maxDailyLoss?.toFloat() ?: 5f) }
+    var maxDrawdownEnabled by remember { mutableStateOf(c?.maxDrawdownEnabled ?: true) }
     var maxDrawdown by remember { mutableStateOf(c?.maxDrawdown?.toFloat() ?: 15f) }
     var cooldown by remember { mutableStateOf((c?.cooldownSeconds ?: 300).toString()) }
 
@@ -2680,10 +2682,29 @@ fun StrategyFormScreen(
 
             // 6. Риск
             FormSection("🚨  Риск") {
-                FormSlider("Макс. дневной убыток", maxDailyLoss, 1f, 30f,
-                    "${"%.1f".format(maxDailyLoss)}% от баланса") { maxDailyLoss = it }
-                FormSlider("Макс. просадка", maxDrawdown, 5f, 50f,
-                    "${"%.0f".format(maxDrawdown)}%") { maxDrawdown = it }
+                // Один общий выключатель гасит оба лимита сразу (дневной убыток + просадку).
+                val riskDisabled = !maxDailyLossEnabled && !maxDrawdownEnabled
+                FormToggle("Отключить риск-менеджмент", riskDisabled) { disabled ->
+                    val enabled = !disabled
+                    maxDailyLossEnabled = enabled
+                    maxDrawdownEnabled = enabled
+                }
+                if (riskDisabled) {
+                    Surface(color = Red.copy(alpha = 0.10f), shape = RoundedCornerShape(8.dp)) {
+                        Text(
+                            "⚠️ Лимиты дневного убытка и просадки отключены — бот не остановит вход " +
+                                "даже после серии убыточных сделок. Ограничение открытых позиций и кулдаун " +
+                                "продолжают работать.",
+                            fontSize = 11.sp, color = TextSecondary,
+                            modifier = Modifier.padding(10.dp), lineHeight = 16.sp
+                        )
+                    }
+                } else {
+                    FormSlider("Макс. дневной убыток", maxDailyLoss, 1f, 30f,
+                        "${"%.1f".format(maxDailyLoss)}% от баланса") { maxDailyLoss = it }
+                    FormSlider("Макс. просадка", maxDrawdown, 5f, 50f,
+                        "${"%.0f".format(maxDrawdown)}%") { maxDrawdown = it }
+                }
                 FormTextField("Кулдаун между сделками, сек", cooldown, isNumber = true) { cooldown = it }
             }
 
@@ -2820,7 +2841,9 @@ fun StrategyFormScreen(
                     tp2ClosePercent = tp2Close.toDouble(),
                     timeStopMinutes = timeStop.toIntOrNull() ?: 0,
                     liquidityExitDropPercent = liqExit.toDouble(),
+                    maxDailyLossEnabled = maxDailyLossEnabled,
                     maxDailyLoss = maxDailyLoss.toDouble(),
+                    maxDrawdownEnabled = maxDrawdownEnabled,
                     maxDrawdown = maxDrawdown.toDouble(),
                     cooldownSeconds = cooldown.toIntOrNull() ?: 300,
                     minLiquidityUsd = minLiq.toDoubleOrNull() ?: 10_000.0,

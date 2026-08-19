@@ -40,6 +40,7 @@ class RiskManager(
     }
 
     private fun checkDailyLoss(config: StrategyConfig): Boolean {
+        if (!config.maxDailyLossEnabled) return true // лимит отключён пользователем
         val todayStart = startOfDayMillis()
         val todayPnl = db.tradeQueries.getTodayPnl(config.id, todayStart).executeAsOne()
         val balance = baseBalanceUsd().takeIf { it > 0 } ?: 1000.0
@@ -53,6 +54,7 @@ class RiskManager(
      * (а SL по умолчанию равен maxDrawdown) выключал стратегию НАВСЕГДА.
      */
     private fun checkDrawdown(config: StrategyConfig): Boolean {
+        if (!config.maxDrawdownEnabled) return true // лимит отключён пользователем
         val windowStart = Clock.System.now().toEpochMilliseconds() - DRAWDOWN_WINDOW_MS
         val maxDrawdown = db.tradeQueries.getMaxDrawdown(config.id, windowStart).executeAsOneOrNull() ?: 0.0
         return maxDrawdown > -config.maxDrawdown

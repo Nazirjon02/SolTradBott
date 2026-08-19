@@ -49,6 +49,24 @@ class StrategyStoreRangeTest {
         assertEquals(100, reloaded.rangeLookbackBars)
         assertEquals(50, reloaded.scoreThreshold)
         assertEquals(true, reloaded.scanFiltersEnabled)
+        assertEquals(true, reloaded.maxDailyLossEnabled)
+        assertEquals(true, reloaded.maxDrawdownEnabled)
+    }
+
+    @Test fun riskTogglesSurviveSaveAndReload() {
+        val store = StrategyStore(freshDb())
+        store.save(
+            StrategyConfig(
+                id = "s4",
+                name = "no-risk",
+                type = StrategyType.DARS.name,
+                maxDailyLossEnabled = false,
+                maxDrawdownEnabled = false,
+            )
+        )
+        val reloaded = store.loadAll().first { it.id == "s4" }
+        assertEquals(false, reloaded.maxDailyLossEnabled)
+        assertEquals(false, reloaded.maxDrawdownEnabled)
     }
 
     @Test fun scoreParamsSurviveSaveAndReload() {
@@ -81,6 +99,8 @@ class StrategyStoreRangeTest {
         driver.execute(null, "ALTER TABLE strategy DROP COLUMN range_lookback_bars", 0)
         driver.execute(null, "ALTER TABLE strategy DROP COLUMN score_threshold", 0)
         driver.execute(null, "ALTER TABLE strategy DROP COLUMN scan_filters_enabled", 0)
+        driver.execute(null, "ALTER TABLE strategy DROP COLUMN max_daily_loss_enabled", 0)
+        driver.execute(null, "ALTER TABLE strategy DROP COLUMN max_drawdown_enabled", 0)
         // Строка в старом формате (прочие колонки берут DEFAULT из схемы).
         driver.execute(
             null,
@@ -101,6 +121,8 @@ class StrategyStoreRangeTest {
         assertEquals(100, cfg.rangeLookbackBars)
         assertEquals(50, cfg.scoreThreshold)
         assertEquals(true, cfg.scanFiltersEnabled)
+        assertEquals(true, cfg.maxDailyLossEnabled)
+        assertEquals(true, cfg.maxDrawdownEnabled)
 
         // Идемпотентность: повторный вызов не ломает БД.
         migrateStrategyTable(driver)

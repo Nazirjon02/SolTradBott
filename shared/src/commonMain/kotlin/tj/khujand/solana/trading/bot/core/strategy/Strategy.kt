@@ -89,7 +89,11 @@ data class StrategyConfig(
     val liquidityExitDropPercent: Double = 50.0,
 
     // ── Риск ──
+    // Выключатели лимитов: false = соответствующая проверка в RiskManager пропускается
+    // (лимит не блокирует вход). Дефолт true — поведение существующих стратегий не меняется.
+    val maxDailyLossEnabled: Boolean = true,
     val maxDailyLoss: Double = 5.0,
+    val maxDrawdownEnabled: Boolean = true,
     // Заметно больше stopLossPercent: иначе штатный выход по SL сам упирается
     // в лимит просадки и блокирует стратегию (см. RiskManager.checkDrawdown).
     val maxDrawdown: Double = 30.0,

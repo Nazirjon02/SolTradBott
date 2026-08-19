@@ -73,6 +73,49 @@ class RiskManagerTest {
     }
 
     @Test
+    fun disabledDailyLossAllowsTrade() {
+        val db = inMemoryDb()
+        val cache = AccountCache(db)
+        cache.set("DEMO_USD", 1000.0, 1000.0)
+        val rm = RiskManager(db, cache)
+        // Тот же перебор лимита, что в blocksOnDailyLoss, но лимит выключен → вход разрешён.
+        val config = StrategyConfig(id = "s1", maxDailyLossEnabled = false, maxDailyLoss = 5.0)
+        insertClosedTrade(db, "s1", pnl = -60.0, pnlPercent = -6.0)
+        assertTrue(rm.canTrade(config), "выключенный лимит дневного убытка не должен блокировать")
+        assertEquals(null, rm.blockReason(config))
+    }
+
+    @Test
+    fun disabledDrawdownAllowsTrade() {
+        val db = inMemoryDb()
+        val cache = AccountCache(db)
+        cache.set("DEMO_USD", 100_000.0, 100_000.0)
+        val rm = RiskManager(db, cache)
+        // Просадка -20% превысила бы лимит 15%, но проверка просадки выключена.
+        val config = StrategyConfig(id = "s1", maxDrawdownEnabled = false, maxDrawdown = 15.0)
+        insertClosedTrade(db, "s1", pnl = -20.0, pnlPercent = -20.0)
+        assertTrue(rm.canTrade(config), "выключенный лимит просадки не должен блокировать")
+        assertEquals(null, rm.blockReason(config))
+    }
+
+    @Test
+    fun disabledRiskStillBlocksOnMaxPositions() {
+        val db = inMemoryDb()
+        val cache = AccountCache(db)
+        cache.set("DEMO_USD", 1000.0, 1000.0)
+        val rm = RiskManager(db, cache)
+        // Даже с выключенными лимитами убытка/просадки лимит открытых позиций работает.
+        val config = StrategyConfig(
+            id = "s1",
+            maxDailyLossEnabled = false,
+            maxDrawdownEnabled = false,
+            maxPositions = 1,
+        )
+        insertOpenTrade(db, "s1")
+        assertFalse(rm.canTrade(config), "лимит позиций не зависит от выключателей риска")
+    }
+
+    @Test
     fun blocksOnMaxPositions() {
         val db = inMemoryDb()
         val cache = AccountCache(db)

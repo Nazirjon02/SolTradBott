@@ -52,6 +52,11 @@ CREATE TABLE IF NOT EXISTS strategy (
     score_threshold INTEGER NOT NULL DEFAULT 50,
     scan_filters_enabled INTEGER NOT NULL DEFAULT 1,
 
+    -- Выключатели риск-лимитов (поздние колонки, пишутся updateRiskToggles):
+    -- 0 = соответствующий лимит не блокирует вход. DEFAULT 1 — прежнее поведение.
+    max_daily_loss_enabled INTEGER NOT NULL DEFAULT 1,
+    max_drawdown_enabled INTEGER NOT NULL DEFAULT 1,
+
     -- Индикаторы
     rsi_period INTEGER NOT NULL DEFAULT 14,
     rsi_overbought REAL NOT NULL DEFAULT 70.0,
@@ -141,6 +146,13 @@ WHERE id = ?;
 updateScoreParams:
 UPDATE strategy SET
     score_threshold = ?, scan_filters_enabled = ?
+WHERE id = ?;
+
+-- Выключатели риск-лимитов — тоже вне insert/updateStrategy (колонки берут DEFAULT),
+-- пишутся отдельным запросом из StrategyStore.save.
+updateRiskToggles:
+UPDATE strategy SET
+    max_daily_loss_enabled = ?, max_drawdown_enabled = ?
 WHERE id = ?;
 
 -- Одноразовая нормализация уже засеянных Dars-стратегий к значениям методички
