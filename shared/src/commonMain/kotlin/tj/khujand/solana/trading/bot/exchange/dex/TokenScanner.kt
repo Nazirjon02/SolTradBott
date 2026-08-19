@@ -15,6 +15,12 @@ data class ScanFilters(
     val minTokenAgeMinutes: Long = 30,
     val maxTokenAgeMinutes: Long = 43_200,
     val maxCandidates: Int = 10,
+    /**
+     * Master-выключатель фильтров ликвидность/MC/возраст. false → жёсткий отбор не применяется
+     * (стратегия «Вход по баллу» без фильтров). Первичный отбор DexScreener и cap [maxCandidates]
+     * остаются в силе.
+     */
+    val filtersEnabled: Boolean = true,
 )
 
 /**
@@ -75,9 +81,11 @@ class TokenScanner(
             val sellsH1 = pair.txns?.h1?.sells ?: 0
             val ratio = if (sellsH1 == 0) buysH1.toDouble() else buysH1.toDouble() / sellsH1
 
-            val passes = liquidity >= filters.minLiquidityUsd &&
-                marketCap in filters.minMarketCap..filters.maxMarketCap &&
-                ageMinutes in filters.minTokenAgeMinutes..filters.maxTokenAgeMinutes
+            val passes = !filters.filtersEnabled || (
+                liquidity >= filters.minLiquidityUsd &&
+                    marketCap in filters.minMarketCap..filters.maxMarketCap &&
+                    ageMinutes in filters.minTokenAgeMinutes..filters.maxTokenAgeMinutes
+                )
             if (!passes) continue
 
             candidates += TokenCandidate(
@@ -113,9 +121,11 @@ class TokenScanner(
      * (ликвидность, market cap, возраст) к уже накопленным кандидатам.
      */
     private fun List<TokenCandidate>.filterBy(f: ScanFilters): List<TokenCandidate> = filter { c ->
-        c.liquidityUsd >= f.minLiquidityUsd &&
-            c.marketCap in f.minMarketCap..f.maxMarketCap &&
-            c.tokenAgeMinutes in f.minTokenAgeMinutes..f.maxTokenAgeMinutes
+        !f.filtersEnabled || (
+            c.liquidityUsd >= f.minLiquidityUsd &&
+                c.marketCap in f.minMarketCap..f.maxMarketCap &&
+                c.tokenAgeMinutes in f.minTokenAgeMinutes..f.maxTokenAgeMinutes
+            )
     }
 
     /** DexScreener иногда отдаёт createdAt в секундах — нормализуем в миллисекунды. */

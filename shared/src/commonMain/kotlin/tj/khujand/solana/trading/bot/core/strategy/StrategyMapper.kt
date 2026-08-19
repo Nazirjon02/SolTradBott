@@ -39,6 +39,8 @@ fun StrategyRow.toStrategyConfig(): StrategyConfig = StrategyConfig(
     rangeFilterEnabled = range_filter_enabled == 1L,
     rangeMaxEntryPct = range_max_entry_pct,
     rangeLookbackBars = range_lookback_bars.toInt(),
+    scoreThreshold = score_threshold.toInt(),
+    scanFiltersEnabled = scan_filters_enabled == 1L,
     rsiPeriod = rsi_period.toInt(),
     rsiOverbought = rsi_overbought,
     rsiOversold = rsi_oversold,

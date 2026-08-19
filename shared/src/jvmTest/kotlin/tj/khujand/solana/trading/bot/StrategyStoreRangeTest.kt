@@ -47,6 +47,24 @@ class StrategyStoreRangeTest {
         assertEquals(false, reloaded.rangeFilterEnabled)
         assertEquals(0.8, reloaded.rangeMaxEntryPct)
         assertEquals(100, reloaded.rangeLookbackBars)
+        assertEquals(50, reloaded.scoreThreshold)
+        assertEquals(true, reloaded.scanFiltersEnabled)
+    }
+
+    @Test fun scoreParamsSurviveSaveAndReload() {
+        val store = StrategyStore(freshDb())
+        store.save(
+            StrategyConfig(
+                id = "s3",
+                name = "by-score",
+                type = StrategyType.SCORE.name,
+                scoreThreshold = 70,
+                scanFiltersEnabled = false,
+            )
+        )
+        val reloaded = store.loadAll().first { it.id == "s3" }
+        assertEquals(70, reloaded.scoreThreshold)
+        assertEquals(false, reloaded.scanFiltersEnabled)
     }
 
     /**
@@ -57,10 +75,12 @@ class StrategyStoreRangeTest {
     @Test fun migrationRescuesOldDb() {
         val driver = JdbcSqliteDriver(JdbcSqliteDriver.IN_MEMORY)
         DrxDatabase.Schema.create(driver)
-        // «Откатываем» схему до состояния без range-колонок.
+        // «Откатываем» схему до состояния без поздних колонок (range + вход по баллу).
         driver.execute(null, "ALTER TABLE strategy DROP COLUMN range_filter_enabled", 0)
         driver.execute(null, "ALTER TABLE strategy DROP COLUMN range_max_entry_pct", 0)
         driver.execute(null, "ALTER TABLE strategy DROP COLUMN range_lookback_bars", 0)
+        driver.execute(null, "ALTER TABLE strategy DROP COLUMN score_threshold", 0)
+        driver.execute(null, "ALTER TABLE strategy DROP COLUMN scan_filters_enabled", 0)
         // Строка в старом формате (прочие колонки берут DEFAULT из схемы).
         driver.execute(
             null,
@@ -79,6 +99,8 @@ class StrategyStoreRangeTest {
         assertEquals(false, cfg.rangeFilterEnabled)
         assertEquals(0.8, cfg.rangeMaxEntryPct)
         assertEquals(100, cfg.rangeLookbackBars)
+        assertEquals(50, cfg.scoreThreshold)
+        assertEquals(true, cfg.scanFiltersEnabled)
 
         // Идемпотентность: повторный вызов не ломает БД.
         migrateStrategyTable(driver)

@@ -179,7 +179,9 @@ class StrategyManager(
                 continue
             }
 
-            if (signal.confidence < MIN_CONFIDENCE) {
+            // Самогейтные стратегии (например «Вход по баллу») уже применили СВОЙ порог —
+            // общий порог уверенности к ним не применяем, иначе он молча перебьёт пользовательский.
+            if (!strategy.selfGated && signal.confidence < MIN_CONFIDENCE) {
                 activityLog.info("○ ${candidate.symbol}: уверенность ${(signal.confidence * 100).toInt()}% < 60%")
                 continue
             }

@@ -15,6 +15,13 @@ interface Strategy {
     val config: StrategyConfig
 
     /**
+     * Стратегия сама решает вход по своему порогу и НЕ должна дополнительно
+     * отсекаться общим порогом уверенности [StrategyManager.MIN_CONFIDENCE].
+     * По умолчанию false (обычные стратегии проходят общий гейт).
+     */
+    val selfGated: Boolean get() = false
+
+    /**
      * @param candidate токен из сканера (метрики DexScreener).
      * @param candles свечи рабочего ТФ (GeckoTerminal).
      * @param higherTfCandles свечи старшего ТФ (пусто, если стратегии не нужны).
@@ -43,6 +50,7 @@ enum class StrategyType(val displayName: String) {
     DARS("Dars / Smart Money"),
     MOMENTUM("Momentum Scalping"),
     RSI_EMA("RSI + EMA Trend"),
+    SCORE("Вход по баллу"),
 }
 
 /**
@@ -102,6 +110,13 @@ data class StrategyConfig(
     val rangeMaxEntryPct: Double = 0.8,   // не покупать в верхних (1 - 0.8) = 20% диапазона
     val rangeLookbackBars: Int = 100,
 
+    // ── Вход по баллу (стратегия SCORE) ──
+    // Бот входит, когда балл монеты (тот же, что на экране «Анализ», 0..100) ≥ scoreThreshold.
+    // scanFiltersEnabled=false отключает фильтры сканера (ликвидность/MC/возраст) — «вход по баллу
+    // без фильтров». Дефолты сохраняют прежнее поведение для остальных стратегий.
+    val scoreThreshold: Int = 50,
+    val scanFiltersEnabled: Boolean = true,
+
     // ── Индикаторы ──
     val rsiPeriod: Int = 14,
     val rsiOverbought: Double = 70.0,
@@ -132,6 +147,7 @@ data class StrategyConfig(
         maxMarketCap = maxMarketCap,
         minTokenAgeMinutes = minTokenAgeMinutes,
         maxTokenAgeMinutes = maxTokenAgeMinutes,
+        filtersEnabled = scanFiltersEnabled,
     )
 
     /** SL/TP-цены от цены входа (спот, только лонг). */

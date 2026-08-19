@@ -5,5 +5,6 @@ fun createStrategy(config: StrategyConfig): Strategy = when (config.type) {
     StrategyType.DARS.name -> DarsStrategy(config)
     StrategyType.MOMENTUM.name -> MomentumStrategy(config)
     StrategyType.RSI_EMA.name -> RsiEmaStrategy(config)
+    StrategyType.SCORE.name -> ScoreStrategy(config)
     else -> DarsStrategy(config)
 }

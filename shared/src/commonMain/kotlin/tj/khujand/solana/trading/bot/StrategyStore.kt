@@ -27,6 +27,12 @@ class StrategyStore(private val db: DrxDatabase) {
             range_lookback_bars = cfg.rangeLookbackBars.toLong(),
             id = cfg.id,
         )
+        // Параметры «Входа по баллу» — тоже вне insert/updateStrategy.
+        db.strategyQueries.updateScoreParams(
+            score_threshold = cfg.scoreThreshold.toLong(),
+            scan_filters_enabled = if (cfg.scanFiltersEnabled) 1L else 0L,
+            id = cfg.id,
+        )
     }
 
     private fun update(cfg: StrategyConfig) = db.strategyQueries.updateStrategy(

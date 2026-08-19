@@ -2541,6 +2541,10 @@ fun StrategyFormScreen(
     var rangeMaxEntry by remember { mutableStateOf(c?.rangeMaxEntryPct?.toFloat() ?: 0.8f) }
     var rangeLookback by remember { mutableStateOf((c?.rangeLookbackBars ?: 100).toString()) }
 
+    // Вход по баллу (тип SCORE)
+    var scoreThreshold by remember { mutableStateOf((c?.scoreThreshold ?: 50).toFloat()) }
+    var scanFiltersEnabled by remember { mutableStateOf(c?.scanFiltersEnabled ?: true) }
+
     // ── Индикаторы ──
     var rsiPeriod by remember { mutableStateOf((c?.rsiPeriod ?: 14).toString()) }
     var rsiOverbought by remember { mutableStateOf(c?.rsiOverbought?.toFloat() ?: 70f) }
@@ -2711,6 +2715,26 @@ fun StrategyFormScreen(
                 }
             }
 
+            // 7c. Вход по баллу (только для стратегии SCORE)
+            if (type == StrategyType.SCORE.name) {
+                FormSection("⭐  Вход по баллу") {
+                    FormSlider("Минимальный балл для входа", scoreThreshold, 0f, 100f,
+                        "≥ ${scoreThreshold.toInt()}") { scoreThreshold = it }
+                    FormToggle("Выключить фильтры сканера (ликвидность / MC / возраст)",
+                        !scanFiltersEnabled) { scanFiltersEnabled = !it }
+                    Surface(color = Amber.copy(alpha = 0.10f), shape = RoundedCornerShape(8.dp)) {
+                        Text(
+                            "Бот покупает монету, когда её балл (тот же 0–100, что на экране «🔬 Анализ») " +
+                                "не ниже порога. Больше балл — чище картинка входа.\n" +
+                                "С выключенными фильтрами бот может входить в низколиквидные и рискованные " +
+                                "монеты, из которых трудно выйти. На реальном счёте риск выше — сначала проверьте в демо.",
+                            fontSize = 11.sp, color = TextSecondary,
+                            modifier = Modifier.padding(10.dp), lineHeight = 16.sp
+                        )
+                    }
+                }
+            }
+
             // 8. Индикаторы (по типу стратегии)
             if (type == StrategyType.RSI_EMA.name) {
                 FormSection("📊  RSI") {
@@ -2807,6 +2831,8 @@ fun StrategyFormScreen(
                     rangeFilterEnabled = rangeFilter,
                     rangeMaxEntryPct = rangeMaxEntry.toDouble(),
                     rangeLookbackBars = rangeLookback.toIntOrNull() ?: 100,
+                    scoreThreshold = scoreThreshold.toInt(),
+                    scanFiltersEnabled = scanFiltersEnabled,
                     rsiPeriod = rsiPeriod.toIntOrNull() ?: 14,
                     rsiOverbought = rsiOverbought.toDouble(),
                     rsiOversold = rsiOversold.toDouble(),

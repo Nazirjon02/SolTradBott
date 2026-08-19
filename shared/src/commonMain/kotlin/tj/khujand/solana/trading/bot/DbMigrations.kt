@@ -20,6 +20,8 @@ fun migrateStrategyTable(driver: SqlDriver) {
         "ALTER TABLE strategy ADD COLUMN range_filter_enabled INTEGER NOT NULL DEFAULT 0",
         "ALTER TABLE strategy ADD COLUMN range_max_entry_pct REAL NOT NULL DEFAULT 0.8",
         "ALTER TABLE strategy ADD COLUMN range_lookback_bars INTEGER NOT NULL DEFAULT 100",
+        "ALTER TABLE strategy ADD COLUMN score_threshold INTEGER NOT NULL DEFAULT 50",
+        "ALTER TABLE strategy ADD COLUMN scan_filters_enabled INTEGER NOT NULL DEFAULT 1",
     )
     for (sql in alters) {
         try {

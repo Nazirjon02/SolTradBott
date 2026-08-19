@@ -48,6 +48,10 @@ CREATE TABLE IF NOT EXISTS strategy (
     range_max_entry_pct REAL NOT NULL DEFAULT 0.8,
     range_lookback_bars INTEGER NOT NULL DEFAULT 100,
 
+    -- Вход по баллу (стратегия SCORE): порог балла + выключатель фильтров сканера
+    score_threshold INTEGER NOT NULL DEFAULT 50,
+    scan_filters_enabled INTEGER NOT NULL DEFAULT 1,
+
     -- Индикаторы
     rsi_period INTEGER NOT NULL DEFAULT 14,
     rsi_overbought REAL NOT NULL DEFAULT 70.0,
@@ -130,6 +134,13 @@ UPDATE strategy SET is_active = ?, updated_at = ? WHERE id = ?;
 updateRangeParams:
 UPDATE strategy SET
     range_filter_enabled = ?, range_max_entry_pct = ?, range_lookback_bars = ?
+WHERE id = ?;
+
+-- Параметры «Входа по баллу» — тоже вне insert/updateStrategy (колонки берут DEFAULT),
+-- пишутся отдельным запросом из StrategyStore.save.
+updateScoreParams:
+UPDATE strategy SET
+    score_threshold = ?, scan_filters_enabled = ?
 WHERE id = ?;
 
 -- Одноразовая нормализация уже засеянных Dars-стратегий к значениям методички
