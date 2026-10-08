@@ -19,10 +19,12 @@ import kotlin.time.Clock
 import tj.khujand.solana.trading.bot.core.TradeNotifier
 import tj.khujand.solana.trading.bot.core.engine.ActivityLog
 import tj.khujand.solana.trading.bot.core.engine.TradeExecutor
+import tj.khujand.solana.trading.bot.core.engine.atrFraction
 import tj.khujand.solana.trading.bot.core.engine.fmtNum
 import tj.khujand.solana.trading.bot.core.risk.RiskManager
 import tj.khujand.solana.trading.bot.data.SettingsStore
 import tj.khujand.solana.trading.bot.data.db.DrxDatabase
+import tj.khujand.solana.trading.bot.exchange.dex.Candle
 import tj.khujand.solana.trading.bot.exchange.dex.DexClient
 import tj.khujand.solana.trading.bot.exchange.dex.TokenCandidate
 import tj.khujand.solana.trading.bot.exchange.dex.TokenScanner
@@ -198,7 +200,7 @@ class StrategyManager(
                 if (alreadyTraded) return@withLock false
                 if (!riskManager.canTrade(config)) return@withLock false
                 val fresh = withFreshEntryPrice(signal) ?: return@withLock false
-                executeSignal(fresh, config, candidate)
+                executeSignal(fresh, config, candidate, candles)
             }
             if (opened) {
                 mutex.withLock { lastTradeAt[config.id] = now() }
@@ -239,8 +241,15 @@ class StrategyManager(
         )
     }
 
-    private suspend fun executeSignal(signal: Signal, config: StrategyConfig, candidate: TokenCandidate): Boolean {
-        val sizeUsd = riskManager.calculatePositionSizeUsd(config)
+    private suspend fun executeSignal(
+        signal: Signal,
+        config: StrategyConfig,
+        candidate: TokenCandidate,
+        candles: List<Candle>,
+    ): Boolean {
+        val sizeUsd = riskManager.calculatePositionSizeUsd(
+            config, signal.entryPrice, signal.stopLoss, candidate.liquidityUsd,
+        )
         if (sizeUsd <= 0) {
             activityLog.warn("⚠️ ${config.name}: нулевой размер позиции (нет баланса?)")
             return false
@@ -248,7 +257,9 @@ class StrategyManager(
         activityLog.success(
             "⚡ ${signal.symbol}: сигнал BUY (${(signal.confidence * 100).toInt()}%) — открываю на $${fmtNum(sizeUsd)}"
         )
-        val tradeId = executor.openTrade(signal, config, sizeUsd, candidate.liquidityUsd) ?: return false
+        // ATR входа — для ATR-трейлинга (если включён); считаем по тем же свечам, что видела стратегия.
+        val atrFrac = atrFraction(candles, config.atrPeriod, signal.entryPrice)
+        val tradeId = executor.openTrade(signal, config, sizeUsd, candidate.liquidityUsd, atrFrac) ?: return false
         notifier.sendOpenAlert(
             symbol = signal.symbol,
             strategyName = config.name,

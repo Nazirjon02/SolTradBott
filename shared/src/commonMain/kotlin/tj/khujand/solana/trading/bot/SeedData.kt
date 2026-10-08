@@ -1,6 +1,8 @@
 package tj.khujand.solana.trading.bot
 
 import kotlin.time.Clock
+import tj.khujand.solana.trading.bot.core.strategy.StrategyConfig
+import tj.khujand.solana.trading.bot.core.strategy.StrategyType
 import tj.khujand.solana.trading.bot.data.db.DrxDatabase
 
 /**
@@ -10,8 +12,8 @@ import tj.khujand.solana.trading.bot.data.db.DrxDatabase
  * Живёт в shared, чтобы и сервер, и desktop-приложение сеяли одни и те же дефолты
  * в общую базу.
  *
- * Три стратегии: Dars / Smart Money (по умолчанию активна),
- * Momentum Scalping и RSI+EMA (включаются вручную).
+ * Четыре стратегии: Dars / Smart Money (по умолчанию активна),
+ * Momentum Scalping, RSI+EMA и «Пробой + откат» (включаются вручную).
  */
 fun seedDefaultStrategies(db: DrxDatabase) {
     // Уже засеянные БД подтягиваем к значениям методички один раз (см. ниже).
@@ -19,7 +21,11 @@ fun seedDefaultStrategies(db: DrxDatabase) {
     normalizeDrawdownLimits(db)
 
     val existing = db.strategyQueries.getAll().executeAsList()
-    if (existing.isNotEmpty()) return  // уже есть стратегии — не добавляем
+    if (existing.isNotEmpty()) {
+        // Базовые стратегии уже есть, но «Пробой + откат» появилась позже — досеваем один раз.
+        seedBreakoutPullbackOnce(db)
+        return
+    }
 
     val now = Clock.System.now().toEpochMilliseconds()
 
@@ -196,6 +202,62 @@ fun seedDefaultStrategies(db: DrxDatabase) {
         created_at = now,
         updated_at = now
     )
+
+    // ─── Стратегия 4: Пробой + откат (включается вручную) ─────────────────────
+    seedBreakoutPullbackOnce(db)
+}
+
+/** Ключ-флаг: стратегия «Пробой + откат» уже засеяна (удалённую пользователем не возвращаем). */
+private const val BREAKOUT_PULLBACK_SEED_KEY = "breakout_pullback_seeded_v1"
+
+internal const val BREAKOUT_PULLBACK_ID = "breakout-pullback"
+
+/**
+ * Дефолты «Пробой + откат» (STRATEGY_RESEARCH.md §3): рабочий ТФ 5m + старший 15m,
+ * размер от риска 1% (потолок 10% баланса и 1% ликвидности пула), выходы в R:
+ * TP1 40% на +1.5R → безубыток, TP2 30% на +3R, остаток 30% — раннер под ATR-трейлингом.
+ */
+internal fun breakoutPullbackDefaults(): StrategyConfig = StrategyConfig(
+    id = BREAKOUT_PULLBACK_ID,
+    name = "Пробой + откат — мемкоины с историей",
+    type = StrategyType.BREAKOUT_PULLBACK.name,
+    isActive = false,
+    timeframe = "5m",
+    positionSize = 10.0,          // потолок размера; фактический — от риска
+    maxPositions = 1,
+    slippagePercent = 1.5,
+    stopLossPercent = 12.0,       // стоп дальше 12% — сетап «не тугой», вход отклоняется
+    takeProfitPercent = 100.0,    // в режиме раннера не закрывает позицию
+    breakEvenOffsetPercent = 2.0, // безубыток с запасом на слиппедж выхода
+    tp1ClosePercent = 40.0,
+    tp2ClosePercent = 30.0,
+    timeStopMinutes = 120,        // ~24 бара 5m: не дошла до TP1 — выходим
+    rLadderEnabled = true,
+    tp1R = 1.5,
+    tp2R = 3.0,
+    breakEvenAfterTp1 = true,
+    runnerEnabled = true,
+    atrTrailEnabled = true,
+    atrTrailMult = 3.0,
+    atrTrailActivationR = 1.0,
+    riskSizingEnabled = true,
+    riskPerTradePercent = 1.0,
+    maxPoolSharePercent = 1.0,
+    maxDrawdown = 30.0,
+    minLiquidityUsd = 20_000.0,
+    minMarketCap = 100_000.0,
+    maxMarketCap = 20_000_000.0,
+    minTokenAgeMinutes = 180,     // ≥ 36 баров 5m: база + пробой + откат
+    maxTokenAgeMinutes = 43_200,
+)
+
+/** Добавляет «Пробой + откат» один раз — и в новую, и в уже существующую БД. */
+private fun seedBreakoutPullbackOnce(db: DrxDatabase) {
+    val alreadyDone = db.settingsQueries.get(BREAKOUT_PULLBACK_SEED_KEY).executeAsOneOrNull() != null
+    if (alreadyDone) return
+    val store = StrategyStore(db)
+    if (store.loadAll().none { it.id == BREAKOUT_PULLBACK_ID }) store.save(breakoutPullbackDefaults())
+    db.settingsQueries.set(BREAKOUT_PULLBACK_SEED_KEY, "1", Clock.System.now().toEpochMilliseconds())
 }
 
 /** Ключ-флаг: нормализация Dars-дефолтов к методичке выполнена (чтобы не повторять). */

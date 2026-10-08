@@ -24,10 +24,10 @@ import tj.khujand.solana.trading.bot.exchange.dex.DexClient
  * Раз в [intervalMs] по каждой OPEN-сделке проверяются в порядке приоритета:
  *  1) ликвидность-стоп — экстренный выход при осушении пула (rug pull);
  *  2) Stop Loss (включая подтянутый trailing'ом/break-even'ом);
- *  3) основной Take Profit;
- *  4) partial TP1/TP2 — частичные фиксации;
- *  5) break-even — перенос SL в безубыток;
- *  6) trailing stop — подтягивание SL за пиком цены;
+ *  3) основной Take Profit (в режиме «раннер» не закрывает позицию);
+ *  4) partial TP1/TP2 — частичные фиксации (в % или R-лестница, она проверяется до основного TP);
+ *  5) break-even — перенос SL в безубыток (по % прибыли или после TP1);
+ *  6) trailing stop — подтягивание SL за пиком цены (по % или по ATR — Chandelier);
  *  7) time-stop — принудительный выход по времени.
  *
  * Работает независимо от статуса движка (позиции сопровождаются и на паузе).
@@ -103,8 +103,14 @@ class TradeMonitor(
             }
         activityLog.requestOk()
         if (price <= 0) return
-        val liquidity = pair?.liquidity?.usd
+        applyExits(t, config, price, pair?.liquidity?.usd)
+    }
 
+    /**
+     * Правила выхода по уже полученной цене (вынесено из [checkTrade] — тестируется без сети).
+     * @param liquidity текущая ликвидность пула, null — неизвестна (ликвидность-стоп пропускается).
+     */
+    internal suspend fun applyExits(t: TradeRow, config: StrategyConfig, price: Double, liquidity: Double?) {
         // 1. Ликвидность-стоп (rug pull): пул осушён — выходим немедленно.
         if (liquidity != null && t.entry_liquidity_usd > 0) {
             val dropPct = (1 - liquidity / t.entry_liquidity_usd) * 100
@@ -120,6 +126,9 @@ class TradeMonitor(
 
         var stopLoss = t.stop_loss
         val gainPct = (price - t.entry_price) / t.entry_price * 100
+        // Прибыль в R — база выходов в R (лестница, активация ATR-трейлинга).
+        val r = riskPerUnit(t.entry_price, t.initial_stop, config.stopLossPercent)
+        val gainR = gainInR(price, t.entry_price, r)
 
         // 5. Break-even: после X% прибыли SL переносится в безубыток + offset.
         if (config.breakEvenEnabled && gainPct >= config.breakEvenTriggerPercent) {
@@ -131,9 +140,32 @@ class TradeMonitor(
             }
         }
 
+        // 5b. Безубыток после TP1 (подстраховка: обычно переносится сразу при фиксации TP1).
+        if (config.breakEvenAfterTp1 && t.tp1_done == 1L) {
+            val beStop = t.entry_price * (1 + config.breakEvenOffsetPercent / 100)
+            if (beStop > stopLoss) {
+                stopLoss = beStop
+                db.tradeQueries.updateStopLoss(stopLoss, t.id)
+            }
+        }
+
         // 6. Trailing: после активации SL тянется за пиком.
         if (config.trailingStopEnabled && gainPct >= config.trailingActivationPercent) {
             val trailStop = peak * (1 - config.trailingStopPercent / 100)
+            if (trailStop > stopLoss) {
+                stopLoss = trailStop
+                db.tradeQueries.updateStopLoss(stopLoss, t.id)
+            }
+        }
+
+        // 6b. ATR-трейлинг (Chandelier): дистанция от пика по волатильности входа, после N×R прибыли.
+        if (config.atrTrailEnabled && gainR >= config.atrTrailActivationR) {
+            val trailStop = atrTrailStop(
+                peak = peak,
+                atrFrac = t.entry_atr_frac,
+                mult = config.atrTrailMult,
+                fallbackFrac = config.trailingStopPercent / 100,
+            )
             if (trailStop > stopLoss) {
                 stopLoss = trailStop
                 db.tradeQueries.updateStopLoss(stopLoss, t.id)
@@ -150,14 +182,37 @@ class TradeMonitor(
             return
         }
 
-        // 3. Основной Take Profit.
-        if (price >= t.take_profit) {
+        // 4a. R-лестница проверяется ДО основного TP: иначе TP у близкого сопротивления
+        // закрывал бы всю позицию раньше, чем сработают ступени.
+        if (config.rLadderEnabled) {
+            when (rLadderStep(gainR, t.tp1_done == 1L, t.tp2_done == 1L, config.tp1R, config.tp2R)) {
+                1 -> {
+                    val result = closePartial(t, price, config.tp1ClosePercent, "TP1 +${fmtNum(config.tp1R)}R", tp1 = true, tp2 = false)
+                    // Остаток сразу защищаем безубытком — не ждём следующего цикла монитора.
+                    if (result != null && !result.isFull && config.breakEvenAfterTp1) {
+                        val beStop = t.entry_price * (1 + config.breakEvenOffsetPercent / 100)
+                        if (beStop > stopLoss) {
+                            db.tradeQueries.updateStopLoss(beStop, t.id)
+                            activityLog.info("🛡 ${t.symbol}: после TP1 SL в безубыток (${fmtNum(beStop)})")
+                        }
+                    }
+                    return
+                }
+                2 -> {
+                    closePartial(t, price, config.tp2ClosePercent, "TP2 +${fmtNum(config.tp2R)}R", tp1 = true, tp2 = true)
+                    return
+                }
+            }
+        }
+
+        // 3. Основной Take Profit. В режиме «раннер» не закрывает позицию — остаток ведёт стоп/трейлинг.
+        if (!config.runnerEnabled && price >= t.take_profit) {
             closeFull(t, price, "Take Profit")
             return
         }
 
-        // 4. Partial TP: фиксируем доли на промежуточных целях.
-        if (config.partialTpEnabled) {
+        // 4. Partial TP: фиксируем доли на промежуточных целях (в % — если не включена R-лестница).
+        if (!config.rLadderEnabled && config.partialTpEnabled) {
             if (t.tp1_done == 0L && gainPct >= config.tp1Percent) {
                 closePartial(t, price, config.tp1ClosePercent, "TP1 +${config.tp1Percent}%", tp1 = true, tp2 = false)
                 return
@@ -168,8 +223,10 @@ class TradeMonitor(
             }
         }
 
-        // 7. Time-stop: позиция висит слишком долго.
-        if (config.timeStopMinutes > 0) {
+        // 7. Time-stop: позиция висит слишком долго. С R-лестницей — только пока TP1 не взят:
+        // взятый TP1 означает «сделка пошла», и тайм-стоп не должен срезать раннер.
+        val tradeWent = config.rLadderEnabled && t.tp1_done == 1L
+        if (config.timeStopMinutes > 0 && !tradeWent) {
             val ageMinutes = (Clock.System.now().toEpochMilliseconds() - t.opened_at) / 60_000
             if (ageMinutes >= config.timeStopMinutes) {
                 closeFull(t, price, "Time-stop (${ageMinutes}м)")
@@ -196,13 +253,21 @@ class TradeMonitor(
         )
     }
 
-    private suspend fun closePartial(t: TradeRow, price: Double, portion: Double, reason: String, tp1: Boolean, tp2: Boolean) {
-        val result = executor.closeTrade(t, price, portion, reason, tp1Done = tp1, tp2Done = tp2) ?: return
+    private suspend fun closePartial(
+        t: TradeRow,
+        price: Double,
+        portion: Double,
+        reason: String,
+        tp1: Boolean,
+        tp2: Boolean,
+    ): CloseResult? {
+        val result = executor.closeTrade(t, price, portion, reason, tp1Done = tp1, tp2Done = tp2) ?: return null
         activityLog.success("💰 ${t.symbol}: частичная фиксация ${portion.toInt()}% ($reason), PnL ${fmtNum(result.pnlUsd)} USD")
         notifier.send(
             "💰 ЧАСТИЧНАЯ ФИКСАЦИЯ ${if (t.is_demo == 1L) "(DEMO)" else ""} ${t.symbol}\n" +
                 "$reason — продано ${portion.toInt()}% позиции, PnL ${fmtNum(result.pnlUsd)} USD"
         )
+        return result
     }
 
     /** Стратегию удалили, а сделка ещё открыта — сопровождаем с дефолтными параметрами. */

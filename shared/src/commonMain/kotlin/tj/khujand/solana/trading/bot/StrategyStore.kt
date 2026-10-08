@@ -39,6 +39,34 @@ class StrategyStore(private val db: DrxDatabase) {
             max_drawdown_enabled = if (cfg.maxDrawdownEnabled) 1L else 0L,
             id = cfg.id,
         )
+        // Выходы в R, размер от риска и «Пробой + откат» — тоже вне insert/updateStrategy.
+        db.strategyQueries.updateExitParams(
+            r_ladder_enabled = if (cfg.rLadderEnabled) 1L else 0L,
+            tp1_r = cfg.tp1R,
+            tp2_r = cfg.tp2R,
+            break_even_after_tp1 = if (cfg.breakEvenAfterTp1) 1L else 0L,
+            runner_enabled = if (cfg.runnerEnabled) 1L else 0L,
+            atr_trail_enabled = if (cfg.atrTrailEnabled) 1L else 0L,
+            atr_trail_mult = cfg.atrTrailMult,
+            atr_trail_activation_r = cfg.atrTrailActivationR,
+            id = cfg.id,
+        )
+        db.strategyQueries.updateSizingParams(
+            risk_sizing_enabled = if (cfg.riskSizingEnabled) 1L else 0L,
+            risk_per_trade_percent = cfg.riskPerTradePercent,
+            max_pool_share_percent = cfg.maxPoolSharePercent,
+            id = cfg.id,
+        )
+        db.strategyQueries.updateBreakoutParams(
+            bp_higher_tf = cfg.bpHigherTf,
+            bp_require_htf_trend = if (cfg.bpRequireHtfTrend) 1L else 0L,
+            bp_breakout_lookback = cfg.bpBreakoutLookback.toLong(),
+            bp_breakout_volume_mult = cfg.bpBreakoutVolumeMult,
+            bp_max_bars_since_breakout = cfg.bpMaxBarsSinceBreakout.toLong(),
+            bp_pullback_volume_ratio = cfg.bpPullbackVolumeRatio,
+            bp_trigger_volume_mult = cfg.bpTriggerVolumeMult,
+            id = cfg.id,
+        )
     }
 
     private fun update(cfg: StrategyConfig) = db.strategyQueries.updateStrategy(

@@ -2451,7 +2451,7 @@ fun StrategyConfigCard(
                     InfoChip("🛡", "SL ${cfg.stopLossPercent}%")
                     InfoChip("🎯", "TP ${cfg.takeProfitPercent}%")
                     InfoChip("📦", "${cfg.positionSize}%")
-                    if (cfg.trailingStopEnabled) InfoChip("📈", "трейл")
+                    if (cfg.trailingStopEnabled || cfg.atrTrailEnabled) InfoChip("📈", "трейл")
                 }
                 Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                     SmallIconBtn("✏️") { onEdit(cfg) }
@@ -2523,6 +2523,30 @@ fun StrategyFormScreen(
     // ── DEX-выходы ──
     var timeStop by remember { mutableStateOf((c?.timeStopMinutes ?: 0).toString()) }
     var liqExit by remember { mutableStateOf(c?.liquidityExitDropPercent?.toFloat() ?: 50f) }
+
+    // ── Выходы в R (общие для всех типов) ──
+    var rLadder by remember { mutableStateOf(c?.rLadderEnabled ?: false) }
+    var tp1R by remember { mutableStateOf(c?.tp1R?.toFloat() ?: 1.5f) }
+    var tp2R by remember { mutableStateOf(c?.tp2R?.toFloat() ?: 3f) }
+    var beAfterTp1 by remember { mutableStateOf(c?.breakEvenAfterTp1 ?: false) }
+    var runner by remember { mutableStateOf(c?.runnerEnabled ?: false) }
+    var atrTrail by remember { mutableStateOf(c?.atrTrailEnabled ?: false) }
+    var atrTrailMult by remember { mutableStateOf(c?.atrTrailMult?.toFloat() ?: 3f) }
+    var atrTrailActivation by remember { mutableStateOf(c?.atrTrailActivationR?.toFloat() ?: 1f) }
+
+    // ── Размер от риска ──
+    var riskSizing by remember { mutableStateOf(c?.riskSizingEnabled ?: false) }
+    var riskPerTrade by remember { mutableStateOf(c?.riskPerTradePercent?.toFloat() ?: 1f) }
+    var maxPoolShare by remember { mutableStateOf(c?.maxPoolSharePercent?.toFloat() ?: 1f) }
+
+    // ── Пробой + откат ──
+    var bpHigherTf by remember { mutableStateOf(c?.bpHigherTf ?: "15m") }
+    var bpHtfTrend by remember { mutableStateOf(c?.bpRequireHtfTrend ?: true) }
+    var bpLookback by remember { mutableStateOf((c?.bpBreakoutLookback ?: 20).toString()) }
+    var bpBreakoutVol by remember { mutableStateOf(c?.bpBreakoutVolumeMult?.toFloat() ?: 2f) }
+    var bpMaxBars by remember { mutableStateOf((c?.bpMaxBarsSinceBreakout ?: 20).toString()) }
+    var bpPullbackVol by remember { mutableStateOf(c?.bpPullbackVolumeRatio?.toFloat() ?: 0.7f) }
+    var bpTriggerVol by remember { mutableStateOf(c?.bpTriggerVolumeMult?.toFloat() ?: 1.2f) }
 
     // ── Риск ──
     var maxDailyLossEnabled by remember { mutableStateOf(c?.maxDailyLossEnabled ?: true) }
@@ -2604,9 +2628,26 @@ fun StrategyFormScreen(
                 Spacer(Modifier.height(4.dp))
                 Text("Тип стратегии", fontSize = 12.sp, color = TextSecondary)
                 Spacer(Modifier.height(4.dp))
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Row(
+                    modifier = Modifier.horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
                     StrategyType.entries.forEach { t ->
-                        ChoiceChip(t.displayName.substringBefore(" /").substringBefore(" Trend"), type == t.name) { type = t.name }
+                        ChoiceChip(t.displayName.substringBefore(" /").substringBefore(" Trend"), type == t.name) {
+                            type = t.name
+                            // Новая «Пробой + откат» сразу получает рекомендуемые выходы и ТФ
+                            // (STRATEGY_RESEARCH.md §3); при редактировании настройки не трогаем.
+                            if (!isEdit && t == StrategyType.BREAKOUT_PULLBACK) {
+                                timeframe = "5m"
+                                rLadder = true
+                                beAfterTp1 = true
+                                runner = true
+                                atrTrail = true
+                                riskSizing = true
+                                tp1Close = 40f
+                                tp2Close = 30f
+                            }
+                        }
                     }
                 }
                 Spacer(Modifier.height(8.dp))
@@ -2621,8 +2662,24 @@ fun StrategyFormScreen(
 
             // 2. Размер позиции
             FormSection("📦  Размер позиции") {
-                FormSlider("Размер входа", positionSize, 1f, 25f,
+                FormSlider(if (riskSizing) "Макс. размер входа" else "Размер входа", positionSize, 1f, 25f,
                     "${"%.1f".format(positionSize)}% от баланса") { positionSize = it }
+                FormToggle("Размер от риска", riskSizing) { riskSizing = it }
+                if (riskSizing) {
+                    FormSlider("Риск на сделку", riskPerTrade, 0.25f, 5f,
+                        "${"%.2f".format(riskPerTrade)}% баланса") { riskPerTrade = it }
+                    FormSlider("Не больше доли пула", maxPoolShare, 0.25f, 5f,
+                        "${"%.2f".format(maxPoolShare)}% ликвидности") { maxPoolShare = it }
+                    Surface(color = Blue.copy(alpha = 0.08f), shape = RoundedCornerShape(8.dp)) {
+                        Text(
+                            "Размер = баланс × риск% / расстояние до стопа: при срабатывании стопа теряется " +
+                                "одинаковый % баланса, какой бы ни была ширина стопа. Потолок — «Макс. размер входа» " +
+                                "и доля ликвидности пула (в тонком пуле крупный вход съедает прибыль на слиппедже).",
+                            fontSize = 11.sp, color = TextSecondary,
+                            modifier = Modifier.padding(10.dp), lineHeight = 16.sp
+                        )
+                    }
+                }
                 FormTextField("Макс. одновременных позиций", maxPositions, isNumber = true) { maxPositions = it }
                 FormSlider("Slippage", slippage, 0.5f, 5f,
                     "${"%.1f".format(slippage)}%") { slippage = it }
@@ -2662,6 +2719,41 @@ fun StrategyFormScreen(
                         "+${"%.0f".format(tp2Percent)}%") { tp2Percent = it }
                     FormSlider("TP2 — закрыть", tp2Close, 10f, 90f,
                         "${"%.0f".format(tp2Close)}% позиции") { tp2Close = it }
+                }
+            }
+
+            // 4b. Выходы в R (общие для всех типов)
+            FormSection("📐  Выходы в R") {
+                FormToggle("Лестница TP в R (вместо %)", rLadder) { rLadder = it }
+                if (rLadder) {
+                    FormSlider("TP1 — цель", tp1R, 0.5f, 5f,
+                        "+${"%.1f".format(tp1R)}R") { tp1R = it }
+                    FormSlider("TP1 — закрыть", tp1Close, 10f, 90f,
+                        "${"%.0f".format(tp1Close)}% позиции") { tp1Close = it }
+                    FormSlider("TP2 — цель", tp2R, 1f, 10f,
+                        "+${"%.1f".format(tp2R)}R") { tp2R = it }
+                    FormSlider("TP2 — закрыть", tp2Close, 10f, 90f,
+                        "${"%.0f".format(tp2Close)}% позиции") { tp2Close = it }
+                }
+                FormToggle("Безубыток после TP1", beAfterTp1) { beAfterTp1 = it }
+                FormToggle("Раннер: Take Profit не закрывает позицию", runner) { runner = it }
+                FormToggle("ATR-трейлинг (Chandelier)", atrTrail) { atrTrail = it }
+                if (atrTrail) {
+                    FormSlider("Отступ от пика", atrTrailMult, 1f, 6f,
+                        "${"%.1f".format(atrTrailMult)} × ATR") { atrTrailMult = it }
+                    FormSlider("Активация после прибыли", atrTrailActivation, 0f, 5f,
+                        "+${"%.1f".format(atrTrailActivation)}R") { atrTrailActivation = it }
+                }
+                Surface(color = Blue.copy(alpha = 0.08f), shape = RoundedCornerShape(8.dp)) {
+                    Text(
+                        "R — риск сделки: расстояние от входа до начального стопа. Лестница фиксирует доли " +
+                            "на +TP1R и +TP2R (заменяет TP1/TP2 в %); после TP1 тайм-стоп позицию не закрывает. " +
+                            "Раннер оставляет остаток работать, пока его не закроет стоп или трейлинг — " +
+                            "включайте вместе с трейлингом. ATR-трейлинг держит стоп на N × ATR от пика " +
+                            "(ATR — средний размах свечи на входе): шире на волатильных монетах, уже на спокойных.",
+                        fontSize = 11.sp, color = TextSecondary,
+                        modifier = Modifier.padding(10.dp), lineHeight = 16.sp
+                    )
                 }
             }
 
@@ -2778,6 +2870,39 @@ fun StrategyFormScreen(
                 }
             }
 
+            // 8b. Пробой + откат
+            if (type == StrategyType.BREAKOUT_PULLBACK.name) {
+                FormSection("🚀  Пробой + откат") {
+                    Text("Старший таймфрейм (тренд)", fontSize = 12.sp, color = TextSecondary)
+                    Spacer(Modifier.height(4.dp))
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        listOf("5m", "15m", "1h", "4h").forEach { tf ->
+                            ChoiceChip(tf, bpHigherTf == tf) { bpHigherTf = tf }
+                        }
+                    }
+                    Spacer(Modifier.height(8.dp))
+                    FormToggle("Требовать восходящий тренд старшего ТФ", bpHtfTrend) { bpHtfTrend = it }
+                    FormTextField("Пробой максимума за N баров", bpLookback, isNumber = true) { bpLookback = it }
+                    FormSlider("Объём на пробое", bpBreakoutVol, 1f, 5f,
+                        "×${"%.1f".format(bpBreakoutVol)} среднего") { bpBreakoutVol = it }
+                    FormTextField("Пробой не старше, баров", bpMaxBars, isNumber = true) { bpMaxBars = it }
+                    FormSlider("Объём в откате не выше", bpPullbackVol, 0.3f, 1f,
+                        "${"%.0f".format(bpPullbackVol * 100)}% объёма импульса") { bpPullbackVol = it }
+                    FormSlider("Объём бара-триггера", bpTriggerVol, 1f, 3f,
+                        "×${"%.1f".format(bpTriggerVol)} объёма отката") { bpTriggerVol = it }
+                    Surface(color = Blue.copy(alpha = 0.08f), shape = RoundedCornerShape(8.dp)) {
+                        Text(
+                            "Бот не покупает сам пробой: он ждёт откат к уровню пробоя на затухающем объёме " +
+                                "и входит на баре разворота вверх. Стоп — под минимумом отката. Если стоп дальше " +
+                                "Stop Loss из настроек или до пика импульса меньше 1R — вход пропускается. " +
+                                "Монете нужна история: на 5m — от ~3 часов.",
+                            fontSize = 11.sp, color = TextSecondary,
+                            modifier = Modifier.padding(10.dp), lineHeight = 16.sp
+                        )
+                    }
+                }
+            }
+
             // 9. Dars
             if (type == StrategyType.DARS.name) {
                 FormSection("🧠  Dars / Smart Money") {
@@ -2841,6 +2966,17 @@ fun StrategyFormScreen(
                     tp2ClosePercent = tp2Close.toDouble(),
                     timeStopMinutes = timeStop.toIntOrNull() ?: 0,
                     liquidityExitDropPercent = liqExit.toDouble(),
+                    rLadderEnabled = rLadder,
+                    tp1R = tp1R.toDouble(),
+                    tp2R = tp2R.toDouble(),
+                    breakEvenAfterTp1 = beAfterTp1,
+                    runnerEnabled = runner,
+                    atrTrailEnabled = atrTrail,
+                    atrTrailMult = atrTrailMult.toDouble(),
+                    atrTrailActivationR = atrTrailActivation.toDouble(),
+                    riskSizingEnabled = riskSizing,
+                    riskPerTradePercent = riskPerTrade.toDouble(),
+                    maxPoolSharePercent = maxPoolShare.toDouble(),
                     maxDailyLossEnabled = maxDailyLossEnabled,
                     maxDailyLoss = maxDailyLoss.toDouble(),
                     maxDrawdownEnabled = maxDrawdownEnabled,
@@ -2876,6 +3012,13 @@ fun StrategyFormScreen(
                     darsUseTrendLevels = darsTrendLevels,
                     darsUseFalseBreakout = darsFalseBreakout,
                     darsUseTriangle = darsTriangle,
+                    bpHigherTf = bpHigherTf,
+                    bpRequireHtfTrend = bpHtfTrend,
+                    bpBreakoutLookback = bpLookback.toIntOrNull()?.coerceAtLeast(5) ?: 20,
+                    bpBreakoutVolumeMult = bpBreakoutVol.toDouble(),
+                    bpMaxBarsSinceBreakout = bpMaxBars.toIntOrNull()?.coerceAtLeast(3) ?: 20,
+                    bpPullbackVolumeRatio = bpPullbackVol.toDouble(),
+                    bpTriggerVolumeMult = bpTriggerVol.toDouble(),
                 ))
             },
             modifier = Modifier

@@ -188,11 +188,12 @@ class RiskManagerTest {
     }
 
     @Test
-    fun seedCreatesThreeStrategies() {
+    fun seedCreatesFourStrategies() {
         val db = inMemoryDb()
         seedDefaultStrategies(db)
         val all = db.strategyQueries.getAll().executeAsList()
-        assertEquals(3, all.size)
+        // Dars, Momentum, RSI+EMA и «Пробой + откат» (последняя — выключена).
+        assertEquals(4, all.size)
         assertEquals(1, all.count { it.is_active == 1L })
         assertEquals("DARS", all.first { it.is_active == 1L }.type)
     }

@@ -85,6 +85,116 @@ class StrategyStoreRangeTest {
         assertEquals(false, reloaded.scanFiltersEnabled)
     }
 
+    @Test fun exitSizingAndBreakoutParamsSurviveSaveAndReload() {
+        val store = StrategyStore(freshDb())
+        store.save(breakoutPullbackDefaults().copy(tp1R = 2.0, atrTrailMult = 2.5, bpBreakoutLookback = 30, bpHigherTf = "1h"))
+        val reloaded = store.loadAll().first { it.id == BREAKOUT_PULLBACK_ID }
+        assertEquals(StrategyType.BREAKOUT_PULLBACK.name, reloaded.type)
+        assertEquals("5m", reloaded.timeframe)
+        assertEquals(true, reloaded.rLadderEnabled)
+        assertEquals(2.0, reloaded.tp1R)
+        assertEquals(true, reloaded.breakEvenAfterTp1)
+        assertEquals(true, reloaded.runnerEnabled)
+        assertEquals(true, reloaded.atrTrailEnabled)
+        assertEquals(2.5, reloaded.atrTrailMult)
+        assertEquals(true, reloaded.riskSizingEnabled)
+        assertEquals(1.0, reloaded.riskPerTradePercent)
+        assertEquals(30, reloaded.bpBreakoutLookback)
+        assertEquals("1h", reloaded.bpHigherTf)
+        assertEquals(0.7, reloaded.bpPullbackVolumeRatio)
+    }
+
+    @Test fun newTogglesOffByDefault() {
+        // Старые стратегии не должны менять поведение: все новые выходы и размер от риска выключены.
+        val store = StrategyStore(freshDb())
+        store.save(StrategyConfig(id = "plain", name = "plain"))
+        val reloaded = store.loadAll().first { it.id == "plain" }
+        assertEquals(false, reloaded.rLadderEnabled)
+        assertEquals(false, reloaded.breakEvenAfterTp1)
+        assertEquals(false, reloaded.runnerEnabled)
+        assertEquals(false, reloaded.atrTrailEnabled)
+        assertEquals(false, reloaded.riskSizingEnabled)
+    }
+
+    @Test fun breakoutPullbackSeededOnceIntoExistingDb() {
+        val db = freshDb()
+        val store = StrategyStore(db)
+        store.save(StrategyConfig(id = "user", name = "user strategy"))
+
+        seedDefaultStrategies(db)
+        assertTrue(store.loadAll().any { it.id == BREAKOUT_PULLBACK_ID }, "досеяна в существующую БД")
+        assertTrue(store.loadAll().none { it.id == "dars-memecoins" }, "базовые в непустую БД не сеются")
+
+        // Пользователь удалил — повторный запуск не возвращает.
+        store.delete(BREAKOUT_PULLBACK_ID)
+        seedDefaultStrategies(db)
+        assertTrue(store.loadAll().none { it.id == BREAKOUT_PULLBACK_ID })
+    }
+
+    @Test fun freshDbGetsAllFourStrategies() {
+        val db = freshDb()
+        seedDefaultStrategies(db)
+        val ids = StrategyStore(db).loadAll().map { it.id }.toSet()
+        assertEquals(setOf("dars-memecoins", "momentum-scalp", "rsi-ema-memecoins", BREAKOUT_PULLBACK_ID), ids)
+    }
+
+    /** Старая БД без новых колонок strategy/trade: миграция добавляет их, SELECT * не падает. */
+    @Test fun migrationAddsExitAndTradeColumns() {
+        val driver = JdbcSqliteDriver(JdbcSqliteDriver.IN_MEMORY)
+        DrxDatabase.Schema.create(driver)
+        val dropped = listOf(
+            "r_ladder_enabled", "tp1_r", "tp2_r", "break_even_after_tp1", "runner_enabled",
+            "atr_trail_enabled", "atr_trail_mult", "atr_trail_activation_r",
+            "risk_sizing_enabled", "risk_per_trade_percent", "max_pool_share_percent",
+            "bp_higher_tf", "bp_require_htf_trend", "bp_breakout_lookback", "bp_breakout_volume_mult",
+            "bp_max_bars_since_breakout", "bp_pullback_volume_ratio", "bp_trigger_volume_mult",
+        )
+        dropped.forEach { driver.execute(null, "ALTER TABLE strategy DROP COLUMN $it", 0) }
+        // Таблица trade в старом формате (без initial_stop / entry_atr_frac). DROP COLUMN для
+        // последней колонки SQLite не переваривает из-за комментария в CREATE — пересоздаём таблицу.
+        driver.execute(null, "DROP TABLE trade", 0)
+        driver.execute(
+            null,
+            """
+            CREATE TABLE trade (
+                id TEXT NOT NULL PRIMARY KEY, strategy_id TEXT NOT NULL, strategy_name TEXT NOT NULL,
+                mint TEXT NOT NULL, symbol TEXT NOT NULL, pair_address TEXT NOT NULL DEFAULT '',
+                entry_price REAL NOT NULL, exit_price REAL, qty REAL NOT NULL, qty_remaining REAL NOT NULL,
+                size_usd REAL NOT NULL, size_sol REAL NOT NULL DEFAULT 0, stop_loss REAL NOT NULL,
+                take_profit REAL NOT NULL, peak_price REAL NOT NULL, tp1_done INTEGER NOT NULL DEFAULT 0,
+                tp2_done INTEGER NOT NULL DEFAULT 0, entry_liquidity_usd REAL NOT NULL DEFAULT 0,
+                pnl REAL, pnl_percent REAL, fee REAL, status TEXT NOT NULL DEFAULT 'OPEN',
+                open_reason TEXT NOT NULL, close_reason TEXT, is_demo INTEGER NOT NULL DEFAULT 1,
+                opened_at INTEGER NOT NULL, closed_at INTEGER
+            )
+            """.trimIndent(),
+            0,
+        )
+        driver.execute(
+            null,
+            "INSERT INTO strategy (id, name, type, created_at, updated_at) VALUES ('old', 'legacy', 'DARS', 0, 0)",
+            0,
+        )
+        driver.execute(
+            null,
+            "INSERT INTO trade (id, strategy_id, strategy_name, mint, symbol, entry_price, qty, qty_remaining, " +
+                "size_usd, stop_loss, take_profit, peak_price, open_reason, opened_at) " +
+                "VALUES ('t1', 'old', 'legacy', 'm', 'S', 1.0, 10.0, 10.0, 10.0, 0.9, 1.3, 1.0, 'x', 0)",
+            0,
+        )
+
+        migrateStrategyTable(driver)
+
+        val db = DrxDatabase(driver)
+        val cfg = db.strategyQueries.getAll().executeAsList().single().toStrategyConfig()
+        assertEquals(false, cfg.rLadderEnabled)
+        assertEquals(1.5, cfg.tp1R)
+        assertEquals("15m", cfg.bpHigherTf)
+        val trade = db.tradeQueries.getOpenTrades().executeAsList().single()
+        assertEquals(0.0, trade.initial_stop)   // нет данных → монитор возьмёт R из SL% конфига
+        assertEquals(0.0, trade.entry_atr_frac)
+    }
+
     /**
      * Симуляция «старой» БД без range-колонок (главная причина, ради которой добавлена миграция):
      * migrateStrategyTable должен добавить колонки, а getAll (SELECT *) — не упасть и корректно

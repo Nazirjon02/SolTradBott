@@ -65,10 +65,20 @@ class RiskManager(
         return openCount < config.maxPositions
     }
 
-    /** Размер позиции в USD: % от торговой базы (спот, без плеча). */
-    fun calculatePositionSizeUsd(config: StrategyConfig): Double {
+    /**
+     * Размер позиции в USD (спот, без плеча): % от торговой базы, а при
+     * [StrategyConfig.riskSizingEnabled] — от риска сделки (см. [positionSizeUsd]).
+     * @param entry цена входа, @param stop цена стопа, @param liquidityUsd ликвидность пула —
+     *   нужны только для размера от риска; без них (0) берётся обычный % баланса.
+     */
+    fun calculatePositionSizeUsd(
+        config: StrategyConfig,
+        entry: Double = 0.0,
+        stop: Double = 0.0,
+        liquidityUsd: Double = 0.0,
+    ): Double {
         val balance = baseBalanceUsd().takeIf { it > 0 } ?: return 0.0
-        return balance * config.positionSize / 100
+        return positionSizeUsd(balance, config, entry, stop, liquidityUsd)
     }
 
     private fun startOfDayMillis(): Long {
@@ -76,4 +86,34 @@ class RiskManager(
         val today = now.toLocalDateTime(TimeZone.currentSystemDefault()).date
         return today.atStartOfDayIn(TimeZone.currentSystemDefault()).toEpochMilliseconds()
     }
+}
+
+/**
+ * Размер позиции в USD от баланса.
+ *
+ * - Выключен [StrategyConfig.riskSizingEnabled] → `баланс × positionSize%` (прежнее поведение).
+ * - Включён → модель percent-risk (Van Tharp): `баланс × riskPerTradePercent% / расстояние до стопа`,
+ *   чтобы стоп-аут стоил одинаковый % баланса при любой ширине стопа. Ограничения сверху:
+ *   `positionSize%` баланса и `maxPoolSharePercent%` ликвидности пула — в CPMM-пуле средний
+ *   слиппедж ≈ 2 × размер / ликвидность, поэтому крупный вход в тонкий пул съедает прибыль.
+ *   Без корректного стопа (stop ≥ entry или нули) — просто `positionSize%`.
+ */
+internal fun positionSizeUsd(
+    balance: Double,
+    config: StrategyConfig,
+    entry: Double,
+    stop: Double,
+    liquidityUsd: Double,
+): Double {
+    if (balance <= 0.0) return 0.0
+    val cap = balance * config.positionSize / 100
+    if (!config.riskSizingEnabled) return cap
+
+    val stopFrac = if (entry > 0.0 && stop > 0.0 && stop < entry) (entry - stop) / entry else 0.0
+    var size = if (stopFrac > 0.0) balance * config.riskPerTradePercent / 100 / stopFrac else cap
+    size = minOf(size, cap)
+    if (liquidityUsd > 0.0 && config.maxPoolSharePercent > 0.0) {
+        size = minOf(size, liquidityUsd * config.maxPoolSharePercent / 100)
+    }
+    return size
 }

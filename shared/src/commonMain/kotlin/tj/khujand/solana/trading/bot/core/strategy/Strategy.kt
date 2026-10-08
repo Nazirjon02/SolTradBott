@@ -51,6 +51,7 @@ enum class StrategyType(val displayName: String) {
     MOMENTUM("Momentum Scalping"),
     RSI_EMA("RSI + EMA Trend"),
     SCORE("Вход по баллу"),
+    BREAKOUT_PULLBACK("Пробой + откат"),
 }
 
 /**
@@ -87,6 +88,29 @@ data class StrategyConfig(
     val tp2ClosePercent: Double = 30.0,
     val timeStopMinutes: Int = 0,
     val liquidityExitDropPercent: Double = 50.0,
+
+    // ── Выходы в R (общие для всех стратегий, по умолчанию выключены) ──
+    // R = цена входа − начальный стоп (риск на единицу). См. TradeMonitor и ExitRules.
+    // rLadderEnabled: TP1/TP2 на tp1R/tp2R × R вместо % (доли закрытия — tp1/tp2ClosePercent);
+    //   при взятом TP1 тайм-стоп больше не закрывает позицию («сделка пошла»).
+    // breakEvenAfterTp1: после TP1 стоп переносится в безубыток + breakEvenOffsetPercent.
+    // runnerEnabled: основной Take Profit не закрывает позицию — остаток ведёт трейлинг/стоп.
+    // atrTrailEnabled: Chandelier-трейлинг пик × (1 − atrTrailMult × ATR%входа) после atrTrailActivationR × R.
+    val rLadderEnabled: Boolean = false,
+    val tp1R: Double = 1.5,
+    val tp2R: Double = 3.0,
+    val breakEvenAfterTp1: Boolean = false,
+    val runnerEnabled: Boolean = false,
+    val atrTrailEnabled: Boolean = false,
+    val atrTrailMult: Double = 3.0,
+    val atrTrailActivationR: Double = 1.0,
+
+    // ── Размер позиции от риска (по умолчанию выключен — размер = positionSize% баланса) ──
+    // Включён: размер = баланс × riskPerTradePercent% / расстояние до стопа, но не больше
+    // positionSize% баланса и не больше maxPoolSharePercent% ликвидности пула (слиппедж).
+    val riskSizingEnabled: Boolean = false,
+    val riskPerTradePercent: Double = 1.0,
+    val maxPoolSharePercent: Double = 1.0,
 
     // ── Риск ──
     // Выключатели лимитов: false = соответствующая проверка в RiskManager пропускается
@@ -144,6 +168,18 @@ data class StrategyConfig(
     val darsUseTrendLevels: Boolean = true,
     val darsUseFalseBreakout: Boolean = true,
     val darsUseTriangle: Boolean = true,
+
+    // ── Пробой + откат (стратегия BREAKOUT_PULLBACK) ──
+    // Пробой максимума bpBreakoutLookback баров на объёме ≥ bpBreakoutVolumeMult × средний,
+    // затем откат с объёмом ≤ bpPullbackVolumeRatio × объём импульса, ретест уровня пробоя
+    // и бар-триггер с объёмом ≥ bpTriggerVolumeMult × средний объём отката. См. STRATEGY_RESEARCH.md §3.
+    val bpHigherTf: String = "15m",
+    val bpRequireHtfTrend: Boolean = true,
+    val bpBreakoutLookback: Int = 20,
+    val bpBreakoutVolumeMult: Double = 2.0,
+    val bpMaxBarsSinceBreakout: Int = 20,
+    val bpPullbackVolumeRatio: Double = 0.7,
+    val bpTriggerVolumeMult: Double = 1.2,
 ) {
     fun scanFilters(): ScanFilters = ScanFilters(
         minLiquidityUsd = minLiquidityUsd,

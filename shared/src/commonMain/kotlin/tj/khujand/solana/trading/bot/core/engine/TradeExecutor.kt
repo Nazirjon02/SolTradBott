@@ -96,16 +96,21 @@ class TradeExecutor(
      * Открывает позицию по сигналу. Возвращает id сделки или null (не удалось).
      * @param sizeUsd размер входа в USD (уже рассчитан RiskManager'ом).
      * @param entryLiquidityUsd ликвидность пула на входе (для liquidity-стопа).
+     * @param entryAtrFrac ATR рабочего ТФ / цена на входе (для ATR-трейлинга; 0 = нет данных).
      */
     suspend fun openTrade(
         signal: Signal,
         config: StrategyConfig,
         sizeUsd: Double,
         entryLiquidityUsd: Double,
+        entryAtrFrac: Double = 0.0,
     ): String? {
         if (sizeUsd <= 0 || signal.entryPrice <= 0) return null
-        return if (isDemo()) openDemo(signal, config, sizeUsd, entryLiquidityUsd)
+        val id = if (isDemo()) openDemo(signal, config, sizeUsd, entryLiquidityUsd)
         else openReal(signal, config, sizeUsd, entryLiquidityUsd)
+        // База выходов в R: начальный стоп (stop_loss потом двигают безубыток/трейлинг) и ATR входа.
+        if (id != null) db.tradeQueries.setRiskBasis(signal.stopLoss, entryAtrFrac, id)
+        return id
     }
 
     private fun openDemo(signal: Signal, config: StrategyConfig, sizeUsd: Double, liq: Double): String? {

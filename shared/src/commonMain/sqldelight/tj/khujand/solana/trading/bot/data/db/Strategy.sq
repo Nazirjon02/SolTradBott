@@ -81,6 +81,30 @@ CREATE TABLE IF NOT EXISTS strategy (
     dars_use_false_breakout INTEGER NOT NULL DEFAULT 1,
     dars_use_triangle INTEGER NOT NULL DEFAULT 1,
 
+    -- Выходы в R (поздние колонки, пишутся updateExitParams). DEFAULT 0 — прежнее поведение.
+    r_ladder_enabled INTEGER NOT NULL DEFAULT 0,
+    tp1_r REAL NOT NULL DEFAULT 1.5,
+    tp2_r REAL NOT NULL DEFAULT 3.0,
+    break_even_after_tp1 INTEGER NOT NULL DEFAULT 0,
+    runner_enabled INTEGER NOT NULL DEFAULT 0,
+    atr_trail_enabled INTEGER NOT NULL DEFAULT 0,
+    atr_trail_mult REAL NOT NULL DEFAULT 3.0,
+    atr_trail_activation_r REAL NOT NULL DEFAULT 1.0,
+
+    -- Размер позиции от риска (поздние колонки, пишутся updateSizingParams). DEFAULT 0 — % баланса.
+    risk_sizing_enabled INTEGER NOT NULL DEFAULT 0,
+    risk_per_trade_percent REAL NOT NULL DEFAULT 1.0,
+    max_pool_share_percent REAL NOT NULL DEFAULT 1.0,
+
+    -- Пробой + откат (стратегия BREAKOUT_PULLBACK; поздние колонки, пишутся updateBreakoutParams)
+    bp_higher_tf TEXT NOT NULL DEFAULT '15m',
+    bp_require_htf_trend INTEGER NOT NULL DEFAULT 1,
+    bp_breakout_lookback INTEGER NOT NULL DEFAULT 20,
+    bp_breakout_volume_mult REAL NOT NULL DEFAULT 2.0,
+    bp_max_bars_since_breakout INTEGER NOT NULL DEFAULT 20,
+    bp_pullback_volume_ratio REAL NOT NULL DEFAULT 0.7,
+    bp_trigger_volume_mult REAL NOT NULL DEFAULT 1.2,
+
     created_at INTEGER NOT NULL,
     updated_at INTEGER NOT NULL
 );
@@ -153,6 +177,26 @@ WHERE id = ?;
 updateRiskToggles:
 UPDATE strategy SET
     max_daily_loss_enabled = ?, max_drawdown_enabled = ?
+WHERE id = ?;
+
+-- Выходы в R — вне insert/updateStrategy (колонки берут DEFAULT), пишутся из StrategyStore.save.
+updateExitParams:
+UPDATE strategy SET
+    r_ladder_enabled = ?, tp1_r = ?, tp2_r = ?, break_even_after_tp1 = ?,
+    runner_enabled = ?, atr_trail_enabled = ?, atr_trail_mult = ?, atr_trail_activation_r = ?
+WHERE id = ?;
+
+-- Размер позиции от риска — тоже вне insert/updateStrategy.
+updateSizingParams:
+UPDATE strategy SET
+    risk_sizing_enabled = ?, risk_per_trade_percent = ?, max_pool_share_percent = ?
+WHERE id = ?;
+
+-- Параметры «Пробой + откат» — тоже вне insert/updateStrategy.
+updateBreakoutParams:
+UPDATE strategy SET
+    bp_higher_tf = ?, bp_require_htf_trend = ?, bp_breakout_lookback = ?, bp_breakout_volume_mult = ?,
+    bp_max_bars_since_breakout = ?, bp_pullback_volume_ratio = ?, bp_trigger_volume_mult = ?
 WHERE id = ?;
 
 -- Одноразовая нормализация уже засеянных Dars-стратегий к значениям методички
