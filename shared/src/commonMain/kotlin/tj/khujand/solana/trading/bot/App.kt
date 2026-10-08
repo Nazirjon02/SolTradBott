@@ -31,6 +31,7 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FloatingActionButton
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
@@ -85,6 +86,13 @@ import tj.khujand.solana.trading.bot.core.engine.ActivityStats
 import tj.khujand.solana.trading.bot.core.strategy.StrategyConfig
 import tj.khujand.solana.trading.bot.core.strategy.StrategyType
 import tj.khujand.solana.trading.bot.core.strategy.toDarsFilterSettings
+import tj.khujand.solana.trading.bot.domain.backtest.BacktestReport
+import tj.khujand.solana.trading.bot.domain.backtest.BacktestRequest
+import tj.khujand.solana.trading.bot.domain.backtest.BacktestService
+import tj.khujand.solana.trading.bot.domain.backtest.BacktestSettings
+import tj.khujand.solana.trading.bot.domain.backtest.BacktestState
+import tj.khujand.solana.trading.bot.domain.backtest.BacktestStats
+import tj.khujand.solana.trading.bot.domain.backtest.backtestHigherTf
 import tj.khujand.solana.trading.bot.domain.dars.CoinAnalysis
 import tj.khujand.solana.trading.bot.domain.dars.DarsConfig
 import tj.khujand.solana.trading.bot.domain.dars.LegCharacter
@@ -92,6 +100,7 @@ import tj.khujand.solana.trading.bot.domain.dars.MarketAnalysis
 import tj.khujand.solana.trading.bot.domain.dars.MarketAnalyzerService
 import tj.khujand.solana.trading.bot.domain.dars.Readiness
 import tj.khujand.solana.trading.bot.domain.dars.TrendDirection
+import tj.khujand.solana.trading.bot.exchange.dex.GtPoolList
 import tj.khujand.solana.trading.bot.exchange.dex.TokenCandidate
 import tj.khujand.solana.trading.bot.data.AccountBalance
 import tj.khujand.solana.trading.bot.data.BotStatus
@@ -145,6 +154,8 @@ fun DrxApp(runtime: DrxRuntime? = null) {
     val strategies = remember { mutableStateListOf<StrategyConfig>() }
     var editingStrategy by remember { mutableStateOf<StrategyConfig?>(null) }
     var showForm by remember { mutableStateOf(false) }
+    // Открытый бэктест (поверх вкладок); из него можно уйти в форму стратегии и вернуться.
+    var backtestFor by remember { mutableStateOf<StrategyConfig?>(null) }
 
     val db = runtime?.db
     val settingsStore = runtime?.settingsStore
@@ -233,8 +244,17 @@ fun DrxApp(runtime: DrxRuntime? = null) {
                         reload()
                         showForm = false
                         editingStrategy = null
+                        // Правили параметры из бэктеста — возвращаемся к нему с новым конфигом.
+                        backtestFor = backtestFor?.let { bt -> strategies.firstOrNull { it.id == bt.id } }
                     },
                     onCancel = { showForm = false; editingStrategy = null }
+                )
+            } else if (backtestFor != null) {
+                BacktestScreen(
+                    config = backtestFor!!,
+                    service = runtime?.backtest,
+                    onEditStrategy = { editingStrategy = backtestFor; showForm = true },
+                    onClose = { backtestFor = null }
                 )
             } else {
                 when (screen) {
@@ -288,7 +308,8 @@ fun DrxApp(runtime: DrxRuntime? = null) {
                             runtime?.strategyStore?.setActive(cfg.id, !cfg.isActive)
                             scope.launch { engine?.applyStrategyActive(cfg.id, !cfg.isActive) }
                             reload()
-                        }
+                        },
+                        onBacktest = { cfg -> backtestFor = cfg }
                     )
                     Screen.SETTINGS -> SettingsScreen(
                         settings = settings,
@@ -2327,7 +2348,8 @@ fun StrategiesScreen(
     onCreate: () -> Unit,
     onEdit: (StrategyConfig) -> Unit,
     onDelete: (StrategyConfig) -> Unit,
-    onToggle: (StrategyConfig) -> Unit
+    onToggle: (StrategyConfig) -> Unit,
+    onBacktest: (StrategyConfig) -> Unit = {}
 ) {
     Box(Modifier.fillMaxSize()) {
         Column(Modifier.fillMaxSize()) {
@@ -2366,7 +2388,7 @@ fun StrategiesScreen(
                 LazyColumn(contentPadding = PaddingValues(bottom = 80.dp)) {
                     items(strategies) { cfg ->
                         Spacer(Modifier.height(8.dp))
-                        StrategyConfigCard(cfg, onEdit, onDelete, onToggle)
+                        StrategyConfigCard(cfg, onEdit, onDelete, onToggle, onBacktest)
                     }
                 }
             }
@@ -2388,7 +2410,8 @@ fun StrategyConfigCard(
     cfg: StrategyConfig,
     onEdit: (StrategyConfig) -> Unit,
     onDelete: (StrategyConfig) -> Unit,
-    onToggle: (StrategyConfig) -> Unit
+    onToggle: (StrategyConfig) -> Unit,
+    onBacktest: (StrategyConfig) -> Unit = {}
 ) {
     Surface(
         modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
@@ -2447,13 +2470,18 @@ fun StrategyConfigCard(
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                // Чипы прокручиваются, чтобы три кнопки справа не выталкивались на узком экране.
+                Row(
+                    modifier = Modifier.weight(1f).horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
                     InfoChip("🛡", "SL ${cfg.stopLossPercent}%")
                     InfoChip("🎯", "TP ${cfg.takeProfitPercent}%")
                     InfoChip("📦", "${cfg.positionSize}%")
                     if (cfg.trailingStopEnabled || cfg.atrTrailEnabled) InfoChip("📈", "трейл")
                 }
                 Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    SmallIconBtn("🧪") { onBacktest(cfg) }
                     SmallIconBtn("✏️") { onEdit(cfg) }
                     SmallIconBtn("🗑") { onDelete(cfg) }
                 }
@@ -2480,6 +2508,273 @@ private fun fmtShortUsd(v: Double): String = when {
     v >= 1_000_000 -> "$${"%.1f".format(v / 1_000_000).trimEnd('0').trimEnd('.')}M"
     v >= 1_000 -> "$${"%.0f".format(v / 1_000)}K"
     else -> "$${"%.0f".format(v)}"
+}
+
+// ─── Backtest screen ──────────────────────────────────────────────────────────
+
+private fun GtPoolList.label(): String = when (this) {
+    GtPoolList.TRENDING -> "Трендовые"
+    GtPoolList.NEW -> "Новые"
+    GtPoolList.TOP -> "Топ по объёму"
+}
+
+private fun fmtR(v: Double): String = "${if (v >= 0) "+" else "−"}${"%.2f".format(kotlin.math.abs(v))}R"
+
+/**
+ * Бэктест стратегии по истории GeckoTerminal: те же вход и выходы, что у бота (см. [Backtester]).
+ * Загруженные свечи держит [BacktestService] — после правки параметров в форме прогон повторяется
+ * на тех же данных мгновенно.
+ */
+@Composable
+fun BacktestScreen(
+    config: StrategyConfig,
+    service: BacktestService?,
+    onEditStrategy: () -> Unit,
+    onClose: () -> Unit,
+) {
+    val initial = service?.lastRequest ?: BacktestRequest()
+    var source by remember { mutableStateOf(initial.source) }
+    var coins by remember { mutableStateOf(initial.coins.toFloat()) }
+    var days by remember { mutableStateOf(initial.days) }
+    var cost by remember { mutableStateOf(initial.settings.costPerSidePercent.toFloat()) }
+    var oneTrade by remember { mutableStateOf(initial.settings.oneTradePerCoin) }
+    val request = BacktestRequest(source, coins.toInt(), days, BacktestSettings(cost.toDouble(), oneTrade))
+
+    val fallback = remember { MutableStateFlow<BacktestState>(BacktestState.Idle) }
+    val state by (service?.state ?: fallback).collectAsState()
+    val busy = state is BacktestState.Loading || state is BacktestState.Running
+    val cached = service?.hasData(config, request) == true
+
+    Column(Modifier.fillMaxSize().background(BgDark)) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .statusBarsPadding()
+                .padding(horizontal = 16.dp, vertical = 14.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text("🧪 Бэктест", fontSize = 20.sp, fontWeight = FontWeight.ExtraBold, color = TextPrimary)
+            Surface(
+                color = SurfaceCard, shape = RoundedCornerShape(10.dp),
+                modifier = Modifier.clickable { onClose() }
+            ) {
+                Text("✕ Закрыть", color = TextSecondary, fontSize = 13.sp,
+                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp))
+            }
+        }
+
+        Column(
+            modifier = Modifier
+                .weight(1f)
+                .verticalScroll(rememberScrollState())
+                .padding(horizontal = 16.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            Text(config.name, fontSize = 15.sp, fontWeight = FontWeight.Bold, color = TextPrimary)
+            Text(
+                "${config.type.toTypeLabel()} · ТФ ${config.timeframe}" +
+                    (config.backtestHigherTf()?.let { " · тренд $it" } ?: ""),
+                fontSize = 12.sp, color = TextSecondary
+            )
+
+            FormSection("📥  Данные") {
+                Text("Монеты", fontSize = 12.sp, color = TextSecondary)
+                Spacer(Modifier.height(4.dp))
+                Row(
+                    modifier = Modifier.horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    GtPoolList.entries.forEach { s -> ChoiceChip(s.label(), source == s) { source = s } }
+                }
+                FormSlider("Сколько монет", coins, 5f, 50f, "${coins.toInt()}") { coins = it }
+                Text("Период истории", fontSize = 12.sp, color = TextSecondary)
+                Spacer(Modifier.height(4.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    listOf(3, 7, 14, 30).forEach { d -> ChoiceChip("$d д", days == d) { days = d } }
+                }
+                Spacer(Modifier.height(8.dp))
+                val hint = if (cached) {
+                    "✓ История уже загружена — прогон мгновенный."
+                } else {
+                    val req = service?.estimatedRequests(config, request) ?: 0
+                    "≈ $req запросов к GeckoTerminal (лимит ~30 в минуту) — загрузка ~${(req * 2.5 / 60).toInt() + 1} мин. " +
+                        "Потом историю можно прогонять сколько угодно раз."
+                }
+                Text(hint, fontSize = 11.sp, color = if (cached) Green else TextSecondary, lineHeight = 16.sp)
+                if (source != GtPoolList.NEW) {
+                    Spacer(Modifier.height(6.dp))
+                    Surface(color = Amber.copy(alpha = 0.10f), shape = RoundedCornerShape(8.dp)) {
+                        Text(
+                            "⚠️ Трендовые и топовые монеты — это выжившие: результат будет лучше, чем у бота " +
+                                "в реальности. «Новые» честнее (среди них есть умершие), но у них меньше истории.",
+                            fontSize = 11.sp, color = TextSecondary,
+                            modifier = Modifier.padding(10.dp), lineHeight = 16.sp
+                        )
+                    }
+                }
+            }
+
+            FormSection("⚙️  Исполнение") {
+                FormSlider("Издержки на вход и каждый выход", cost, 0f, 5f,
+                    "${"%.1f".format(cost)}% за сторону") { cost = it }
+                FormToggle("Одна сделка на монету (как в боте)", oneTrade) { oneTrade = it }
+            }
+
+            when (val s = state) {
+                is BacktestState.Loading -> BacktestProgress("📥 ${s.message}", s.done, s.total)
+                is BacktestState.Running -> BacktestProgress("⚙️ Прогон стратегии", s.done, s.total)
+                is BacktestState.Failed -> Surface(color = Red.copy(alpha = 0.10f), shape = RoundedCornerShape(10.dp)) {
+                    Text("❌ ${s.message}", fontSize = 13.sp, color = Red, modifier = Modifier.padding(12.dp))
+                }
+                is BacktestState.Done -> if (s.strategyId == config.id) BacktestResults(s.report)
+                BacktestState.Idle -> Unit
+            }
+            Spacer(Modifier.height(8.dp))
+        }
+
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            if (busy) {
+                Button(
+                    onClick = { service?.cancel() },
+                    modifier = Modifier.weight(1f),
+                    colors = ButtonDefaults.buttonColors(containerColor = Red),
+                    shape = RoundedCornerShape(14.dp),
+                    contentPadding = PaddingValues(vertical = 16.dp)
+                ) { Text("⏹  Остановить", fontWeight = FontWeight.Bold, color = Color.White) }
+            } else {
+                Button(
+                    onClick = { service?.start(config, request) },
+                    enabled = service != null,
+                    modifier = Modifier.weight(1f),
+                    colors = ButtonDefaults.buttonColors(containerColor = Green),
+                    shape = RoundedCornerShape(14.dp),
+                    contentPadding = PaddingValues(vertical = 16.dp)
+                ) {
+                    Text(if (cached) "🔁  Прогнать снова" else "▶  Загрузить и прогнать",
+                        fontWeight = FontWeight.Bold, color = Color.Black)
+                }
+                Button(
+                    onClick = onEditStrategy,
+                    colors = ButtonDefaults.buttonColors(containerColor = SurfaceCard),
+                    shape = RoundedCornerShape(14.dp),
+                    contentPadding = PaddingValues(vertical = 16.dp, horizontal = 14.dp)
+                ) { Text("✏️ Параметры", color = TextPrimary) }
+            }
+        }
+    }
+}
+
+@Composable
+private fun BacktestProgress(message: String, done: Int, total: Int) {
+    Surface(color = SurfaceCard, shape = RoundedCornerShape(14.dp), modifier = Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(14.dp)) {
+            Text(message, fontSize = 13.sp, color = TextPrimary)
+            Spacer(Modifier.height(8.dp))
+            LinearProgressIndicator(
+                progress = { if (total > 0) done.toFloat() / total else 0f },
+                modifier = Modifier.fillMaxWidth(),
+                color = Green,
+                trackColor = BorderColor,
+            )
+            Spacer(Modifier.height(6.dp))
+            Text("$done / $total", fontSize = 11.sp, color = TextSecondary)
+        }
+    }
+}
+
+@Composable
+private fun BacktestResults(report: BacktestReport) {
+    val s = report.stats
+    Text(
+        "${report.coinsWithData}/${report.coins} монет с историей · ${report.bars} свечей · ${s.trades} сделок",
+        fontSize = 12.sp, color = TextSecondary
+    )
+    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        StatCard("Сделок", "${s.trades}", "${s.wins} в плюс · ${s.losses} в минус", TextPrimary, Modifier.weight(1f))
+        StatCard("Winrate", "${s.winRate.toInt()}%", "доля прибыльных",
+            if (s.trades == 0) TextSecondary else if (s.winRate >= 50) Green else Amber, Modifier.weight(1f))
+        StatCard("Ожидание", fmtR(s.expectancyR), "на сделку",
+            if (s.expectancyR > 0) Green else Red, Modifier.weight(1f))
+    }
+    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        StatCard("Profit factor",
+            if (s.profitFactor.isInfinite()) "∞" else "%.2f".format(s.profitFactor), "прибыль / убыток",
+            if (s.profitFactor >= 1) Green else Red, Modifier.weight(1f))
+        StatCard("Сумма", fmtR(s.totalR), "всех сделок", if (s.totalR >= 0) Green else Red, Modifier.weight(1f))
+        StatCard("Счёт", "${if (s.equityPct >= 0) "+" else ""}${"%.1f".format(s.equityPct)}%",
+            "при риске ${BacktestStats.RISK_PER_TRADE_PCT.toInt()}% на сделку",
+            if (s.equityPct >= 0) Green else Red, Modifier.weight(1f))
+    }
+    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        StatCard("Ср. прибыль", fmtR(s.avgWinR), "на выигрыш", Green, Modifier.weight(1f))
+        StatCard("Ср. убыток", fmtR(s.avgLossR), "на проигрыш", Red, Modifier.weight(1f))
+        StatCard("Просадка", "−${"%.1f".format(s.maxDrawdownPct)}%", "макс. по счёту",
+            if (s.maxDrawdownPct > 20) Red else Amber, Modifier.weight(1f))
+    }
+
+    val verdict = when {
+        s.trades == 0 -> "Сигналов не было. Ослабьте фильтры или пороги, возьмите больше монет или период."
+        s.trades < 30 -> "Сделок меньше 30 — статистика ненадёжна. Увеличьте число монет или период."
+        s.expectancyR > 0 -> "Ожидание положительное: в среднем ${fmtR(s.expectancyR)} на сделку. " +
+            "Проверьте на «Новых» монетах и другом периоде, чтобы не подогнать параметры под одну выборку."
+        else -> "Ожидание отрицательное — с этими параметрами стратегия в среднем теряет."
+    }
+    Surface(color = Blue.copy(alpha = 0.08f), shape = RoundedCornerShape(8.dp)) {
+        Text(verdict, fontSize = 12.sp, color = TextPrimary, modifier = Modifier.padding(10.dp), lineHeight = 17.sp)
+    }
+
+    if (s.exitReasons.isNotEmpty()) {
+        FormSection("🚪  Причины выхода") {
+            s.exitReasons.forEach { (reason, n) ->
+                Row(Modifier.fillMaxWidth().padding(vertical = 3.dp), horizontalArrangement = Arrangement.SpaceBetween) {
+                    Text(reason, fontSize = 13.sp, color = TextPrimary)
+                    Text("$n", fontSize = 13.sp, color = TextSecondary)
+                }
+            }
+        }
+    }
+
+    if (report.trades.isNotEmpty()) {
+        val shown = report.trades.sortedByDescending { it.exitTimeMs }.take(50)
+        FormSection("📜  Сделки (последние ${shown.size})") {
+            shown.forEach { t ->
+                Row(
+                    Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(Modifier.weight(1f)) {
+                        Text("${t.symbol} · ${dateLabel(t.entryTimeMs)} ${formatClock(t.entryTimeMs).dropLast(3)}",
+                            fontSize = 13.sp, color = TextPrimary, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        Text(t.exitReason, fontSize = 11.sp, color = TextSecondary)
+                    }
+                    Column(horizontalAlignment = Alignment.End) {
+                        Text(fmtR(t.rMultiple), fontSize = 13.sp, fontWeight = FontWeight.Bold,
+                            color = if (t.rMultiple > 0) Green else Red)
+                        Text("${if (t.returnPct >= 0) "+" else ""}${"%.1f".format(t.returnPct)}%",
+                            fontSize = 11.sp, color = TextSecondary)
+                    }
+                }
+            }
+        }
+    }
+
+    FormSection("ℹ️  Как считается") {
+        Text(
+            "Стратегия видит только закрытые свечи; вход — по открытию следующей свечи (если цена не ушла " +
+                "больше чем на 3%). Выходы — те же правила, что у бота: стоп, TP, лестница в R, трейлинги, " +
+                "тайм-стоп. Внутри свечи цена идёт open→low→high→close (бычья) или open→high→low→close " +
+                "(медвежья); стоп и тейк исполняются по своему уровню, при гэпе — по открытию. " +
+                "Капитализация в прошлом оценена пропорционально цене, ликвидность — как √цены. " +
+                "Ликвидность-стоп, лимит позиций и кулдаун не моделируются. Позиция, открытая на конец " +
+                "истории, закрывается по последней цене («Конец данных»).",
+            fontSize = 11.sp, color = TextSecondary, lineHeight = 16.sp
+        )
+    }
 }
 
 // ─── Strategy form ────────────────────────────────────────────────────────────

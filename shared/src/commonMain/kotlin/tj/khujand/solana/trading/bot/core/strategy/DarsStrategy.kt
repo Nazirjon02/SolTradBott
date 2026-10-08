@@ -12,12 +12,16 @@ import tj.khujand.solana.trading.bot.exchange.dex.TokenPair
  * Dars / Smart Money — обёртка существующего DarsEntryEngine
  * (импульс/коррекция, ложный пробой, треугольник, уровни) в Strategy-интерфейс MRX.
  * Свечи движок тянет сам через свой candleSource — параметры ТФ передаём через мост FilterSettings.
+ *
+ * @param engine движок входа; по умолчанию со свечами GeckoTerminal. Бэктест подставляет движок,
+ *   которому отдаются свечи «на момент времени».
  */
-class DarsStrategy(override val config: StrategyConfig) : Strategy {
+class DarsStrategy(
+    override val config: StrategyConfig,
+    private val engine: DarsEntryEngine = DarsEntryEngine(),
+) : Strategy {
 
     override val name: String = StrategyType.DARS.displayName
-
-    private val engine = DarsEntryEngine()
 
     override suspend fun analyze(
         candidate: TokenCandidate,

@@ -33,14 +33,14 @@ import tj.khujand.solana.trading.bot.exchange.dex.TokenScanner
 private const val SCAN_INTERVAL_MS = 30_000L
 
 /** Минимальная уверенность сигнала для входа (как в MRX). */
-private const val MIN_CONFIDENCE = 0.6
+internal const val MIN_CONFIDENCE = 0.6
 
 /**
  * Максимальный допустимый разбег между ценой кандидата из кеша сканера и живой ценой
  * в момент входа. Кеш живёт до 5 минут — на мемкоинах цена за это время успевает уйти,
  * а от неё считаются qty, SL и TP. Разбег больше порога = «цена убежала», вход отменяем.
  */
-private const val MAX_ENTRY_PRICE_DRIFT = 0.03
+internal const val MAX_ENTRY_PRICE_DRIFT = 0.03
 
 /** Предел размера карты пер-mint локов, чтобы за месяцы работы она не росла бесконечно. */
 private const val MINT_LOCKS_LIMIT = 500

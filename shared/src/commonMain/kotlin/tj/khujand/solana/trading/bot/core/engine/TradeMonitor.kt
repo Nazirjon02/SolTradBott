@@ -108,131 +108,46 @@ class TradeMonitor(
 
     /**
      * Правила выхода по уже полученной цене (вынесено из [checkTrade] — тестируется без сети).
+     * Решение принимает общая чистая [decideExit] (её же использует бэктест), здесь — только
+     * запись в БД, исполнение и лента активности.
      * @param liquidity текущая ликвидность пула, null — неизвестна (ликвидность-стоп пропускается).
      */
     internal suspend fun applyExits(t: TradeRow, config: StrategyConfig, price: Double, liquidity: Double?) {
-        // 1. Ликвидность-стоп (rug pull): пул осушён — выходим немедленно.
-        if (liquidity != null && t.entry_liquidity_usd > 0) {
-            val dropPct = (1 - liquidity / t.entry_liquidity_usd) * 100
-            if (dropPct >= config.liquidityExitDropPercent) {
-                closeFull(t, price, "Ликвидность-стоп (-${dropPct.toInt()}% пула)")
-                return
-            }
+        val d = decideExit(t.toPositionState(), config, price, liquidity, Clock.System.now().toEpochMilliseconds())
+
+        if (d.peak > t.peak_price) db.tradeQueries.updatePeakPrice(d.peak, t.id)
+        if (d.stop > t.stop_loss) {
+            db.tradeQueries.updateStopLoss(d.stop, t.id)
+            if (d.breakEvenMoved) activityLog.info("🛡 ${t.symbol}: SL перенесён в безубыток (${fmtNum(d.stop)})")
         }
 
-        // Пик цены — база trailing'а.
-        val peak = maxOf(t.peak_price, price)
-        if (peak > t.peak_price) db.tradeQueries.updatePeakPrice(peak, t.id)
-
-        var stopLoss = t.stop_loss
-        val gainPct = (price - t.entry_price) / t.entry_price * 100
-        // Прибыль в R — база выходов в R (лестница, активация ATR-трейлинга).
-        val r = riskPerUnit(t.entry_price, t.initial_stop, config.stopLossPercent)
-        val gainR = gainInR(price, t.entry_price, r)
-
-        // 5. Break-even: после X% прибыли SL переносится в безубыток + offset.
-        if (config.breakEvenEnabled && gainPct >= config.breakEvenTriggerPercent) {
-            val beStop = t.entry_price * (1 + config.breakEvenOffsetPercent / 100)
-            if (beStop > stopLoss) {
-                stopLoss = beStop
-                db.tradeQueries.updateStopLoss(stopLoss, t.id)
-                activityLog.info("🛡 ${t.symbol}: SL перенесён в безубыток (${fmtNum(stopLoss)})")
-            }
-        }
-
-        // 5b. Безубыток после TP1 (подстраховка: обычно переносится сразу при фиксации TP1).
-        if (config.breakEvenAfterTp1 && t.tp1_done == 1L) {
-            val beStop = t.entry_price * (1 + config.breakEvenOffsetPercent / 100)
-            if (beStop > stopLoss) {
-                stopLoss = beStop
-                db.tradeQueries.updateStopLoss(stopLoss, t.id)
-            }
-        }
-
-        // 6. Trailing: после активации SL тянется за пиком.
-        if (config.trailingStopEnabled && gainPct >= config.trailingActivationPercent) {
-            val trailStop = peak * (1 - config.trailingStopPercent / 100)
-            if (trailStop > stopLoss) {
-                stopLoss = trailStop
-                db.tradeQueries.updateStopLoss(stopLoss, t.id)
-            }
-        }
-
-        // 6b. ATR-трейлинг (Chandelier): дистанция от пика по волатильности входа, после N×R прибыли.
-        if (config.atrTrailEnabled && gainR >= config.atrTrailActivationR) {
-            val trailStop = atrTrailStop(
-                peak = peak,
-                atrFrac = t.entry_atr_frac,
-                mult = config.atrTrailMult,
-                fallbackFrac = config.trailingStopPercent / 100,
-            )
-            if (trailStop > stopLoss) {
-                stopLoss = trailStop
-                db.tradeQueries.updateStopLoss(stopLoss, t.id)
-            }
-        }
-
-        // 2. Stop Loss (обычный / trailing / break-even — какой выше).
-        if (price <= stopLoss) {
-            val reason = when {
-                stopLoss > t.entry_price -> "Trailing Stop"
-                else -> "Stop Loss"
-            }
-            closeFull(t, price, reason)
-            return
-        }
-
-        // 4a. R-лестница проверяется ДО основного TP: иначе TP у близкого сопротивления
-        // закрывал бы всю позицию раньше, чем сработают ступени.
-        if (config.rLadderEnabled) {
-            when (rLadderStep(gainR, t.tp1_done == 1L, t.tp2_done == 1L, config.tp1R, config.tp2R)) {
-                1 -> {
-                    val result = closePartial(t, price, config.tp1ClosePercent, "TP1 +${fmtNum(config.tp1R)}R", tp1 = true, tp2 = false)
-                    // Остаток сразу защищаем безубытком — не ждём следующего цикла монитора.
-                    if (result != null && !result.isFull && config.breakEvenAfterTp1) {
-                        val beStop = t.entry_price * (1 + config.breakEvenOffsetPercent / 100)
-                        if (beStop > stopLoss) {
-                            db.tradeQueries.updateStopLoss(beStop, t.id)
-                            activityLog.info("🛡 ${t.symbol}: после TP1 SL в безубыток (${fmtNum(beStop)})")
-                        }
-                    }
-                    return
+        when (val action = d.action) {
+            ExitAction.Hold -> Unit
+            is ExitAction.CloseAll -> closeFull(t, price, action.reason)
+            is ExitAction.ClosePart -> {
+                val result = closePartial(t, price, action.portionOfOriginal, action.reason, action.tp1, action.tp2)
+                // Остаток сразу защищаем безубытком — не ждём следующего цикла монитора.
+                val stopAfter = action.stopAfter
+                if (result != null && !result.isFull && stopAfter != null && stopAfter > d.stop) {
+                    db.tradeQueries.updateStopLoss(stopAfter, t.id)
+                    activityLog.info("🛡 ${t.symbol}: после TP1 SL в безубыток (${fmtNum(stopAfter)})")
                 }
-                2 -> {
-                    closePartial(t, price, config.tp2ClosePercent, "TP2 +${fmtNum(config.tp2R)}R", tp1 = true, tp2 = true)
-                    return
-                }
-            }
-        }
-
-        // 3. Основной Take Profit. В режиме «раннер» не закрывает позицию — остаток ведёт стоп/трейлинг.
-        if (!config.runnerEnabled && price >= t.take_profit) {
-            closeFull(t, price, "Take Profit")
-            return
-        }
-
-        // 4. Partial TP: фиксируем доли на промежуточных целях (в % — если не включена R-лестница).
-        if (!config.rLadderEnabled && config.partialTpEnabled) {
-            if (t.tp1_done == 0L && gainPct >= config.tp1Percent) {
-                closePartial(t, price, config.tp1ClosePercent, "TP1 +${config.tp1Percent}%", tp1 = true, tp2 = false)
-                return
-            }
-            if (t.tp1_done == 1L && t.tp2_done == 0L && gainPct >= config.tp2Percent) {
-                closePartial(t, price, config.tp2ClosePercent, "TP2 +${config.tp2Percent}%", tp1 = true, tp2 = true)
-                return
-            }
-        }
-
-        // 7. Time-stop: позиция висит слишком долго. С R-лестницей — только пока TP1 не взят:
-        // взятый TP1 означает «сделка пошла», и тайм-стоп не должен срезать раннер.
-        val tradeWent = config.rLadderEnabled && t.tp1_done == 1L
-        if (config.timeStopMinutes > 0 && !tradeWent) {
-            val ageMinutes = (Clock.System.now().toEpochMilliseconds() - t.opened_at) / 60_000
-            if (ageMinutes >= config.timeStopMinutes) {
-                closeFull(t, price, "Time-stop (${ageMinutes}м)")
             }
         }
     }
+
+    private fun TradeRow.toPositionState() = PositionState(
+        entryPrice = entry_price,
+        initialStop = initial_stop,
+        stopLoss = stop_loss,
+        takeProfit = take_profit,
+        peakPrice = peak_price,
+        tp1Done = tp1_done == 1L,
+        tp2Done = tp2_done == 1L,
+        entryLiquidityUsd = entry_liquidity_usd,
+        entryAtrFrac = entry_atr_frac,
+        openedAtMs = opened_at,
+    )
 
     private suspend fun closeFull(t: TradeRow, price: Double, reason: String) {
         val result = executor.closeTrade(t, price, 100.0, reason) ?: run {

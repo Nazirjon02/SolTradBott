@@ -15,6 +15,7 @@ import tj.khujand.solana.trading.bot.core.strategy.StrategyManager
 import tj.khujand.solana.trading.bot.data.SettingsStore
 import tj.khujand.solana.trading.bot.data.createDatabaseDriver
 import tj.khujand.solana.trading.bot.data.db.DrxDatabase
+import tj.khujand.solana.trading.bot.domain.backtest.BacktestService
 import tj.khujand.solana.trading.bot.domain.dars.MarketAnalyzerService
 import tj.khujand.solana.trading.bot.exchange.dex.AccountCache
 import tj.khujand.solana.trading.bot.exchange.dex.DexClient
@@ -42,6 +43,9 @@ class DrxRuntime(val db: DrxDatabase) {
     // Информационный анализатор монеты «Dars» (порт MarketAnalyzer из MRX) — «второе мнение»
     // к движку: считает фазу/сетап/зону входа/запреты по свечам GeckoTerminal, без торговли.
     val marketAnalyzer = MarketAnalyzerService()
+
+    // Бэктест стратегий по истории GeckoTerminal — держит загруженные свечи между прогонами.
+    val backtest = BacktestService()
     val executor = TradeExecutor(client, db, settingsStore, accountCache, activityLog)
     val riskManager = RiskManager(db, accountCache, executor::isDemo)
 
