@@ -178,6 +178,11 @@ data class CoinAnalysis(
     val market: MarketContext,
     /** Сколько баров прошло с конца последней коррекции. null — структура не читается. */
     val barsSinceCorrection: Int? = null,
+    /**
+     * Разметка для графика: ноги, уровни, окно входа, стоп и цель. Индексы — в свечах
+     * рабочего ТФ, по которым считан разбор. null — истории не хватило даже на уровни.
+     */
+    val chart: SetupOverlay? = null,
 ) {
     /** «1h → 5m» — направление берём со старшего ТФ, вход ищем на рабочем (Урок 2). */
     val timeframeLabel: String get() = "$trendTimeframe → $entryTimeframe"
@@ -239,6 +244,7 @@ object MarketAnalysis {
             support: Level? = null,
             resistance: Level? = null,
             barsSince: Int? = null,
+            chart: SetupOverlay? = null,
         ) = CoinAnalysis(
             symbol = symbol, mint = mint, iconUrl = iconUrl, price = price, trend = trend,
             trendTimeframe = trendTf, entryTimeframe = entryTf,
@@ -249,6 +255,7 @@ object MarketAnalysis {
             support = support, resistance = resistance,
             blockers = blockers, notes = notes, timing = timing, market = market,
             barsSinceCorrection = barsSince,
+            chart = chart,
         )
 
         // Данных мало — честно говорим об этом, а не выдаём случайный вердикт.
@@ -273,11 +280,14 @@ object MarketAnalysis {
         val levels = LevelDetector.detect(levelSource, cfg.swingPivotPct)
         val support = LevelDetector.nearestSupport(levels, price)
         val resistance = LevelDetector.nearestResistance(levels, price)
+        // Без структуры график всё равно полезен: свечи и уровни, от которых считался бы вход.
+        val levelsOnly = SetupOverlay(levels = chartLevels(support, resistance))
 
         // Лонг-бот: любой тренд, кроме восходящего, — не наш рынок.
         if (trend != TrendDirection.UP) {
             blockers += "Тренд $trendTf не восходящий ($trend) — по Уроку 2 лонг не рассматриваем"
-            return result(trend, MarketPhase.FLAT, Readiness.IGNORE, support = support, resistance = resistance)
+            return result(trend, MarketPhase.FLAT, Readiness.IGNORE, support = support, resistance = resistance,
+                chart = levelsOnly.copy(missing = blockers.first()))
         }
 
         // ─── Структура: ноги → импульсы и коррекции ───
@@ -289,7 +299,8 @@ object MarketAnalysis {
         val corrIdx = legs.indexOfLast { it.direction == TrendDirection.DOWN }
         if (legs.size < cfg.minLegs || corrIdx < 1 || legs[corrIdx - 1].direction != TrendDirection.UP) {
             blockers += "Структура $entryTf не читается — мало подтверждённых свингов (${legs.size} ног)"
-            return result(trend, MarketPhase.FLAT, Readiness.IGNORE, support = support, resistance = resistance)
+            return result(trend, MarketPhase.FLAT, Readiness.IGNORE, support = support, resistance = resistance,
+                chart = levelsOnly.copy(missing = blockers.first()))
         }
         val curCorrection = legs[corrIdx]
         val curImpulse = legs[corrIdx - 1]
@@ -404,13 +415,70 @@ object MarketAnalysis {
             else -> Readiness.WAIT
         }
 
+        // ─── Разметка для графика: то же, что выше словами, только на свечах ───
+        val marks = buildList {
+            if (aggressive) add(BarMark(candles.lastIndex, "агрессивный бар", good = true))
+            if (curCorrection.maxVolume > curImpulse.maxVolume * 1.2) {
+                val idx = (curCorrection.startIndex..curCorrection.endIndex).maxByOrNull { candles[it].volume }
+                if (idx != null) add(BarMark(idx, "объём против", good = false))
+            }
+        }
+        val chart = SetupOverlay(
+            waves = legs.map { leg ->
+                WaveMark(
+                    label = when {
+                        leg === curImpulse -> "импульс"
+                        leg === curCorrection -> "коррекция"
+                        else -> ""
+                    },
+                    fromIndex = leg.startIndex, toIndex = leg.endIndex,
+                    fromPrice = leg.startPrice, toPrice = leg.endPrice,
+                    kind = if (leg.direction == TrendDirection.UP) MarkKind.IMPULSE else MarkKind.CORRECTION,
+                )
+            },
+            entryLevel = entry?.entryPrice,
+            stopLevel = entry?.stopLoss,
+            takeLevel = entry?.takeProfit,
+            armed = readiness == Readiness.READY,
+            missing = blockers.firstOrNull(),
+            levels = chartLevels(support, resistance),
+            bars = marks,
+            // Окно входа — то же правило свежести, по которому выше ставится запрет «движение ушло».
+            entryWindow = entry?.let {
+                EntryWindow(
+                    fromIndex = curCorrection.endIndex,
+                    toIndex = curCorrection.endIndex + MAX_BARS_SINCE_CORRECTION,
+                    low = it.zoneLow, high = it.zoneHigh,
+                )
+            },
+        )
+
         return result(
             trend, phase, readiness,
             dominance = dominance, opposition = opposition,
             impulse = impulseChar, correction = correctionChar,
             setup = setup, entry = entry, support = support, resistance = resistance,
             barsSince = barsSince,
+            chart = chart,
         )
+    }
+
+    /** Ближайшие уровни для графика: поддержка снизу, сопротивление сверху. */
+    private fun chartLevels(support: Level?, resistance: Level?): List<ChartLevel> = listOfNotNull(
+        support?.let { ChartLevel(it.price, "поддержка · ${levelKindLabel(it)}", LevelKind.SUPPORT) },
+        resistance?.let { ChartLevel(it.price, "сопротивление · ${levelKindLabel(it)}", LevelKind.RESISTANCE) },
+    )
+
+    /** Тип уровня словами методички, с числом касаний, если их больше одного. */
+    fun levelKindLabel(level: Level): String {
+        val kind = when (level.kind) {
+            "swing" -> "свинг"
+            "big_bar" -> "большой бар"
+            "reversal" -> "разворот"
+            "mirror" -> "зеркальный"
+            else -> level.kind
+        }
+        return if (level.touches > 1) "$kind ×${level.touches}" else kind
     }
 
     // ─── Вспомогательное ───────────────────────────────────────────────────────
@@ -553,13 +621,17 @@ object MarketAnalysis {
         return "${r / 100}.${abs(r % 100).toString().padStart(2, '0')}"
     }
 
-    /** Цена с разумным числом знаков: у дешёвых мемкоинов нужно больше точности. */
+    /**
+     * Цена с разумным числом знаков: у дешёвых мемкоинов нужно больше точности. Ниже цента —
+     * четыре значащие цифры: 0.00001234, а не 0.000012340 и не 0.000000012 вместо 1.234e-8.
+     */
     fun fmtPrice(v: Double): String {
+        val av = abs(v)
         val decimals = when {
-            v >= 1000 -> 2
-            v >= 1 -> 4
-            v >= 0.01 -> 6
-            else -> 9
+            av >= 1000 -> 2
+            av >= 1 -> 4
+            av >= 0.01 || av == 0.0 -> 6
+            else -> (kotlin.math.ceil(-kotlin.math.log10(av)).toInt() + 3).coerceIn(6, 12)
         }
         var scale = 1L
         repeat(decimals) { scale *= 10 }

@@ -68,44 +68,18 @@ class TokenScanner(
 
         val candidates = mutableListOf<TokenCandidate>()
         for (pair in pairs) {
-            val mint = pair.baseToken?.address ?: continue
-            val pairAddress = pair.pairAddress ?: continue
-            val ageMinutes = pair.pairCreatedAt?.let { created ->
-                ((now - normalizeCreatedAt(created)) / 60_000L).coerceAtLeast(0)
-            } ?: continue
-
-            val liquidity = pair.liquidity?.usd ?: 0.0
-            val marketCap = pair.marketCap ?: pair.fdv ?: 0.0
-            val volumeH1 = pair.volume?.h1 ?: 0.0
-            val buysH1 = pair.txns?.h1?.buys ?: 0
-            val sellsH1 = pair.txns?.h1?.sells ?: 0
-            val ratio = if (sellsH1 == 0) buysH1.toDouble() else buysH1.toDouble() / sellsH1
+            // Без даты создания пары возраст не проверить — сканер такие пары пропускает.
+            if (pair.pairCreatedAt == null) continue
+            val c = pair.toTokenCandidate(now) ?: continue
 
             val passes = !filters.filtersEnabled || (
-                liquidity >= filters.minLiquidityUsd &&
-                    marketCap in filters.minMarketCap..filters.maxMarketCap &&
-                    ageMinutes in filters.minTokenAgeMinutes..filters.maxTokenAgeMinutes
+                c.liquidityUsd >= filters.minLiquidityUsd &&
+                    c.marketCap in filters.minMarketCap..filters.maxMarketCap &&
+                    c.tokenAgeMinutes in filters.minTokenAgeMinutes..filters.maxTokenAgeMinutes
                 )
             if (!passes) continue
 
-            candidates += TokenCandidate(
-                mint = mint,
-                symbol = pair.baseToken?.symbol ?: "?",
-                name = pair.baseToken?.name ?: "",
-                pairAddress = pairAddress,
-                dexId = pair.dexId ?: "",
-                priceUsd = pair.priceUsd?.toDoubleOrNull() ?: 0.0,
-                liquidityUsd = liquidity,
-                marketCap = marketCap,
-                volumeH1Usd = volumeH1,
-                buysH1 = buysH1,
-                sellsH1 = sellsH1,
-                priceChangeM5 = pair.priceChange?.m5 ?: 0.0,
-                priceChangeH1 = pair.priceChange?.h1 ?: 0.0,
-                tokenAgeMinutes = ageMinutes,
-                score = computeScanScore(liquidity, volumeH1, ratio, pair.priceChange?.h1 ?: 0.0),
-                scannedAt = now,
-            )
+            candidates += c
             if (candidates.size >= filters.maxCandidates) break
         }
 
@@ -127,11 +101,46 @@ class TokenScanner(
                 c.tokenAgeMinutes in f.minTokenAgeMinutes..f.maxTokenAgeMinutes
             )
     }
-
-    /** DexScreener иногда отдаёт createdAt в секундах — нормализуем в миллисекунды. */
-    private fun normalizeCreatedAt(value: Long): Long =
-        if (value < 100_000_000_000L) value * 1000 else value
 }
+
+/**
+ * Пара DexScreener → кандидат в формате кеша сканера. Общая для сканера и поиска монеты
+ * на «Анализе», чтобы найденная вручную монета разбиралась на тех же метриках.
+ *
+ * null — у пары нет mint или адреса пула. Нет даты создания — возраст 0.
+ */
+fun TokenPair.toTokenCandidate(now: Long): TokenCandidate? {
+    val mint = baseToken?.address ?: return null
+    val pool = pairAddress ?: return null
+    val ageMinutes = pairCreatedAt?.let { ((now - normalizeCreatedAt(it)) / 60_000L).coerceAtLeast(0) } ?: 0L
+    val liquidityUsd = liquidity?.usd ?: 0.0
+    val volumeH1 = volume?.h1 ?: 0.0
+    val buysH1 = txns?.h1?.buys ?: 0
+    val sellsH1 = txns?.h1?.sells ?: 0
+    val ratio = if (sellsH1 == 0) buysH1.toDouble() else buysH1.toDouble() / sellsH1
+    return TokenCandidate(
+        mint = mint,
+        symbol = baseToken.symbol ?: "?",
+        name = baseToken.name ?: "",
+        pairAddress = pool,
+        dexId = dexId ?: "",
+        priceUsd = priceUsd?.toDoubleOrNull() ?: 0.0,
+        liquidityUsd = liquidityUsd,
+        marketCap = marketCap ?: fdv ?: 0.0,
+        volumeH1Usd = volumeH1,
+        buysH1 = buysH1,
+        sellsH1 = sellsH1,
+        priceChangeM5 = priceChange?.m5 ?: 0.0,
+        priceChangeH1 = priceChange?.h1 ?: 0.0,
+        tokenAgeMinutes = ageMinutes,
+        score = computeScanScore(liquidityUsd, volumeH1, ratio, priceChange?.h1 ?: 0.0),
+        scannedAt = now,
+    )
+}
+
+/** DexScreener иногда отдаёт createdAt в секундах — нормализуем в миллисекунды. */
+private fun normalizeCreatedAt(value: Long): Long =
+    if (value < 100_000_000_000L) value * 1000 else value
 
 /**
  * Скоринг кандидата 0..100: ликвидность + объём + давление покупок + стабильность.

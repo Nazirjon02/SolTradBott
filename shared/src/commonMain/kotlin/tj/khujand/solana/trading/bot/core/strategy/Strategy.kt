@@ -48,10 +48,9 @@ data class Signal(
 
 enum class StrategyType(val displayName: String) {
     DARS("Dars / Smart Money"),
-    MOMENTUM("Momentum Scalping"),
-    RSI_EMA("RSI + EMA Trend"),
     SCORE("Вход по баллу"),
     BREAKOUT_PULLBACK("Пробой + откат"),
+    MEME_PLAYBOOK("Мем-плейбук"),
 }
 
 /**
@@ -105,6 +104,19 @@ data class StrategyConfig(
     val atrTrailMult: Double = 3.0,
     val atrTrailActivationR: Double = 1.0,
 
+    // ── Выходы «по иксам» (общие для всех стратегий, по умолчанию выключены) ──
+    // tieredTrailEnabled: трейлинг от пика сужается с ростом цены (пик / вход): до 2x — trailTier1Pct,
+    //   2–5x — trailTier2Pct, 5–10x — trailTier3Pct, от 10x — trailTier4Pct.
+    // staleExitEnabled: «нет нового максимума» — через 1/6 срока staleExitMinutes без нового пика
+    //   ступенчатый трейлинг сужается на 10 п.п., через 1/2 — ещё на 10, по истечении срока — выход.
+    val tieredTrailEnabled: Boolean = false,
+    val trailTier1Pct: Double = 40.0,
+    val trailTier2Pct: Double = 30.0,
+    val trailTier3Pct: Double = 20.0,
+    val trailTier4Pct: Double = 15.0,
+    val staleExitEnabled: Boolean = false,
+    val staleExitMinutes: Int = 1440,
+
     // ── Размер позиции от риска (по умолчанию выключен — размер = positionSize% баланса) ──
     // Включён: размер = баланс × riskPerTradePercent% / расстояние до стопа, но не больше
     // positionSize% баланса и не больше maxPoolSharePercent% ликвидности пула (слиппедж).
@@ -146,13 +158,8 @@ data class StrategyConfig(
     val scanFiltersEnabled: Boolean = true,
 
     // ── Индикаторы ──
-    val rsiPeriod: Int = 14,
-    val rsiOverbought: Double = 70.0,
-    val rsiOversold: Double = 30.0,
-    val emaFast: Int = 9,
-    val emaSlow: Int = 21,
+    // Период ATR: стоп «Пробой + откат» и ATR входа для ATR-трейлинга.
     val atrPeriod: Int = 14,
-    val volumeThreshold: Double = 1.5,
 
     // ── Dars / Smart Money ──
     val darsHigherTf: String = "15m",
@@ -180,6 +187,22 @@ data class StrategyConfig(
     val bpMaxBarsSinceBreakout: Int = 20,
     val bpPullbackVolumeRatio: Double = 0.7,
     val bpTriggerVolumeMult: Double = 1.2,
+
+    // ── Мем-плейбук (стратегия MEME_PLAYBOOK) ──
+    // Импульс ≥ mpMinImpulsePct% (минимум → максимум за mpLookbackBars баров), откат на глубину
+    // [mpFibMin; mpFibMax) импульса на объёме ≤ mpPullbackVolumeRatio × объём импульса, триггер
+    // с объёмом ≥ mpTriggerVolumeMult × объём отката. Стоп — под уровнем mpFibMax (откат глубже —
+    // «пустой памп»). Фильтры монеты: ликвидность ≥ mpMinLiqToMcPct% капитализации, отозванные
+    // mint/freeze authority, не копия более старой монеты с тем же тикером. См. MemePlaybookStrategy.
+    val mpLookbackBars: Int = 72,
+    val mpMinImpulsePct: Double = 50.0,
+    val mpFibMin: Double = 0.382,
+    val mpFibMax: Double = 0.786,
+    val mpPullbackVolumeRatio: Double = 0.7,
+    val mpTriggerVolumeMult: Double = 1.2,
+    val mpMinLiqToMcPct: Double = 3.0,
+    val mpRequireRevokedAuthorities: Boolean = true,
+    val mpRejectCopycats: Boolean = true,
 ) {
     fun scanFilters(): ScanFilters = ScanFilters(
         minLiquidityUsd = minLiquidityUsd,

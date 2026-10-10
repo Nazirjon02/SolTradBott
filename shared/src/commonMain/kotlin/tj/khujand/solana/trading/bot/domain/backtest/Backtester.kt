@@ -11,8 +11,6 @@ import tj.khujand.solana.trading.bot.core.strategy.BreakoutPullbackStrategy
 import tj.khujand.solana.trading.bot.core.strategy.DarsStrategy
 import tj.khujand.solana.trading.bot.core.strategy.MAX_ENTRY_PRICE_DRIFT
 import tj.khujand.solana.trading.bot.core.strategy.MIN_CONFIDENCE
-import tj.khujand.solana.trading.bot.core.strategy.MomentumStrategy
-import tj.khujand.solana.trading.bot.core.strategy.RsiEmaStrategy
 import tj.khujand.solana.trading.bot.core.strategy.ScoreStrategy
 import tj.khujand.solana.trading.bot.core.strategy.Strategy
 import tj.khujand.solana.trading.bot.core.strategy.StrategyConfig
@@ -64,8 +62,6 @@ fun backtestStrategy(config: StrategyConfig, slices: CandleSlices): Strategy {
     }
     return when (config.type) {
         StrategyType.BREAKOUT_PULLBACK.name -> BreakoutPullbackStrategy(config, htfSource = { _, _, limit -> slices.higher.takeLast(limit) })
-        StrategyType.MOMENTUM.name -> MomentumStrategy(config)
-        StrategyType.RSI_EMA.name -> RsiEmaStrategy(config)
         StrategyType.SCORE.name -> ScoreStrategy(config, analyzer = MarketAnalyzerService(candleSource = source))
         else -> DarsStrategy(config, engine = DarsEntryEngine(candleSource = source))
     }

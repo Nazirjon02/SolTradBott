@@ -1,10 +1,13 @@
 package tj.khujand.solana.trading.bot.domain.dars
 
+import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.runBlocking
 import tj.khujand.solana.trading.bot.exchange.dex.Candle
 import tj.khujand.solana.trading.bot.exchange.dex.TokenCandidate
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertNotNull
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 /**
@@ -68,6 +71,61 @@ class MarketAnalyzerServiceTest {
         assertEquals(2, ranked.size)
         assertEquals("GOOD", ranked.first().symbol, "Лучшая по баллу монета должна идти первой")
         assertTrue(ranked.first().score >= ranked.last().score)
+    }
+
+    private val source: suspend (String, String, Int, Int) -> List<Candle> = { pool, tf, _, _ ->
+        when {
+            tf == "hour" -> uptrendHtf()
+            pool == "good" -> cleanSetup()
+            else -> flat()
+        }
+    }
+
+    /**
+     * Скан отдаёт кадры по ходу (промежуточные экрану не обязательны — поток conflated), последний —
+     * со всеми монетами. Свечи разбора кладутся в кэш графика — карточка рисует их без запроса
+     * к GeckoTerminal.
+     */
+    @Test
+    fun streamReportsProgressAndCachesCandles() = runBlocking {
+        val service = MarketAnalyzerService(candleSource = source)
+        val frames = service.analyzeStream(listOf(candidate("flat", "FLAT"), candidate("good", "GOOD")), cfg, concurrency = 1).toList()
+
+        assertTrue(frames.zipWithNext().all { (a, b) -> b.done >= a.done }, "Ход скана не должен идти назад")
+        assertTrue(frames.all { it.total == 2 })
+        val last = frames.last()
+        assertTrue(last.finished)
+        assertEquals(listOf("GOOD", "FLAT"), last.best.map { it.symbol }, "Кадр должен быть отсортирован по баллу")
+        assertEquals(cleanSetup().size, service.cachedCandles("good-mint")?.size, "Свечи скана — в кэш графика")
+    }
+
+    /** Разбор для стратегии/бэктеста не должен копить свечи в памяти ради картинки. */
+    @Test
+    fun plainAnalyzeDoesNotCacheCandles() = runBlocking {
+        val service = MarketAnalyzerService(candleSource = source)
+        service.analyze(candidate("good", "GOOD"), cfg)
+        assertNull(service.cachedCandles("good-mint"))
+    }
+
+    /** Поиск: сначала кандидаты сканера (по mint и тикеру без учёта регистра), иначе resolver. */
+    @Test
+    fun queryPrefersScannerCandidatesThenResolver() = runBlocking<Unit> {
+        val asked = mutableListOf<String>()
+        val service = MarketAnalyzerService(
+            resolver = { q -> asked += q; if (q == "NEWCOIN") candidate("good", "NEWCOIN") else null },
+            candleSource = source,
+        )
+        val known = listOf(candidate("good", "GOOD"))
+
+        assertEquals("GOOD", service.analyzeQuery("good", cfg, known)?.symbol)
+        assertEquals("GOOD", service.analyzeQuery("  good-mint ", cfg, known)?.symbol)
+        assertEquals("GOOD", service.analyzeQuery("\$GOOD", cfg, known)?.symbol)
+        assertTrue(asked.isEmpty(), "Монеты из сканера не должны идти в DexScreener: $asked")
+
+        assertEquals("NEWCOIN", service.analyzeQuery("NEWCOIN", cfg, known)?.symbol)
+        assertNull(service.analyzeQuery("NOPE", cfg, known))
+        assertEquals(listOf("NEWCOIN", "NOPE"), asked)
+        assertNotNull(service.cachedCandles("good-mint"), "Найденная монета рисуется с графиком")
     }
 
     private fun candidate(pool: String, symbol: String) = TokenCandidate(

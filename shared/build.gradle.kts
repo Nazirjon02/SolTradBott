@@ -69,6 +69,11 @@ kotlin {
         commonTest.dependencies {
             implementation(libs.kotlin.test)
         }
+        jvmTest.dependencies {
+            // Skia под текущую ОС: нужна тесту, который рендерит график и карточку разбора в PNG
+            // без окна. Только для тестов — в рантайм shared не попадает.
+            implementation(compose.desktop.currentOs)
+        }
     }
 }
 

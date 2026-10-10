@@ -131,11 +131,39 @@ class StrategyStoreRangeTest {
         assertTrue(store.loadAll().none { it.id == BREAKOUT_PULLBACK_ID })
     }
 
-    @Test fun freshDbGetsAllFourStrategies() {
+    @Test fun freshDbGetsDarsAndBreakoutPullback() {
         val db = freshDb()
         seedDefaultStrategies(db)
         val ids = StrategyStore(db).loadAll().map { it.id }.toSet()
-        assertEquals(setOf("dars-memecoins", "momentum-scalp", "rsi-ema-memecoins", BREAKOUT_PULLBACK_ID), ids)
+        assertEquals(setOf("dars-memecoins", BREAKOUT_PULLBACK_ID), ids)
+    }
+
+    /**
+     * Старая БД после удаления Momentum и RSI+EMA: физически в ней остались колонки RSI/EMA/порога
+     * объёма (с DEFAULT) и строки этих стратегий. Строки удаляются при старте, а чтение и запись
+     * стратегий с лишними колонками работают.
+     */
+    @Test fun removedStrategyTypesAndColumnsDoNotBreakOldDb() {
+        val driver = JdbcSqliteDriver(JdbcSqliteDriver.IN_MEMORY)
+        DrxDatabase.Schema.create(driver)
+        migrateStrategyTable(driver)
+        listOf(
+            "rsi_period INTEGER NOT NULL DEFAULT 14", "rsi_overbought REAL NOT NULL DEFAULT 70.0",
+            "rsi_oversold REAL NOT NULL DEFAULT 30.0", "ema_fast INTEGER NOT NULL DEFAULT 9",
+            "ema_slow INTEGER NOT NULL DEFAULT 21", "volume_threshold REAL NOT NULL DEFAULT 1.5",
+        ).forEach { driver.execute(null, "ALTER TABLE strategy ADD COLUMN $it", 0) }
+        listOf("momentum-scalp" to "MOMENTUM", "rsi-ema-memecoins" to "RSI_EMA", "dars-memecoins" to "DARS").forEach { (id, type) ->
+            driver.execute(null, "INSERT INTO strategy (id, name, type, created_at, updated_at) VALUES ('$id', '$id', '$type', 0, 0)", 0)
+        }
+        val db = DrxDatabase(driver)
+
+        seedDefaultStrategies(db)
+
+        val store = StrategyStore(db)
+        assertEquals(setOf("dars-memecoins", BREAKOUT_PULLBACK_ID), store.loadAll().map { it.id }.toSet())
+        store.save(StrategyConfig(id = "new", name = "new", atrPeriod = 10)) // insert с лишними колонками
+        store.save(store.loadAll().first { it.id == "new" }.copy(atrPeriod = 12)) // и update
+        assertEquals(12, store.loadAll().first { it.id == "new" }.atrPeriod)
     }
 
     /** Старая БД без новых колонок strategy/trade: миграция добавляет их, SELECT * не падает. */

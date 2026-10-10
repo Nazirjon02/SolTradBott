@@ -519,6 +519,40 @@ class DexScreenerApi {
         }
     }
 
+    /**
+     * Самая ликвидная пара монеты на Solana по вводу пользователя — для поиска на «Анализе».
+     *
+     * Адрес (mint) ищем по точному эндпоинту пар токена, тикер — через поиск DexScreener,
+     * оставляя только пары с этим тикером: поиск по «BONK» отдаёт и пары, где BONK — котируемая
+     * монета, и случайные совпадения в названии. null — ничего не нашлось или сеть недоступна.
+     */
+    suspend fun findSolanaPair(query: String): TokenPair? {
+        val q = query.trim().removePrefix("$")
+        if (q.isEmpty()) return null
+        return try {
+            val pairs = if (looksLikeMint(q)) {
+                getTokenPairsForAddress("solana", q).filter { it.baseToken?.address == q }
+            } else {
+                val element = getJsonElementWithRetry(
+                    "https://api.dexscreener.com/latest/dex/search", mapOf("q" to q)
+                ) ?: return null
+                parsePairsFromJson(element).filter {
+                    it.chainId == "solana" && it.baseToken?.symbol.equals(q, ignoreCase = true)
+                }
+            }
+            pairs.maxByOrNull { it.liquidity?.usd ?: 0.0 }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            println("❌ Поиск пары '$q': ${e.message}")
+            null
+        }
+    }
+
+    /** Похоже на адрес Solana: 32–44 символа base58 (без 0, O, I, l). */
+    private fun looksLikeMint(s: String): Boolean =
+        s.length in 32..44 && s.all { it in BASE58_CHARS }
+
     // ✅ РАБОЧИЙ МЕТОД: Обновить цену токена
     suspend fun updateTokenPrice(token: TokenPair): TokenPair? {
         val pairAddress = token.pairAddress
@@ -803,3 +837,6 @@ class DexScreenerApi {
         return if (value < 1_000_000_000_000L) value * 1000 else value
     }
 }
+
+/** Алфавит base58 Solana-адресов: без 0, O, I и l. */
+private const val BASE58_CHARS = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"

@@ -116,4 +116,73 @@ class MarketAnalysisTest {
         assertEquals(Readiness.IGNORE, a.readiness)
         assertTrue(a.blockers.any { it.contains("истори", ignoreCase = true) }, "Ожидали блокер про историю: ${a.blockers}")
     }
+
+    /**
+     * Разметка графика должна лечь ровно на свечи разбора: подписанные ноги — те самые импульс
+     * (113 → 133) и коррекция (133 → 125), окно входа начинается на конце коррекции, а вход,
+     * стоп и цель — числа плана входа. Иначе картинка спорила бы с текстом карточки.
+     */
+    @Test
+    fun chartOverlayMatchesAnalysis() {
+        val candles = entryWithConfirmation()
+        val a = MarketAnalysis.analyze("BULL", candles, uptrendHtf(), market, cfg, now = 40 * 300_000L)
+        val chart = assertNotNull(a.chart, "У разбора с читаемой структурой должна быть разметка")
+        val entry = assertNotNull(a.entry)
+
+        val impulse = chart.waves.single { it.label == "импульс" }
+        val correction = chart.waves.single { it.label == "коррекция" }
+        assertEquals(MarkKind.IMPULSE, impulse.kind)
+        assertEquals(MarkKind.CORRECTION, correction.kind)
+        assertEquals(133.0, candles[impulse.toIndex].close, "Импульс должен кончаться на вершине 133")
+        assertEquals(125.0, candles[correction.toIndex].close, "Коррекция должна кончаться на минимуме 125")
+        assertEquals(impulse.toIndex, correction.fromIndex, "Коррекция начинается там, где кончился импульс")
+        chart.waves.forEach {
+            assertTrue(it.fromIndex in candles.indices && it.toIndex in candles.indices, "Индексы ноги вне свечей: $it")
+        }
+
+        val window = assertNotNull(chart.entryWindow)
+        assertEquals(correction.toIndex, window.fromIndex)
+        assertEquals(entry.zoneLow, window.low)
+        assertEquals(entry.zoneHigh, window.high)
+        assertEquals(entry.entryPrice, chart.entryLevel)
+        assertEquals(entry.stopLoss, chart.stopLevel)
+        assertEquals(entry.takeProfit, chart.takeLevel)
+        assertEquals(a.readiness == Readiness.READY, chart.armed)
+        assertEquals(a.blockers.firstOrNull(), chart.missing)
+    }
+
+    @Test
+    fun chartWithoutStructureKeepsLevelsAndReason() {
+        val downHtf = (0..29).map { i ->
+            val close = 130.0 - i * (50.0 / 29.0)
+            Candle(i * 3_600_000L, open = close + 0.5, high = close + 0.7, low = close - 0.6, close = close, volume = 500.0)
+        }
+        val a = MarketAnalysis.analyze("BEAR", entryWithConfirmation(), downHtf, market, cfg)
+        val chart = assertNotNull(a.chart, "Даже без сетапа график показывает свечи и уровни")
+        assertTrue(chart.waves.isEmpty())
+        assertEquals(null, chart.entryLevel)
+        assertEquals(a.blockers.first(), chart.missing)
+    }
+
+    @Test
+    fun shiftedMovesOnlyBarIndices() {
+        val a = MarketAnalysis.analyze("BULL", entryWithConfirmation(), uptrendHtf(), market, cfg, now = 40 * 300_000L)
+        val chart = assertNotNull(a.chart)
+        val moved = chart.shifted(-5)
+        assertEquals(chart.waves.map { it.fromIndex - 5 }, moved.waves.map { it.fromIndex })
+        assertEquals(chart.entryWindow?.fromIndex?.minus(5), moved.entryWindow?.fromIndex)
+        assertEquals(chart.entryLevel, moved.entryLevel)
+        assertEquals(chart.levels, moved.levels)
+    }
+
+    /** Цены мемкоинов: четыре значащие цифры ниже цента, без экспоненты и без потери знаков. */
+    @Test
+    fun fmtPriceKeepsSignificantDigitsForTinyPrices() {
+        assertEquals("0.00001234", MarketAnalysis.fmtPrice(0.00001234))
+        assertEquals("0.00000001234", MarketAnalysis.fmtPrice(1.234e-8))
+        assertEquals("0.001000", MarketAnalysis.fmtPrice(0.001))
+        assertEquals("0.012345", MarketAnalysis.fmtPrice(0.012345))
+        assertEquals("127.5000", MarketAnalysis.fmtPrice(127.5))
+        assertEquals("0.000000", MarketAnalysis.fmtPrice(0.0))
+    }
 }

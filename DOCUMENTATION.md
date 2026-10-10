@@ -70,7 +70,7 @@ SolTradBott/
 | `core/engine/TradeMonitor` | Сопровождение позиций: SL/TP/partial/trailing/break-even/time-stop/liquidity-stop. |
 | `core/engine/TradeExecutor` | Исполнение: DEMO (виртуальный счёт) / REAL (Jupiter quote→swap→sign→confirm). |
 | `core/engine/ActivityLog` | Живая лента событий для Dashboard и пульс запросов. |
-| `core/strategy/` | `Strategy`-интерфейс, `StrategyManager`, фабрика + 3 стратегии. |
+| `core/strategy/` | `Strategy`-интерфейс, `StrategyManager`, фабрика + стратегии: Dars, «Вход по баллу», «Пробой + откат». |
 | `core/risk/RiskManager` | Дневной убыток, просадка, лимит позиций, размер позиции. |
 | `core/Indicators` | EMA, RSI, MACD, Bollinger, ATR (порт из MRX). |
 | `exchange/dex/DexClient` | Фасад: DexScreener + Jupiter + GeckoTerminal + Solana RPC. |
@@ -86,7 +86,8 @@ SolTradBott/
 
 ## 3. Торговые стратегии
 
-При первом запуске бот создаёт в БД **4 стратегии** (`SeedData.kt`). Включена по умолчанию только первая.
+При первом запуске бот создаёт в БД **2 стратегии** (`SeedData.kt`): Dars (включена) и «Пробой + откат». «Вход по баллу» создаётся вручную в форме.
+Стратегии Momentum Scalping и RSI + EMA удалены; их записи из старой БД убираются при запуске.
 В уже существующую БД «Пробой + откат» добавляется один раз при обновлении (удалённая пользователем — не возвращается).
 
 ### 3.1 Dars / Smart Money — сканер мемкоинов *(включена по умолчанию)*
@@ -105,15 +106,7 @@ SolTradBott/
 | Take Profit | 30% (RR ≈ 2) |
 | Фильтры | LIQ ≥ $10K, MC $50K–$10M, возраст 30м–30д, объём 1ч ≥ $5K |
 
-### 3.2 Momentum Scalping — свежие мемкоины
-
-Быстрый вход по всплеску объёма (≥2× среднего) и импульсу за 5 минут. Trailing + break-even включены, time-stop 60 минут.
-
-### 3.3 RSI + EMA — мемкоины с историей
-
-Классика (порт из MRX): выход RSI из перепроданности + подтверждение EMA9>EMA21. Фильтры настроены на «взрослые» токены (старше недели, LIQ ≥ $50K).
-
-### 3.4 Пробой + откат — мемкоины с историей
+### 3.2 Пробой + откат — мемкоины с историей
 
 Связка Momentum → Pullback → Volume confirmation (обоснование — `STRATEGY_RESEARCH.md`). Пробой не покупается — он «взводит» сетап, вход на откате:
 1. **Пробой**: закрытие выше максимума 20 баров на объёме ≥ 2× среднего, закрытие в верхней части бара.
@@ -132,7 +125,7 @@ SolTradBott/
 
 > Все параметры каждой стратегии редактируются в UI (вкладка «Стратегии» → ✏️) или прямо в БД.
 
-### 3.5 Бэктест стратегии (🧪)
+### 3.3 Бэктест стратегии (🧪)
 
 Вкладка «Стратегии» → 🧪 на карточке. Бот прогоняет стратегию с её текущими параметрами по истории свечей GeckoTerminal (`domain/backtest`):
 - **Монеты:** трендовые / новые / топ по объёму (5–50 штук), история 3–30 дней. Трендовые и топовые — это выжившие, результат будет лучше реального; «Новые» честнее.
@@ -316,7 +309,7 @@ curl http://localhost:8080/api/v1/bot/status -H "Authorization: Bearer soltrad-s
 -- Все стратегии
 SELECT id, name, is_active, timeframe FROM strategy;
 -- Включить стратегию
-UPDATE strategy SET is_active = 1 WHERE id = 'momentum-scalp';
+UPDATE strategy SET is_active = 1 WHERE id = 'breakout-pullback';
 -- Последние 10 сделок
 SELECT symbol, pnl, close_reason FROM trade ORDER BY opened_at DESC LIMIT 10;
 ```

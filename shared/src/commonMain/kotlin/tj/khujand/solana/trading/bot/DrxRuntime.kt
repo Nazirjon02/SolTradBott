@@ -21,6 +21,8 @@ import tj.khujand.solana.trading.bot.exchange.dex.AccountCache
 import tj.khujand.solana.trading.bot.exchange.dex.DexClient
 import tj.khujand.solana.trading.bot.exchange.dex.TokenCache
 import tj.khujand.solana.trading.bot.exchange.dex.TokenScanner
+import tj.khujand.solana.trading.bot.exchange.dex.toTokenCandidate
+import kotlin.time.Clock
 import tj.khujand.solana.trading.bot.telegram.TelegramBotController
 import tj.khujand.solana.trading.bot.telegram.TelegramNotifier
 
@@ -42,7 +44,13 @@ class DrxRuntime(val db: DrxDatabase) {
 
     // Информационный анализатор монеты «Dars» (порт MarketAnalyzer из MRX) — «второе мнение»
     // к движку: считает фазу/сетап/зону входа/запреты по свечам GeckoTerminal, без торговли.
-    val marketAnalyzer = MarketAnalyzerService()
+    // Монету вне сканера ищет по mint/тикеру через DexScreener.
+    val marketAnalyzer = MarketAnalyzerService(
+        resolver = { query ->
+            client.dexScreener.findSolanaPair(query)
+                ?.toTokenCandidate(Clock.System.now().toEpochMilliseconds())
+        },
+    )
 
     // Бэктест стратегий по истории GeckoTerminal — держит загруженные свечи между прогонами.
     val backtest = BacktestService()
@@ -107,6 +115,7 @@ class DrxRuntime(val db: DrxDatabase) {
         telegramJob?.cancel()
         telegramController?.close()
         runtimeScope.cancel()
+        marketAnalyzer.close()
         tradeMonitor.close()
         engine.shutdown()
         notifier.close()
