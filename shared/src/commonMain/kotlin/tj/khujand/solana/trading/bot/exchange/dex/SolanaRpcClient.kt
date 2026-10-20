@@ -161,8 +161,10 @@ class SolanaRpcClient(
     /**
      * Парсинг SPL Mint из base64 данных
      * Формат: mintAuthorityOption(u32), mintAuthority(32), supply(u64), decimals(u8), isInit(u8), freezeAuthorityOption(u32), freezeAuthority(32)
+     * COption в SPL фиксированного размера: 32 байта ключа есть и при option = 0 (заполнены нулями).
+     * Token-2022 начинается с той же 82-байтной базы — расширения идут после неё.
      */
-    private fun parseSplMintFromBase64(base64Data: String): SplMintInfo? {
+    internal fun parseSplMintFromBase64(base64Data: String): SplMintInfo? {
         return try {
             // Декодируем base64
             val bytes = decodeBase64(base64Data) ?: return null
@@ -178,10 +180,8 @@ class SolanaRpcClient(
             val mintAuthorityOption = bytesToUInt32(bytes, offset)
             offset += 4
 
-            // mintAuthority (32 байта, пропускаем если option = 0)
-            if (mintAuthorityOption != 0u) {
-                offset += 32
-            }
+            // mintAuthority (32 байта, есть всегда — даже когда authority отозвана)
+            offset += 32
 
             // supply (u64, 8 байт)
             val supply = bytesToUInt64(bytes, offset)

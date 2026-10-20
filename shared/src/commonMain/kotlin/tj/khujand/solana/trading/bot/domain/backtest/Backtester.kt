@@ -9,8 +9,10 @@ import tj.khujand.solana.trading.bot.core.engine.atrFraction
 import tj.khujand.solana.trading.bot.core.engine.decideExit
 import tj.khujand.solana.trading.bot.core.strategy.BreakoutPullbackStrategy
 import tj.khujand.solana.trading.bot.core.strategy.DarsStrategy
+import tj.khujand.solana.trading.bot.core.strategy.ElliottStrategy
 import tj.khujand.solana.trading.bot.core.strategy.MAX_ENTRY_PRICE_DRIFT
 import tj.khujand.solana.trading.bot.core.strategy.MIN_CONFIDENCE
+import tj.khujand.solana.trading.bot.core.strategy.MemePlaybookStrategy
 import tj.khujand.solana.trading.bot.core.strategy.ScoreStrategy
 import tj.khujand.solana.trading.bot.core.strategy.Strategy
 import tj.khujand.solana.trading.bot.core.strategy.StrategyConfig
@@ -20,6 +22,7 @@ import tj.khujand.solana.trading.bot.domain.dars.DarsEntryEngine
 import tj.khujand.solana.trading.bot.domain.dars.MarketAnalyzerService
 import tj.khujand.solana.trading.bot.exchange.dex.Candle
 import tj.khujand.solana.trading.bot.exchange.dex.DexClient
+import tj.khujand.solana.trading.bot.exchange.dex.SplMintInfo
 import tj.khujand.solana.trading.bot.exchange.dex.TokenCandidate
 
 /**
@@ -37,6 +40,7 @@ class CandleSlices(private val entryTf: Pair<String, Int>) {
 /** Старший ТФ, свечи которого нужны стратегии в бэктесте (null — не нужен). */
 fun StrategyConfig.backtestHigherTf(): String? = when (type) {
     StrategyType.BREAKOUT_PULLBACK.name -> bpHigherTf.takeIf { bpRequireHtfTrend }
+    StrategyType.ELLIOTT.name -> ewHigherTf.takeIf { ewRequireHtf }
     StrategyType.DARS.name, StrategyType.SCORE.name -> darsHigherTf
     else -> null
 }
@@ -63,6 +67,18 @@ fun backtestStrategy(config: StrategyConfig, slices: CandleSlices): Strategy {
     return when (config.type) {
         StrategyType.BREAKOUT_PULLBACK.name -> BreakoutPullbackStrategy(config, htfSource = { _, _, limit -> slices.higher.takeLast(limit) })
         StrategyType.SCORE.name -> ScoreStrategy(config, analyzer = MarketAnalyzerService(candleSource = source))
+        // On-chain проверки (authority, копикат) в истории не моделируются — монета считается чистой.
+        StrategyType.MEME_PLAYBOOK.name -> MemePlaybookStrategy(
+            config,
+            mintInfoSource = { SplMintInfo(hasMintAuthority = false, hasFreezeAuthority = false, decimals = 0, supply = 0) },
+            symbolPairsSource = { emptyList() },
+        )
+        // В срезах только закрытые свечи — «сейчас» в бэктесте не отбрасывает ни одну.
+        StrategyType.ELLIOTT.name -> ElliottStrategy(
+            config,
+            htfSource = { _, _, limit -> slices.higher.takeLast(limit) },
+            nowMs = { Long.MAX_VALUE },
+        )
         else -> DarsStrategy(config, engine = DarsEntryEngine(candleSource = source))
     }
 }
@@ -77,7 +93,8 @@ fun backtestStrategy(config: StrategyConfig, slices: CandleSlices): Strategy {
  *    по своему уровню, при гэпе через уровень — по открытию.
  *
  * Упрощения: ликвидность-стоп не моделируется (исторической ликвидности нет), сделки разных монет
- * считаются независимо (без лимита позиций и кулдауна).
+ * считаются независимо (без лимита позиций и кулдауна), on-chain проверки «Мем-плейбука»
+ * (authority, копикат) пропускаются.
  */
 object Backtester {
 
@@ -169,6 +186,7 @@ object Backtester {
                 entryLiquidityUsd = 0.0,
                 entryAtrFrac = atrFraction(slices.entry, config.atrPeriod, fill),
                 openedAtMs = next.openTimeMs,
+                peakAtMs = next.openTimeMs,
             )
             val sim = simulate(start, config, candles, i + 1, tfMs)
             trades += toTrade(s.coin, start, sim, costFrac, signal.reason)
@@ -212,7 +230,7 @@ object Backtester {
                 var actions = 0
                 while (actions++ < MAX_ACTIONS_PER_PRICE) {
                     val d = decideExit(p, config, price, liquidity = null, nowMs = timeMs)
-                    p = p.copy(peakPrice = d.peak, stopLoss = maxOf(p.stopLoss, d.stop))
+                    p = p.copy(peakPrice = d.peak, peakAtMs = d.peakAtMs, stopLoss = maxOf(p.stopLoss, d.stop))
                     when (val a = d.action) {
                         ExitAction.Hold -> break
                         is ExitAction.CloseAll -> {

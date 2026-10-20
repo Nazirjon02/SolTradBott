@@ -106,7 +106,7 @@ class StrategyManager(
     }
 
     suspend fun run(config: StrategyConfig) {
-        val strategy = createStrategy(config)
+        val strategy = createStrategy(config, client)
         val scope = CoroutineScope(Dispatchers.Default + SupervisorJob())
         val job = scope.launchScanLoop(config, strategy)
         mutex.withLock { activeJobs[config.id] = job }

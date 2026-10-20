@@ -12,7 +12,8 @@ import tj.khujand.solana.trading.bot.data.db.DrxDatabase
  * Живёт в shared, чтобы и сервер, и desktop-приложение сеяли одни и те же дефолты
  * в общую базу.
  *
- * Две стратегии: Dars / Smart Money (по умолчанию активна) и «Пробой + откат» (включается вручную).
+ * Четыре стратегии: Dars / Smart Money (по умолчанию активна), «Пробой + откат», «Мем-плейбук»
+ * и «Волны Эллиотта» (три последние включаются вручную).
  */
 fun seedDefaultStrategies(db: DrxDatabase) {
     // Momentum Scalping и RSI+EMA удалены из бота — убираем их строки из старых БД.
@@ -24,8 +25,11 @@ fun seedDefaultStrategies(db: DrxDatabase) {
 
     val existing = db.strategyQueries.getAll().executeAsList()
     if (existing.isNotEmpty()) {
-        // Базовые стратегии уже есть, но «Пробой + откат» появилась позже — досеваем один раз.
+        // Базовые стратегии уже есть, но «Пробой + откат», «Мем-плейбук» и «Волны Эллиотта»
+        // появились позже — досеваем один раз.
         seedBreakoutPullbackOnce(db)
+        seedMemePlaybookOnce(db)
+        seedElliottOnce(db)
         return
     }
 
@@ -85,6 +89,12 @@ fun seedDefaultStrategies(db: DrxDatabase) {
 
     // ─── Стратегия 2: Пробой + откат (включается вручную) ─────────────────────
     seedBreakoutPullbackOnce(db)
+
+    // ─── Стратегия 3: Мем-плейбук (включается вручную) ────────────────────────
+    seedMemePlaybookOnce(db)
+
+    // ─── Стратегия 4: Волны Эллиотта (включается вручную) ─────────────────────
+    seedElliottOnce(db)
 }
 
 /** Ключ-флаг: стратегия «Пробой + откат» уже засеяна (удалённую пользователем не возвращаем). */
@@ -138,6 +148,100 @@ private fun seedBreakoutPullbackOnce(db: DrxDatabase) {
     val store = StrategyStore(db)
     if (store.loadAll().none { it.id == BREAKOUT_PULLBACK_ID }) store.save(breakoutPullbackDefaults())
     db.settingsQueries.set(BREAKOUT_PULLBACK_SEED_KEY, "1", Clock.System.now().toEpochMilliseconds())
+}
+
+/** Ключ-флаг: стратегия «Мем-плейбук» уже засеяна (удалённую пользователем не возвращаем). */
+private const val MEME_PLAYBOOK_SEED_KEY = "meme_playbook_seeded_v1"
+
+internal const val MEME_PLAYBOOK_ID = "meme-playbook"
+
+/**
+ * Дефолты «Мем-плейбука» (STRATEGY_RESEARCH.md §8): 5m, вход на откате 0.382–0.786 после импульса ≥ 50%,
+ * стоп под минимумом отката, не глубже 0.786 (дальше 25% — пропуск), риск 2% на сделку
+ * (потолок 10% баланса и 1% пула).
+ * Выходы: 50% на 2x («вернуть тело») → безубыток, 25% на 3x, остаток 25% — под ступенчатым трейлингом
+ * (40% / 30% / 20% / 15% от пика по иксам); 24 ч без нового максимума — выход; пул −20% — выход.
+ */
+internal fun memePlaybookDefaults(): StrategyConfig = StrategyConfig(
+    id = MEME_PLAYBOOK_ID,
+    name = "Мем-плейбук — откат по Фибо, тело на 2x",
+    type = StrategyType.MEME_PLAYBOOK.name,
+    isActive = false,
+    timeframe = "5m",
+    positionSize = 10.0,          // потолок размера; фактический — от риска
+    maxPositions = 2,
+    slippagePercent = 2.0,        // пулы мемкоинов тонкие
+    stopLossPercent = 25.0,       // структурный стоп дальше 25% — вход пропускается (проигрыш ≤ ~0.75x)
+    takeProfitPercent = 200.0,    // в режиме раннера не закрывает позицию
+    breakEvenOffsetPercent = 2.0, // безубыток с запасом на слиппедж выхода
+    partialTpEnabled = true,
+    tp1Percent = 100.0,           // 2x — продаём половину, вложенное вернулось
+    tp1ClosePercent = 50.0,
+    tp2Percent = 200.0,           // 3x — ещё четверть
+    tp2ClosePercent = 25.0,
+    liquidityExitDropPercent = 20.0,
+    breakEvenAfterTp1 = true,
+    runnerEnabled = true,
+    tieredTrailEnabled = true,
+    staleExitEnabled = true,
+    staleExitMinutes = 1440,
+    riskSizingEnabled = true,
+    riskPerTradePercent = 2.0,
+    maxPoolSharePercent = 1.0,
+    maxDrawdown = 50.0,           // вдвое больше SL — штатный стоп не блокирует стратегию
+    minLiquidityUsd = 10_000.0,
+    minMarketCap = 50_000.0,
+    maxMarketCap = 20_000_000.0,
+    minTokenAgeMinutes = 60,      // моложе часа — лотерея запуска, а не сделка
+    maxTokenAgeMinutes = 43_200,
+)
+
+/** Добавляет «Мем-плейбук» один раз — и в новую, и в уже существующую БД. */
+private fun seedMemePlaybookOnce(db: DrxDatabase) {
+    val alreadyDone = db.settingsQueries.get(MEME_PLAYBOOK_SEED_KEY).executeAsOneOrNull() != null
+    if (alreadyDone) return
+    val store = StrategyStore(db)
+    if (store.loadAll().none { it.id == MEME_PLAYBOOK_ID }) store.save(memePlaybookDefaults())
+    db.settingsQueries.set(MEME_PLAYBOOK_SEED_KEY, "1", Clock.System.now().toEpochMilliseconds())
+}
+
+/** Ключ-флаг: стратегия «Волны Эллиотта» уже засеяна (удалённую пользователем не возвращаем). */
+private const val ELLIOTT_SEED_KEY = "elliott_seeded_v1"
+
+internal const val ELLIOTT_ID = "elliott-waves"
+
+/**
+ * Дефолты «Волн Эллиотта» (порт из MRX): 15m — на крупном масштабе волны надёжнее, а 200 свечей
+ * 15m (~2 суток) ещё укладываются в жизнь мемкоина. Стоп и цель — от разметки волн; Stop Loss 25%
+ * здесь только потолок: стоп по правилу дальше — вход пропускается. Риск 1% баланса на сделку
+ * (потолок 10% баланса и 1% пула). Разбору нужно ≥ 44 закрытых свечей (ATR 14 + 30) — на 15m это
+ * 11 часов, поэтому монеты от 12 часов. Старшая степень (1h) выключена, как в MRX.
+ */
+internal fun elliottDefaults(): StrategyConfig = StrategyConfig(
+    id = ELLIOTT_ID,
+    name = "Волны Эллиотта — вход в 3-ю и 5-ю волну",
+    type = StrategyType.ELLIOTT.name,
+    isActive = false,
+    timeframe = "15m",
+    positionSize = 10.0,          // потолок размера; фактический — от риска
+    maxPositions = 2,
+    slippagePercent = 2.0,
+    stopLossPercent = 25.0,       // потолок структурного стопа
+    riskSizingEnabled = true,
+    riskPerTradePercent = 1.0,
+    maxPoolSharePercent = 1.0,
+    maxDrawdown = 50.0,           // вдвое больше SL — штатный стоп не блокирует стратегию
+    minTokenAgeMinutes = 720,
+    maxTokenAgeMinutes = 43_200,
+)
+
+/** Добавляет «Волны Эллиотта» один раз — и в новую, и в уже существующую БД. */
+private fun seedElliottOnce(db: DrxDatabase) {
+    val alreadyDone = db.settingsQueries.get(ELLIOTT_SEED_KEY).executeAsOneOrNull() != null
+    if (alreadyDone) return
+    val store = StrategyStore(db)
+    if (store.loadAll().none { it.id == ELLIOTT_ID }) store.save(elliottDefaults())
+    db.settingsQueries.set(ELLIOTT_SEED_KEY, "1", Clock.System.now().toEpochMilliseconds())
 }
 
 /** Ключ-флаг: нормализация Dars-дефолтов к методичке выполнена (чтобы не повторять). */

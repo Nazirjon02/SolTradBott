@@ -549,6 +549,28 @@ class DexScreenerApi {
         }
     }
 
+    /**
+     * Все пары Solana, где базовая монета носит тикер [symbol] (без учёта регистра), — для поиска
+     * копикатов. null — сеть/API недоступны (в отличие от пустого списка: «таких монет нет»).
+     */
+    suspend fun searchSolanaPairsBySymbol(symbol: String): List<TokenPair>? {
+        val q = symbol.trim().removePrefix("$")
+        if (q.isEmpty()) return emptyList()
+        return try {
+            val element = getJsonElementWithRetry(
+                "https://api.dexscreener.com/latest/dex/search", mapOf("q" to q)
+            ) ?: return null
+            parsePairsFromJson(element).filter {
+                it.chainId == "solana" && it.baseToken?.symbol.equals(q, ignoreCase = true)
+            }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            println("❌ Поиск копий '$q': ${e.message}")
+            null
+        }
+    }
+
     /** Похоже на адрес Solana: 32–44 символа base58 (без 0, O, I, l). */
     private fun looksLikeMint(s: String): Boolean =
         s.length in 32..44 && s.all { it in BASE58_CHARS }

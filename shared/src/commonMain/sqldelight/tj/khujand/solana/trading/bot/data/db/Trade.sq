@@ -30,7 +30,10 @@ CREATE TABLE IF NOT EXISTS trade (
     -- начальный стоп (stop_loss потом двигают безубыток/трейлинг) и ATR/цена на входе.
     -- 0 = нет данных (старые сделки) — монитор берёт запасные значения из конфига.
     initial_stop REAL NOT NULL DEFAULT 0,
-    entry_atr_frac REAL NOT NULL DEFAULT 0
+    entry_atr_frac REAL NOT NULL DEFAULT 0,
+    -- Когда цена последний раз обновила пик (мс) — для выхода «нет нового максимума».
+    -- Поздняя колонка, пишется updatePeak; 0 = нет данных (отсчёт от opened_at).
+    peak_at INTEGER NOT NULL DEFAULT 0
 );
 
 getAll:
@@ -78,8 +81,8 @@ UPDATE trade SET stop_loss = ? WHERE id = ?;
 setRiskBasis:
 UPDATE trade SET initial_stop = ?, entry_atr_frac = ? WHERE id = ?;
 
-updatePeakPrice:
-UPDATE trade SET peak_price = ? WHERE id = ?;
+updatePeak:
+UPDATE trade SET peak_price = ?, peak_at = ? WHERE id = ?;
 
 applyPartialClose:
 UPDATE trade SET qty_remaining = ?, tp1_done = ?, tp2_done = ?, pnl = ?, fee = ? WHERE id = ?;

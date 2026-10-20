@@ -51,6 +51,7 @@ enum class StrategyType(val displayName: String) {
     SCORE("Вход по баллу"),
     BREAKOUT_PULLBACK("Пробой + откат"),
     MEME_PLAYBOOK("Мем-плейбук"),
+    ELLIOTT("Волны Эллиотта"),
 }
 
 /**
@@ -203,6 +204,33 @@ data class StrategyConfig(
     val mpMinLiqToMcPct: Double = 3.0,
     val mpRequireRevokedAuthorities: Boolean = true,
     val mpRejectCopycats: Boolean = true,
+
+    // ── Волны Эллиотта (стратегия ELLIOTT, порт из MRX) ──
+    // Разворот — отход от экстремума на ewSwingAtr × ATR; строение волн проверяется на младшей
+    // степени (ewSubDegree × порог). Сетапы: вход в волну 3, в волну 5, коррекция после нисходящей
+    // пятёрки. Стоп — где счёт ломается по правилу (или за конец коррекции при PIVOT), цель —
+    // проекция по Фибоначчи. Строковые режимы — имена enum'ов ElliottStructureMode /
+    // ElliottWave3Entry / ElliottStopAnchor. См. ElliottStrategy.
+    val ewHigherTf: String = "1h",
+    val ewRequireHtf: Boolean = false,
+    val ewSwingAtr: Double = 2.5,
+    val ewSubDegree: Double = 0.382,
+    val ewStructure: String = "SOFT",
+    val ewTradeWave3: Boolean = true,
+    val ewTradeWave5: Boolean = true,
+    val ewTradeCorrection: Boolean = false,
+    val ewW2RetraceMin: Double = 0.382,
+    val ewW2RetraceMax: Double = 0.786,
+    val ewW4RetraceMin: Double = 0.236,
+    val ewW4RetraceMax: Double = 0.5,
+    val ewMinGuidelines: Int = 2,
+    val ewWave3Entry: String = "BREAK",
+    val ewEntryWindowBars: Int = 3,
+    val ewStopAnchor: String = "RULE",
+    val ewStopBufferAtr: Double = 0.2,
+    val ewW3Target: Double = 1.618,
+    val ewW5Target: Double = 1.0,
+    val ewMinRewardRisk: Double = 1.5,
 ) {
     fun scanFilters(): ScanFilters = ScanFilters(
         minLiquidityUsd = minLiquidityUsd,

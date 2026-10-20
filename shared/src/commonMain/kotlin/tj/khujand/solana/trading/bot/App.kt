@@ -2196,6 +2196,15 @@ fun StrategyFormScreen(
     var atrTrailMult by remember { mutableStateOf(c?.atrTrailMult?.toFloat() ?: 3f) }
     var atrTrailActivation by remember { mutableStateOf(c?.atrTrailActivationR?.toFloat() ?: 1f) }
 
+    // ── Выходы «по иксам» (общие для всех типов) ──
+    var tieredTrail by remember { mutableStateOf(c?.tieredTrailEnabled ?: false) }
+    var trailTier1 by remember { mutableStateOf(c?.trailTier1Pct?.toFloat() ?: 40f) }
+    var trailTier2 by remember { mutableStateOf(c?.trailTier2Pct?.toFloat() ?: 30f) }
+    var trailTier3 by remember { mutableStateOf(c?.trailTier3Pct?.toFloat() ?: 20f) }
+    var trailTier4 by remember { mutableStateOf(c?.trailTier4Pct?.toFloat() ?: 15f) }
+    var staleExit by remember { mutableStateOf(c?.staleExitEnabled ?: false) }
+    var staleExitMinutes by remember { mutableStateOf((c?.staleExitMinutes ?: 1440).toString()) }
+
     // ── Размер от риска ──
     var riskSizing by remember { mutableStateOf(c?.riskSizingEnabled ?: false) }
     var riskPerTrade by remember { mutableStateOf(c?.riskPerTradePercent?.toFloat() ?: 1f) }
@@ -2209,6 +2218,39 @@ fun StrategyFormScreen(
     var bpMaxBars by remember { mutableStateOf((c?.bpMaxBarsSinceBreakout ?: 20).toString()) }
     var bpPullbackVol by remember { mutableStateOf(c?.bpPullbackVolumeRatio?.toFloat() ?: 0.7f) }
     var bpTriggerVol by remember { mutableStateOf(c?.bpTriggerVolumeMult?.toFloat() ?: 1.2f) }
+
+    // ── Мем-плейбук ──
+    var mpLookback by remember { mutableStateOf((c?.mpLookbackBars ?: 72).toString()) }
+    var mpMinImpulse by remember { mutableStateOf(c?.mpMinImpulsePct?.toFloat() ?: 50f) }
+    var mpFibMin by remember { mutableStateOf(c?.mpFibMin?.toFloat() ?: 0.382f) }
+    var mpFibMax by remember { mutableStateOf(c?.mpFibMax?.toFloat() ?: 0.786f) }
+    var mpPullbackVol by remember { mutableStateOf(c?.mpPullbackVolumeRatio?.toFloat() ?: 0.7f) }
+    var mpTriggerVol by remember { mutableStateOf(c?.mpTriggerVolumeMult?.toFloat() ?: 1.2f) }
+    var mpLiqToMc by remember { mutableStateOf(c?.mpMinLiqToMcPct?.toFloat() ?: 3f) }
+    var mpAuthorities by remember { mutableStateOf(c?.mpRequireRevokedAuthorities ?: true) }
+    var mpCopycats by remember { mutableStateOf(c?.mpRejectCopycats ?: true) }
+
+    // ── Волны Эллиотта ──
+    var ewHigherTf by remember { mutableStateOf(c?.ewHigherTf ?: "1h") }
+    var ewHtf by remember { mutableStateOf(c?.ewRequireHtf ?: false) }
+    var ewSwingAtr by remember { mutableStateOf(c?.ewSwingAtr?.toFloat() ?: 2.5f) }
+    var ewSubDegree by remember { mutableStateOf(c?.ewSubDegree?.toFloat() ?: 0.382f) }
+    var ewStructure by remember { mutableStateOf(c?.ewStructure ?: "SOFT") }
+    var ewWave3 by remember { mutableStateOf(c?.ewTradeWave3 ?: true) }
+    var ewWave5 by remember { mutableStateOf(c?.ewTradeWave5 ?: true) }
+    var ewCorrection by remember { mutableStateOf(c?.ewTradeCorrection ?: false) }
+    var ewW2Min by remember { mutableStateOf(c?.ewW2RetraceMin?.toFloat() ?: 0.382f) }
+    var ewW2Max by remember { mutableStateOf(c?.ewW2RetraceMax?.toFloat() ?: 0.786f) }
+    var ewW4Min by remember { mutableStateOf(c?.ewW4RetraceMin?.toFloat() ?: 0.236f) }
+    var ewW4Max by remember { mutableStateOf(c?.ewW4RetraceMax?.toFloat() ?: 0.5f) }
+    var ewMinGuidelines by remember { mutableStateOf(c?.ewMinGuidelines ?: 2) }
+    var ewWave3Entry by remember { mutableStateOf(c?.ewWave3Entry ?: "BREAK") }
+    var ewWindow by remember { mutableStateOf((c?.ewEntryWindowBars ?: 3).toString()) }
+    var ewStopAnchor by remember { mutableStateOf(c?.ewStopAnchor ?: "RULE") }
+    var ewStopBuffer by remember { mutableStateOf(c?.ewStopBufferAtr?.toFloat() ?: 0.2f) }
+    var ewW3Target by remember { mutableStateOf(c?.ewW3Target?.toFloat() ?: 1.618f) }
+    var ewW5Target by remember { mutableStateOf(c?.ewW5Target?.toFloat() ?: 1f) }
+    var ewMinRr by remember { mutableStateOf(c?.ewMinRewardRisk?.toFloat() ?: 1.5f) }
 
     // ── Риск ──
     var maxDailyLossEnabled by remember { mutableStateOf(c?.maxDailyLossEnabled ?: true) }
@@ -2301,6 +2343,40 @@ fun StrategyFormScreen(
                                 tp1Close = 40f
                                 tp2Close = 30f
                             }
+                            // Новый «Мем-плейбук» — выходы из обзора исследований (STRATEGY_RESEARCH.md §8):
+                            // половина на 2x, четверть на 3x, остаток под трейлингом «по иксам».
+                            if (!isEdit && t == StrategyType.MEME_PLAYBOOK) {
+                                timeframe = "5m"
+                                stopLoss = 25f
+                                takeProfit = 200f
+                                partialTpEnabled = true
+                                tp1Percent = 100f
+                                tp1Close = 50f
+                                tp2Percent = 200f
+                                tp2Close = 25f
+                                beAfterTp1 = true
+                                breakEvenOffset = 2f
+                                runner = true
+                                tieredTrail = true
+                                staleExit = true
+                                riskSizing = true
+                                riskPerTrade = 2f
+                                liqExit = 20f
+                                maxDrawdown = 50f
+                                minAge = "60"
+                            }
+                            // Новые «Волны Эллиотта» — как в сиде (elliottDefaults): 15m, стоп и цель
+                            // от разметки (Stop Loss — потолок), размер от риска.
+                            if (!isEdit && t == StrategyType.ELLIOTT) {
+                                timeframe = "15m"
+                                positionSize = 10f
+                                slippage = 2f
+                                stopLoss = 25f
+                                riskSizing = true
+                                riskPerTrade = 1f
+                                maxDrawdown = 50f
+                                minAge = "720"
+                            }
                         }
                     }
                 }
@@ -2365,11 +2441,11 @@ fun StrategyFormScreen(
                     "+${"%.0f".format(takeProfit)}%") { takeProfit = it }
                 FormToggle("Частичная фиксация (TP1/TP2)", partialTpEnabled) { partialTpEnabled = it }
                 if (partialTpEnabled) {
-                    FormSlider("TP1 — прибыль", tp1Percent, 5f, 100f,
+                    FormSlider("TP1 — прибыль", tp1Percent, 5f, 200f,
                         "+${"%.0f".format(tp1Percent)}%") { tp1Percent = it }
                     FormSlider("TP1 — закрыть", tp1Close, 10f, 90f,
                         "${"%.0f".format(tp1Close)}% позиции") { tp1Close = it }
-                    FormSlider("TP2 — прибыль", tp2Percent, 10f, 150f,
+                    FormSlider("TP2 — прибыль", tp2Percent, 10f, 500f,
                         "+${"%.0f".format(tp2Percent)}%") { tp2Percent = it }
                     FormSlider("TP2 — закрыть", tp2Close, 10f, 90f,
                         "${"%.0f".format(tp2Close)}% позиции") { tp2Close = it }
@@ -2405,6 +2481,36 @@ fun StrategyFormScreen(
                             "Раннер оставляет остаток работать, пока его не закроет стоп или трейлинг — " +
                             "включайте вместе с трейлингом. ATR-трейлинг держит стоп на N × ATR от пика " +
                             "(ATR — средний размах свечи на входе): шире на волатильных монетах, уже на спокойных.",
+                        fontSize = 11.sp, color = TextSecondary,
+                        modifier = Modifier.padding(10.dp), lineHeight = 16.sp
+                    )
+                }
+            }
+
+            // 4c. Выходы «по иксам» (общие для всех типов)
+            FormSection("🪜  Выходы по иксам") {
+                FormToggle("Ступенчатый трейлинг (уже с ростом иксов)", tieredTrail) { tieredTrail = it }
+                if (tieredTrail) {
+                    FormSlider("До 2x — отступ от пика", trailTier1, 5f, 60f,
+                        "${"%.0f".format(trailTier1)}%") { trailTier1 = it }
+                    FormSlider("2x–5x — отступ от пика", trailTier2, 5f, 60f,
+                        "${"%.0f".format(trailTier2)}%") { trailTier2 = it }
+                    FormSlider("5x–10x — отступ от пика", trailTier3, 5f, 60f,
+                        "${"%.0f".format(trailTier3)}%") { trailTier3 = it }
+                    FormSlider("От 10x — отступ от пика", trailTier4, 5f, 60f,
+                        "${"%.0f".format(trailTier4)}%") { trailTier4 = it }
+                }
+                FormToggle("Выход, если нет нового максимума", staleExit) { staleExit = it }
+                if (staleExit) {
+                    FormTextField("Без нового максимума, минут", staleExitMinutes, isNumber = true) { staleExitMinutes = it }
+                }
+                Surface(color = Blue.copy(alpha = 0.08f), shape = RoundedCornerShape(8.dp)) {
+                    Text(
+                        "Ступенчатый трейлинг держит стоп на % от пика, и этот % уменьшается, когда цена " +
+                            "растёт в иксы от входа: остаток позиции («мунбэг») может пережить откаты в начале " +
+                            "и не отдаёт много прибыли на вершине. «Нет нового максимума»: через 1/6 срока без " +
+                            "нового пика трейлинг сужается на 10 п.п., через половину — ещё на 10, по истечении " +
+                            "срока позиция закрывается (пампы мемкоинов обычно отыгрываются за 24–48 ч).",
                         fontSize = 11.sp, color = TextSecondary,
                         modifier = Modifier.padding(10.dp), lineHeight = 16.sp
                     )
@@ -2535,6 +2641,145 @@ fun StrategyFormScreen(
                 }
             }
 
+            // 8b. Мем-плейбук
+            if (type == StrategyType.MEME_PLAYBOOK.name) {
+                FormSection("🐸  Мем-плейбук") {
+                    FormSlider("Импульс не меньше", mpMinImpulse, 20f, 300f,
+                        "+${"%.0f".format(mpMinImpulse)}%") { mpMinImpulse = it }
+                    FormTextField("Окно поиска импульса, баров", mpLookback, isNumber = true) { mpLookback = it }
+                    FormSlider("Откат не мельче", mpFibMin, 0.2f, 0.618f,
+                        "${"%.3f".format(mpFibMin)} импульса") { mpFibMin = it }
+                    FormSlider("Откат глубже — пустой памп", mpFibMax, 0.5f, 0.9f,
+                        "${"%.3f".format(mpFibMax)} импульса") { mpFibMax = it }
+                    FormSlider("Объём в откате не выше", mpPullbackVol, 0.3f, 1f,
+                        "${"%.0f".format(mpPullbackVol * 100)}% объёма импульса") { mpPullbackVol = it }
+                    FormSlider("Объём бара-триггера", mpTriggerVol, 1f, 3f,
+                        "×${"%.1f".format(mpTriggerVol)} объёма отката") { mpTriggerVol = it }
+                    FormSlider("Ликвидность не меньше", mpLiqToMc, 0f, 20f,
+                        "${"%.1f".format(mpLiqToMc)}% капитализации") { mpLiqToMc = it }
+                    FormToggle("Только с отозванными mint/freeze authority", mpAuthorities) { mpAuthorities = it }
+                    FormToggle("Пропускать копии (тикер уже был у более старой монеты)", mpCopycats) { mpCopycats = it }
+                    Surface(color = Blue.copy(alpha = 0.08f), shape = RoundedCornerShape(8.dp)) {
+                        Text(
+                            "Бот ждёт импульс, затем откат в зону 0.382–0.786 по Фибоначчи на затухающем объёме " +
+                                "и входит на баре разворота вверх. Откат глубже 0.786 считается пустым пампом. " +
+                                "Стоп — под минимумом отката, но не глубже 0.786. Если стоп дальше Stop Loss из настроек или до " +
+                                "максимума импульса меньше 1R — вход пропускается.\n" +
+                                "Перед входом бот проверяет mint-аккаунт через RPC и ищет на DexScreener более " +
+                                "старые монеты с тем же тикером (копии выходят на DEX в ~10 раз реже оригиналов). " +
+                                "Нет ответа от сети — нет входа. Выходы — в разделах «Take Profit» и «Выходы по иксам».",
+                            fontSize = 11.sp, color = TextSecondary,
+                            modifier = Modifier.padding(10.dp), lineHeight = 16.sp
+                        )
+                    }
+                }
+            }
+
+            // 8c. Волны Эллиотта
+            if (type == StrategyType.ELLIOTT.name) {
+                FormSection("🌊  Волны Эллиотта") {
+                    FormSlider("Размер волны", ewSwingAtr, 1f, 6f,
+                        "${"%.1f".format(ewSwingAtr)} × ATR") { ewSwingAtr = it }
+                    FormSlider("Младшая степень", ewSubDegree, 0.2f, 0.618f,
+                        "${"%.3f".format(ewSubDegree)} размера волны") { ewSubDegree = it }
+                    Text("Строение волн", fontSize = 12.sp, color = TextSecondary)
+                    Spacer(Modifier.height(4.dp))
+                    Row(
+                        modifier = Modifier.horizontalScroll(rememberScrollState()),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        listOf("STRICT" to "Строго по книге", "SOFT" to "Не делится — допускаем", "OFF" to "Не проверять")
+                            .forEach { (k, label) -> ChoiceChip(label, ewStructure == k) { ewStructure = k } }
+                    }
+                    Spacer(Modifier.height(8.dp))
+                    FormToggle("Вход в волну 3", ewWave3) { ewWave3 = it }
+                    FormToggle("Вход в волну 5", ewWave5) { ewWave5 = it }
+                    FormToggle("Отскок после нисходящей пятёрки", ewCorrection) { ewCorrection = it }
+                    if (!ewWave3 && !ewWave5 && !ewCorrection) {
+                        Surface(color = Red.copy(alpha = 0.10f), shape = RoundedCornerShape(8.dp)) {
+                            Text(
+                                "⚠️ Ни один сетап не включён — стратегия не войдёт ни разу.",
+                                fontSize = 11.sp, color = TextSecondary,
+                                modifier = Modifier.padding(10.dp), lineHeight = 16.sp
+                            )
+                        }
+                    }
+                    Spacer(Modifier.height(4.dp))
+                    Text("Вход в волну 3", fontSize = 12.sp, color = TextSecondary)
+                    Spacer(Modifier.height(4.dp))
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        listOf("BREAK" to "На пробое конца 1-й", "TURN" to "На конце 2-й")
+                            .forEach { (k, label) -> ChoiceChip(label, ewWave3Entry == k) { ewWave3Entry = k } }
+                    }
+                    Spacer(Modifier.height(8.dp))
+                    FormTextField("Окно входа, баров после повода", ewWindow, isNumber = true) { ewWindow = it }
+                    Spacer(Modifier.height(4.dp))
+                    Text("Стоп", fontSize = 12.sp, color = TextSecondary)
+                    Spacer(Modifier.height(4.dp))
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        listOf("RULE" to "Где ломается счёт", "PIVOT" to "За конец коррекции")
+                            .forEach { (k, label) -> ChoiceChip(label, ewStopAnchor == k) { ewStopAnchor = k } }
+                    }
+                    Spacer(Modifier.height(4.dp))
+                    FormSlider("Буфер стопа", ewStopBuffer, 0f, 1f,
+                        "${"%.2f".format(ewStopBuffer)} × ATR") { ewStopBuffer = it }
+                    FormSlider("Цель 3-й", ewW3Target, 1f, 2.618f,
+                        "${"%.3f".format(ewW3Target)} × волны 1") { ewW3Target = it }
+                    FormSlider("Цель 5-й", ewW5Target, 0.5f, 1.618f,
+                        "${"%.3f".format(ewW5Target)} × волны 1") { ewW5Target = it }
+                    FormSlider("R:R не меньше", ewMinRr, 1f, 4f,
+                        "${"%.1f".format(ewMinRr)}") { ewMinRr = it }
+                    Surface(color = Blue.copy(alpha = 0.08f), shape = RoundedCornerShape(8.dp)) {
+                        Text(
+                            "Бот размечает волны по разворотам (отход на «размер волны» × ATR), проверяет " +
+                                "правила книги — волна 2 не за началом 1-й, 3-я дальше конца 1-й и не самая " +
+                                "короткая, 4-я не заходит на 1-ю — и строение волн (5 по тренду, 3 против). " +
+                                "Вход в 3-ю — на закрытии за концом волны 1, в 5-ю — когда подтвердился конец 4-й. " +
+                                "Разметка — только по закрытым свечам.\n" +
+                                "Стоп и цель берутся из разметки, а не из процентов: Stop Loss выше — только потолок " +
+                                "(стоп по правилу дальше — вход пропускается), Take Profit в % не используется. " +
+                                "Монете нужно ≥ 44 закрытых свечей (на 15m — 11 часов).",
+                            fontSize = 11.sp, color = TextSecondary,
+                            modifier = Modifier.padding(10.dp), lineHeight = 16.sp
+                        )
+                    }
+                }
+                FormSection("📏  Эллиотт — ориентиры и старшая степень") {
+                    FormSlider("Откат 2-й — от", ewW2Min, 0.1f, 0.7f,
+                        "${"%.3f".format(ewW2Min)} волны 1") { ewW2Min = it }
+                    FormSlider("Откат 2-й — до", ewW2Max, 0.5f, 0.99f,
+                        "${"%.3f".format(ewW2Max)} волны 1") { ewW2Max = it }
+                    FormSlider("Откат 4-й — от", ewW4Min, 0.1f, 0.5f,
+                        "${"%.3f".format(ewW4Min)} волны 3") { ewW4Min = it }
+                    FormSlider("Откат 4-й — до", ewW4Max, 0.3f, 0.8f,
+                        "${"%.3f".format(ewW4Max)} волны 3") { ewW4Max = it }
+                    Text("Ориентиров не меньше", fontSize = 12.sp, color = TextSecondary)
+                    Spacer(Modifier.height(4.dp))
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        (0..4).forEach { n -> ChoiceChip("$n", ewMinGuidelines == n) { ewMinGuidelines = n } }
+                    }
+                    Spacer(Modifier.height(8.dp))
+                    FormToggle("Проверять старшую степень", ewHtf) { ewHtf = it }
+                    if (ewHtf) {
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            listOf("15m", "1h", "4h").forEach { tf ->
+                                ChoiceChip(tf, ewHigherTf == tf) { ewHigherTf = tf }
+                            }
+                        }
+                    }
+                    Surface(color = Blue.copy(alpha = 0.08f), shape = RoundedCornerShape(8.dp)) {
+                        Text(
+                            "Правила книги абсолютны, ориентиры — вероятности: глубина отката по Фибоначчи, " +
+                                "объём (2-я тише 1-й, 3-я громче), чередование 2-й и 4-й, канал, зона 4-й волны " +
+                                "младшей степени. Старшая степень: текущая волна старшего ТФ должна идти вверх; " +
+                                "её свечи запрашиваются только для готового сетапа, нет ответа — нет входа.",
+                            fontSize = 11.sp, color = TextSecondary,
+                            modifier = Modifier.padding(10.dp), lineHeight = 16.sp
+                        )
+                    }
+                }
+            }
+
             // 9. Dars
             if (type == StrategyType.DARS.name) {
                 FormSection("🧠  Dars / Smart Money") {
@@ -2606,6 +2851,13 @@ fun StrategyFormScreen(
                     atrTrailEnabled = atrTrail,
                     atrTrailMult = atrTrailMult.toDouble(),
                     atrTrailActivationR = atrTrailActivation.toDouble(),
+                    tieredTrailEnabled = tieredTrail,
+                    trailTier1Pct = trailTier1.toDouble(),
+                    trailTier2Pct = trailTier2.toDouble(),
+                    trailTier3Pct = trailTier3.toDouble(),
+                    trailTier4Pct = trailTier4.toDouble(),
+                    staleExitEnabled = staleExit,
+                    staleExitMinutes = staleExitMinutes.toIntOrNull()?.coerceAtLeast(10) ?: 1440,
                     riskSizingEnabled = riskSizing,
                     riskPerTradePercent = riskPerTrade.toDouble(),
                     maxPoolSharePercent = maxPoolShare.toDouble(),
@@ -2645,6 +2897,37 @@ fun StrategyFormScreen(
                     bpMaxBarsSinceBreakout = bpMaxBars.toIntOrNull()?.coerceAtLeast(3) ?: 20,
                     bpPullbackVolumeRatio = bpPullbackVol.toDouble(),
                     bpTriggerVolumeMult = bpTriggerVol.toDouble(),
+                    mpLookbackBars = mpLookback.toIntOrNull()?.coerceAtLeast(10) ?: 72,
+                    mpMinImpulsePct = mpMinImpulse.toDouble(),
+                    mpFibMin = mpFibMin.toDouble(),
+                    // Граница «пустого пампа» всегда глубже нижней границы зоны входа.
+                    mpFibMax = maxOf(mpFibMax, mpFibMin + 0.05f).toDouble(),
+                    mpPullbackVolumeRatio = mpPullbackVol.toDouble(),
+                    mpTriggerVolumeMult = mpTriggerVol.toDouble(),
+                    mpMinLiqToMcPct = mpLiqToMc.toDouble(),
+                    mpRequireRevokedAuthorities = mpAuthorities,
+                    mpRejectCopycats = mpCopycats,
+                    ewHigherTf = ewHigherTf,
+                    ewRequireHtf = ewHtf,
+                    ewSwingAtr = ewSwingAtr.toDouble(),
+                    ewSubDegree = ewSubDegree.toDouble(),
+                    ewStructure = ewStructure,
+                    ewTradeWave3 = ewWave3,
+                    ewTradeWave5 = ewWave5,
+                    ewTradeCorrection = ewCorrection,
+                    // Верхняя граница нормы отката всегда выше нижней.
+                    ewW2RetraceMin = ewW2Min.toDouble(),
+                    ewW2RetraceMax = maxOf(ewW2Max, ewW2Min + 0.05f).toDouble(),
+                    ewW4RetraceMin = ewW4Min.toDouble(),
+                    ewW4RetraceMax = maxOf(ewW4Max, ewW4Min + 0.05f).toDouble(),
+                    ewMinGuidelines = ewMinGuidelines,
+                    ewWave3Entry = ewWave3Entry,
+                    ewEntryWindowBars = ewWindow.toIntOrNull()?.coerceIn(1, 10) ?: 3,
+                    ewStopAnchor = ewStopAnchor,
+                    ewStopBufferAtr = ewStopBuffer.toDouble(),
+                    ewW3Target = ewW3Target.toDouble(),
+                    ewW5Target = ewW5Target.toDouble(),
+                    ewMinRewardRisk = ewMinRr.toDouble(),
                 ))
             },
             modifier = Modifier

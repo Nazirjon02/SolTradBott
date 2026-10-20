@@ -27,8 +27,8 @@ import tj.khujand.solana.trading.bot.exchange.dex.DexClient
  *  3) основной Take Profit (в режиме «раннер» не закрывает позицию);
  *  4) partial TP1/TP2 — частичные фиксации (в % или R-лестница, она проверяется до основного TP);
  *  5) break-even — перенос SL в безубыток (по % прибыли или после TP1);
- *  6) trailing stop — подтягивание SL за пиком цены (по % или по ATR — Chandelier);
- *  7) time-stop — принудительный выход по времени.
+ *  6) trailing stop — подтягивание SL за пиком цены (по %, по ATR — Chandelier, или ступенчатый «по иксам»);
+ *  7) time-stop — принудительный выход по времени; «нет нового максимума» — выход, если пик давно не обновлялся.
  *
  * Работает независимо от статуса движка (позиции сопровождаются и на паузе).
  */
@@ -115,7 +115,7 @@ class TradeMonitor(
     internal suspend fun applyExits(t: TradeRow, config: StrategyConfig, price: Double, liquidity: Double?) {
         val d = decideExit(t.toPositionState(), config, price, liquidity, Clock.System.now().toEpochMilliseconds())
 
-        if (d.peak > t.peak_price) db.tradeQueries.updatePeakPrice(d.peak, t.id)
+        if (d.peak > t.peak_price) db.tradeQueries.updatePeak(d.peak, d.peakAtMs, t.id)
         if (d.stop > t.stop_loss) {
             db.tradeQueries.updateStopLoss(d.stop, t.id)
             if (d.breakEvenMoved) activityLog.info("🛡 ${t.symbol}: SL перенесён в безубыток (${fmtNum(d.stop)})")
@@ -147,6 +147,7 @@ class TradeMonitor(
         entryLiquidityUsd = entry_liquidity_usd,
         entryAtrFrac = entry_atr_frac,
         openedAtMs = opened_at,
+        peakAtMs = peak_at,
     )
 
     private suspend fun closeFull(t: TradeRow, price: Double, reason: String) {

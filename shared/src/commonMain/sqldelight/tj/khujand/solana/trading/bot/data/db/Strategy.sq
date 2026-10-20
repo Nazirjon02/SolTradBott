@@ -100,6 +100,48 @@ CREATE TABLE IF NOT EXISTS strategy (
     bp_pullback_volume_ratio REAL NOT NULL DEFAULT 0.7,
     bp_trigger_volume_mult REAL NOT NULL DEFAULT 1.2,
 
+    -- Выходы «по иксам» (общие; поздние колонки, пишутся updateTieredExitParams). DEFAULT 0 — выключены.
+    tiered_trail_enabled INTEGER NOT NULL DEFAULT 0,
+    trail_tier1_pct REAL NOT NULL DEFAULT 40.0,
+    trail_tier2_pct REAL NOT NULL DEFAULT 30.0,
+    trail_tier3_pct REAL NOT NULL DEFAULT 20.0,
+    trail_tier4_pct REAL NOT NULL DEFAULT 15.0,
+    stale_exit_enabled INTEGER NOT NULL DEFAULT 0,
+    stale_exit_minutes INTEGER NOT NULL DEFAULT 1440,
+
+    -- Мем-плейбук (стратегия MEME_PLAYBOOK; поздние колонки, пишутся updateMemeParams)
+    mp_lookback_bars INTEGER NOT NULL DEFAULT 72,
+    mp_min_impulse_pct REAL NOT NULL DEFAULT 50.0,
+    mp_fib_min REAL NOT NULL DEFAULT 0.382,
+    mp_fib_max REAL NOT NULL DEFAULT 0.786,
+    mp_pullback_volume_ratio REAL NOT NULL DEFAULT 0.7,
+    mp_trigger_volume_mult REAL NOT NULL DEFAULT 1.2,
+    mp_min_liq_to_mc_pct REAL NOT NULL DEFAULT 3.0,
+    mp_require_revoked_authorities INTEGER NOT NULL DEFAULT 1,
+    mp_reject_copycats INTEGER NOT NULL DEFAULT 1,
+
+    -- Волны Эллиотта (стратегия ELLIOTT; поздние колонки, пишутся updateElliottParams)
+    ew_higher_tf TEXT NOT NULL DEFAULT '1h',
+    ew_require_htf INTEGER NOT NULL DEFAULT 0,
+    ew_swing_atr REAL NOT NULL DEFAULT 2.5,
+    ew_sub_degree REAL NOT NULL DEFAULT 0.382,
+    ew_structure TEXT NOT NULL DEFAULT 'SOFT',
+    ew_trade_wave3 INTEGER NOT NULL DEFAULT 1,
+    ew_trade_wave5 INTEGER NOT NULL DEFAULT 1,
+    ew_trade_correction INTEGER NOT NULL DEFAULT 0,
+    ew_w2_retrace_min REAL NOT NULL DEFAULT 0.382,
+    ew_w2_retrace_max REAL NOT NULL DEFAULT 0.786,
+    ew_w4_retrace_min REAL NOT NULL DEFAULT 0.236,
+    ew_w4_retrace_max REAL NOT NULL DEFAULT 0.5,
+    ew_min_guidelines INTEGER NOT NULL DEFAULT 2,
+    ew_wave3_entry TEXT NOT NULL DEFAULT 'BREAK',
+    ew_entry_window_bars INTEGER NOT NULL DEFAULT 3,
+    ew_stop_anchor TEXT NOT NULL DEFAULT 'RULE',
+    ew_stop_buffer_atr REAL NOT NULL DEFAULT 0.2,
+    ew_w3_target REAL NOT NULL DEFAULT 1.618,
+    ew_w5_target REAL NOT NULL DEFAULT 1.0,
+    ew_min_reward_risk REAL NOT NULL DEFAULT 1.5,
+
     created_at INTEGER NOT NULL,
     updated_at INTEGER NOT NULL
 );
@@ -192,6 +234,31 @@ updateBreakoutParams:
 UPDATE strategy SET
     bp_higher_tf = ?, bp_require_htf_trend = ?, bp_breakout_lookback = ?, bp_breakout_volume_mult = ?,
     bp_max_bars_since_breakout = ?, bp_pullback_volume_ratio = ?, bp_trigger_volume_mult = ?
+WHERE id = ?;
+
+-- Выходы «по иксам» — тоже вне insert/updateStrategy.
+updateTieredExitParams:
+UPDATE strategy SET
+    tiered_trail_enabled = ?, trail_tier1_pct = ?, trail_tier2_pct = ?, trail_tier3_pct = ?,
+    trail_tier4_pct = ?, stale_exit_enabled = ?, stale_exit_minutes = ?
+WHERE id = ?;
+
+-- Параметры «Мем-плейбука» — тоже вне insert/updateStrategy.
+updateMemeParams:
+UPDATE strategy SET
+    mp_lookback_bars = ?, mp_min_impulse_pct = ?, mp_fib_min = ?, mp_fib_max = ?,
+    mp_pullback_volume_ratio = ?, mp_trigger_volume_mult = ?, mp_min_liq_to_mc_pct = ?,
+    mp_require_revoked_authorities = ?, mp_reject_copycats = ?
+WHERE id = ?;
+
+-- Параметры «Волн Эллиотта» — тоже вне insert/updateStrategy.
+updateElliottParams:
+UPDATE strategy SET
+    ew_higher_tf = ?, ew_require_htf = ?, ew_swing_atr = ?, ew_sub_degree = ?, ew_structure = ?,
+    ew_trade_wave3 = ?, ew_trade_wave5 = ?, ew_trade_correction = ?,
+    ew_w2_retrace_min = ?, ew_w2_retrace_max = ?, ew_w4_retrace_min = ?, ew_w4_retrace_max = ?,
+    ew_min_guidelines = ?, ew_wave3_entry = ?, ew_entry_window_bars = ?, ew_stop_anchor = ?,
+    ew_stop_buffer_atr = ?, ew_w3_target = ?, ew_w5_target = ?, ew_min_reward_risk = ?
 WHERE id = ?;
 
 -- Одноразовая нормализация уже засеянных Dars-стратегий к значениям методички

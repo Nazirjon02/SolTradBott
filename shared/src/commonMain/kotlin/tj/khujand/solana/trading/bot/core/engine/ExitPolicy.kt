@@ -5,6 +5,8 @@ import tj.khujand.solana.trading.bot.core.strategy.StrategyConfig
 /**
  * Состояние открытой позиции, нужное для решения о выходе (подмножество строки trade).
  * Общая модель для живого [TradeMonitor] и бэктеста — чтобы оба считали выходы одинаково.
+ *
+ * @param peakAtMs когда цена последний раз обновила пик; 0 — неизвестно (старые сделки) — считаем от входа.
  */
 data class PositionState(
     val entryPrice: Double,
@@ -17,6 +19,7 @@ data class PositionState(
     val entryLiquidityUsd: Double,
     val entryAtrFrac: Double,
     val openedAtMs: Long,
+    val peakAtMs: Long = 0L,
 )
 
 /** Что сделать с позицией на этой цене. */
@@ -45,7 +48,7 @@ sealed interface ExitAction {
 }
 
 /**
- * Решение по позиции: новый пик, стоп (после безубытка/трейлингов) и действие.
+ * Решение по позиции: новый пик (и когда он обновлён), стоп (после безубытка/трейлингов) и действие.
  * @param breakEvenMoved стоп перенесён в безубыток по % прибыли (для записи в ленту активности).
  */
 data class ExitDecision(
@@ -53,11 +56,13 @@ data class ExitDecision(
     val stop: Double,
     val breakEvenMoved: Boolean,
     val action: ExitAction,
+    val peakAtMs: Long = 0L,
 )
 
 /**
  * Правила выхода в порядке приоритета (см. [TradeMonitor]): ликвидность-стоп → пик → безубыток (по %
- * и после TP1) → трейлинг (% и ATR) → Stop Loss → R-лестница → основной TP → % лестница → тайм-стоп.
+ * и после TP1) → трейлинг (%, ATR и ступенчатый) → Stop Loss → R-лестница → основной TP → % лестница →
+ * тайм-стоп → «нет нового максимума».
  * Чистая функция: без БД, сети и часов — время передаётся в [nowMs].
  *
  * @param liquidity текущая ликвидность пула; null — неизвестна (ликвидность-стоп пропускается).
@@ -69,21 +74,23 @@ fun decideExit(
     liquidity: Double?,
     nowMs: Long,
 ): ExitDecision {
+    // Пик цены — база трейлинга; время пика — база выхода «нет нового максимума».
+    val peak = maxOf(p.peakPrice, price)
+    val peakAt = if (price > p.peakPrice) nowMs else maxOf(p.peakAtMs, p.openedAtMs)
+    val sinceHighMs = nowMs - peakAt
+    var stop = p.stopLoss
+    var breakEvenMoved = false
+
+    fun decision(action: ExitAction) = ExitDecision(peak, stop, breakEvenMoved, action, peakAt)
+
     // 1. Ликвидность-стоп (rug pull): пул осушён — выходим немедленно.
     if (liquidity != null && p.entryLiquidityUsd > 0) {
         val dropPct = (1 - liquidity / p.entryLiquidityUsd) * 100
         if (dropPct >= config.liquidityExitDropPercent) {
-            return ExitDecision(
-                p.peakPrice, p.stopLoss, false,
-                ExitAction.CloseAll("Ликвидность-стоп (-${dropPct.toInt()}% пула)", level = null),
-            )
+            return decision(ExitAction.CloseAll("Ликвидность-стоп (-${dropPct.toInt()}% пула)", level = null))
         }
     }
 
-    // Пик цены — база трейлинга.
-    val peak = maxOf(p.peakPrice, price)
-    var stop = p.stopLoss
-    var breakEvenMoved = false
     val entry = p.entryPrice
     val gainPct = (price - entry) / entry * 100
     // Прибыль в R — база выходов в R (лестница, активация ATR-трейлинга).
@@ -112,18 +119,27 @@ fun decideExit(
         stop = maxOf(stop, atrTrailStop(peak, p.entryAtrFrac, config.atrTrailMult, config.trailingStopPercent / 100))
     }
 
+    // 6c. Ступенчатый трейлинг «по иксам»: отступ от пика тем уже, чем больше иксов взято, и ещё
+    // уже, когда новый максимум давно не обновлялся (сужение — только при включённом stale-выходе).
+    if (config.tieredTrailEnabled && entry > 0) {
+        val basePct = tieredTrailPercent(
+            peak / entry, config.trailTier1Pct, config.trailTier2Pct, config.trailTier3Pct, config.trailTier4Pct,
+        )
+        val steps = if (config.staleExitEnabled) staleSteps(sinceHighMs, config.staleExitMinutes) else 0
+        stop = maxOf(stop, peak * (1 - tightenedTrailPercent(basePct, steps) / 100))
+    }
+
     // 2. Stop Loss (обычный / трейлинг / безубыток — какой выше).
     if (price <= stop) {
         val reason = if (stop > entry) "Trailing Stop" else "Stop Loss"
-        return ExitDecision(peak, stop, breakEvenMoved, ExitAction.CloseAll(reason, level = stop))
+        return decision(ExitAction.CloseAll(reason, level = stop))
     }
 
     // 4a. R-лестница проверяется ДО основного TP: иначе TP у близкого сопротивления
     // закрывал бы всю позицию раньше, чем сработают ступени.
     if (config.rLadderEnabled) {
         when (rLadderStep(gainR, p.tp1Done, p.tp2Done, config.tp1R, config.tp2R)) {
-            1 -> return ExitDecision(
-                peak, stop, breakEvenMoved,
+            1 -> return decision(
                 ExitAction.ClosePart(
                     portionOfOriginal = config.tp1ClosePercent,
                     reason = "TP1 +${fmtNum(config.tp1R)}R",
@@ -132,8 +148,7 @@ fun decideExit(
                     stopAfter = if (config.breakEvenAfterTp1) breakEvenStop else null,
                 ),
             )
-            2 -> return ExitDecision(
-                peak, stop, breakEvenMoved,
+            2 -> return decision(
                 ExitAction.ClosePart(
                     portionOfOriginal = config.tp2ClosePercent,
                     reason = "TP2 +${fmtNum(config.tp2R)}R",
@@ -147,14 +162,13 @@ fun decideExit(
 
     // 3. Основной Take Profit. В режиме «раннер» не закрывает позицию — остаток ведёт стоп/трейлинг.
     if (!config.runnerEnabled && price >= p.takeProfit) {
-        return ExitDecision(peak, stop, breakEvenMoved, ExitAction.CloseAll("Take Profit", level = p.takeProfit))
+        return decision(ExitAction.CloseAll("Take Profit", level = p.takeProfit))
     }
 
     // 4. Partial TP: фиксируем доли на промежуточных целях (в % — если не включена R-лестница).
     if (!config.rLadderEnabled && config.partialTpEnabled) {
         if (!p.tp1Done && gainPct >= config.tp1Percent) {
-            return ExitDecision(
-                peak, stop, breakEvenMoved,
+            return decision(
                 ExitAction.ClosePart(
                     config.tp1ClosePercent, "TP1 +${config.tp1Percent}%", tp1 = true, tp2 = false,
                     level = entry * (1 + config.tp1Percent / 100), stopAfter = null,
@@ -162,8 +176,7 @@ fun decideExit(
             )
         }
         if (p.tp1Done && !p.tp2Done && gainPct >= config.tp2Percent) {
-            return ExitDecision(
-                peak, stop, breakEvenMoved,
+            return decision(
                 ExitAction.ClosePart(
                     config.tp2ClosePercent, "TP2 +${config.tp2Percent}%", tp1 = true, tp2 = true,
                     level = entry * (1 + config.tp2Percent / 100), stopAfter = null,
@@ -178,9 +191,15 @@ fun decideExit(
     if (config.timeStopMinutes > 0 && !tradeWent) {
         val ageMinutes = (nowMs - p.openedAtMs) / 60_000
         if (ageMinutes >= config.timeStopMinutes) {
-            return ExitDecision(peak, stop, breakEvenMoved, ExitAction.CloseAll("Time-stop (${ageMinutes}м)", level = null))
+            return decision(ExitAction.CloseAll("Time-stop (${ageMinutes}м)", level = null))
         }
     }
 
-    return ExitDecision(peak, stop, breakEvenMoved, ExitAction.Hold)
+    // 7b. «Нет нового максимума» весь срок — продаём остаток: пампы мемкоинов обычно отыгрываются
+    // за 24–48 ч, дальше позиция только отдаёт прибыль. До первого нового пика отсчёт идёт от входа.
+    if (config.staleExitEnabled && config.staleExitMinutes > 0 && sinceHighMs >= config.staleExitMinutes * 60_000L) {
+        return decision(ExitAction.CloseAll("Нет нового максимума ${sinceHighMs / 60_000}м", level = null))
+    }
+
+    return decision(ExitAction.Hold)
 }

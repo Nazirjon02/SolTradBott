@@ -67,6 +67,52 @@ class StrategyStore(private val db: DrxDatabase) {
             bp_trigger_volume_mult = cfg.bpTriggerVolumeMult,
             id = cfg.id,
         )
+        // Выходы «по иксам» и «Мем-плейбук» — тоже вне insert/updateStrategy.
+        db.strategyQueries.updateTieredExitParams(
+            tiered_trail_enabled = if (cfg.tieredTrailEnabled) 1L else 0L,
+            trail_tier1_pct = cfg.trailTier1Pct,
+            trail_tier2_pct = cfg.trailTier2Pct,
+            trail_tier3_pct = cfg.trailTier3Pct,
+            trail_tier4_pct = cfg.trailTier4Pct,
+            stale_exit_enabled = if (cfg.staleExitEnabled) 1L else 0L,
+            stale_exit_minutes = cfg.staleExitMinutes.toLong(),
+            id = cfg.id,
+        )
+        db.strategyQueries.updateMemeParams(
+            mp_lookback_bars = cfg.mpLookbackBars.toLong(),
+            mp_min_impulse_pct = cfg.mpMinImpulsePct,
+            mp_fib_min = cfg.mpFibMin,
+            mp_fib_max = cfg.mpFibMax,
+            mp_pullback_volume_ratio = cfg.mpPullbackVolumeRatio,
+            mp_trigger_volume_mult = cfg.mpTriggerVolumeMult,
+            mp_min_liq_to_mc_pct = cfg.mpMinLiqToMcPct,
+            mp_require_revoked_authorities = if (cfg.mpRequireRevokedAuthorities) 1L else 0L,
+            mp_reject_copycats = if (cfg.mpRejectCopycats) 1L else 0L,
+            id = cfg.id,
+        )
+        db.strategyQueries.updateElliottParams(
+            ew_higher_tf = cfg.ewHigherTf,
+            ew_require_htf = if (cfg.ewRequireHtf) 1L else 0L,
+            ew_swing_atr = cfg.ewSwingAtr,
+            ew_sub_degree = cfg.ewSubDegree,
+            ew_structure = cfg.ewStructure,
+            ew_trade_wave3 = if (cfg.ewTradeWave3) 1L else 0L,
+            ew_trade_wave5 = if (cfg.ewTradeWave5) 1L else 0L,
+            ew_trade_correction = if (cfg.ewTradeCorrection) 1L else 0L,
+            ew_w2_retrace_min = cfg.ewW2RetraceMin,
+            ew_w2_retrace_max = cfg.ewW2RetraceMax,
+            ew_w4_retrace_min = cfg.ewW4RetraceMin,
+            ew_w4_retrace_max = cfg.ewW4RetraceMax,
+            ew_min_guidelines = cfg.ewMinGuidelines.toLong(),
+            ew_wave3_entry = cfg.ewWave3Entry,
+            ew_entry_window_bars = cfg.ewEntryWindowBars.toLong(),
+            ew_stop_anchor = cfg.ewStopAnchor,
+            ew_stop_buffer_atr = cfg.ewStopBufferAtr,
+            ew_w3_target = cfg.ewW3Target,
+            ew_w5_target = cfg.ewW5Target,
+            ew_min_reward_risk = cfg.ewMinRewardRisk,
+            id = cfg.id,
+        )
     }
 
     private fun update(cfg: StrategyConfig) = db.strategyQueries.updateStrategy(

@@ -131,11 +131,102 @@ class StrategyStoreRangeTest {
         assertTrue(store.loadAll().none { it.id == BREAKOUT_PULLBACK_ID })
     }
 
-    @Test fun freshDbGetsDarsAndBreakoutPullback() {
+    @Test fun freshDbGetsDefaultStrategies() {
         val db = freshDb()
         seedDefaultStrategies(db)
         val ids = StrategyStore(db).loadAll().map { it.id }.toSet()
-        assertEquals(setOf("dars-memecoins", BREAKOUT_PULLBACK_ID), ids)
+        assertEquals(setOf("dars-memecoins", BREAKOUT_PULLBACK_ID, MEME_PLAYBOOK_ID, ELLIOTT_ID), ids)
+    }
+
+    @Test fun memePlaybookSeededOnceIntoExistingDb() {
+        val db = freshDb()
+        val store = StrategyStore(db)
+        store.save(StrategyConfig(id = "user", name = "user strategy"))
+
+        seedDefaultStrategies(db)
+        val seeded = store.loadAll().first { it.id == MEME_PLAYBOOK_ID }
+        assertEquals(false, seeded.isActive, "включается вручную")
+
+        store.delete(MEME_PLAYBOOK_ID)
+        seedDefaultStrategies(db)
+        assertTrue(store.loadAll().none { it.id == MEME_PLAYBOOK_ID }, "удалённую не возвращаем")
+    }
+
+    @Test fun memePlaybookParamsSurviveSaveAndReload() {
+        val store = StrategyStore(freshDb())
+        store.save(memePlaybookDefaults().copy(mpFibMax = 0.75, mpLookbackBars = 96, trailTier2Pct = 25.0, staleExitMinutes = 720))
+        val r = store.loadAll().first { it.id == MEME_PLAYBOOK_ID }
+        assertEquals(StrategyType.MEME_PLAYBOOK.name, r.type)
+        assertEquals(true, r.partialTpEnabled)
+        assertEquals(100.0, r.tp1Percent)
+        assertEquals(50.0, r.tp1ClosePercent)
+        assertEquals(true, r.breakEvenAfterTp1)
+        assertEquals(true, r.runnerEnabled)
+        assertEquals(true, r.tieredTrailEnabled)
+        assertEquals(40.0, r.trailTier1Pct)
+        assertEquals(25.0, r.trailTier2Pct)
+        assertEquals(true, r.staleExitEnabled)
+        assertEquals(720, r.staleExitMinutes)
+        assertEquals(96, r.mpLookbackBars)
+        assertEquals(0.382, r.mpFibMin)
+        assertEquals(0.75, r.mpFibMax)
+        assertEquals(3.0, r.mpMinLiqToMcPct)
+        assertEquals(true, r.mpRequireRevokedAuthorities)
+        assertEquals(true, r.mpRejectCopycats)
+        assertEquals(20.0, r.liquidityExitDropPercent)
+    }
+
+    @Test fun elliottSeededOnceIntoExistingDb() {
+        val db = freshDb()
+        val store = StrategyStore(db)
+        store.save(StrategyConfig(id = "user", name = "user strategy"))
+
+        seedDefaultStrategies(db)
+        val seeded = store.loadAll().first { it.id == ELLIOTT_ID }
+        assertEquals(false, seeded.isActive, "включается вручную")
+        assertEquals(StrategyType.ELLIOTT.name, seeded.type)
+
+        store.delete(ELLIOTT_ID)
+        seedDefaultStrategies(db)
+        assertTrue(store.loadAll().none { it.id == ELLIOTT_ID }, "удалённую не возвращаем")
+    }
+
+    @Test fun elliottParamsSurviveSaveAndReload() {
+        val store = StrategyStore(freshDb())
+        store.save(
+            elliottDefaults().copy(
+                ewHigherTf = "4h", ewRequireHtf = true, ewSwingAtr = 3.2, ewSubDegree = 0.3,
+                ewStructure = "STRICT", ewTradeWave3 = false, ewTradeWave5 = true, ewTradeCorrection = true,
+                ewW2RetraceMin = 0.5, ewW2RetraceMax = 0.7, ewW4RetraceMin = 0.3, ewW4RetraceMax = 0.45,
+                ewMinGuidelines = 3, ewWave3Entry = "TURN", ewEntryWindowBars = 5, ewStopAnchor = "PIVOT",
+                ewStopBufferAtr = 0.35, ewW3Target = 2.0, ewW5Target = 0.618, ewMinRewardRisk = 2.5,
+            )
+        )
+        val r = store.loadAll().first { it.id == ELLIOTT_ID }
+        assertEquals(StrategyType.ELLIOTT.name, r.type)
+        assertEquals("15m", r.timeframe)
+        assertEquals(true, r.riskSizingEnabled)
+        assertEquals(720L, r.minTokenAgeMinutes)
+        assertEquals("4h", r.ewHigherTf)
+        assertEquals(true, r.ewRequireHtf)
+        assertEquals(3.2, r.ewSwingAtr)
+        assertEquals(0.3, r.ewSubDegree)
+        assertEquals("STRICT", r.ewStructure)
+        assertEquals(false, r.ewTradeWave3)
+        assertEquals(true, r.ewTradeWave5)
+        assertEquals(true, r.ewTradeCorrection)
+        assertEquals(0.5, r.ewW2RetraceMin)
+        assertEquals(0.7, r.ewW2RetraceMax)
+        assertEquals(0.3, r.ewW4RetraceMin)
+        assertEquals(0.45, r.ewW4RetraceMax)
+        assertEquals(3, r.ewMinGuidelines)
+        assertEquals("TURN", r.ewWave3Entry)
+        assertEquals(5, r.ewEntryWindowBars)
+        assertEquals("PIVOT", r.ewStopAnchor)
+        assertEquals(0.35, r.ewStopBufferAtr)
+        assertEquals(2.0, r.ewW3Target)
+        assertEquals(0.618, r.ewW5Target)
+        assertEquals(2.5, r.ewMinRewardRisk)
     }
 
     /**
@@ -160,7 +251,7 @@ class StrategyStoreRangeTest {
         seedDefaultStrategies(db)
 
         val store = StrategyStore(db)
-        assertEquals(setOf("dars-memecoins", BREAKOUT_PULLBACK_ID), store.loadAll().map { it.id }.toSet())
+        assertEquals(setOf("dars-memecoins", BREAKOUT_PULLBACK_ID, MEME_PLAYBOOK_ID, ELLIOTT_ID), store.loadAll().map { it.id }.toSet())
         store.save(StrategyConfig(id = "new", name = "new", atrPeriod = 10)) // insert с лишними колонками
         store.save(store.loadAll().first { it.id == "new" }.copy(atrPeriod = 12)) // и update
         assertEquals(12, store.loadAll().first { it.id == "new" }.atrPeriod)
@@ -176,6 +267,15 @@ class StrategyStoreRangeTest {
             "risk_sizing_enabled", "risk_per_trade_percent", "max_pool_share_percent",
             "bp_higher_tf", "bp_require_htf_trend", "bp_breakout_lookback", "bp_breakout_volume_mult",
             "bp_max_bars_since_breakout", "bp_pullback_volume_ratio", "bp_trigger_volume_mult",
+            "tiered_trail_enabled", "trail_tier1_pct", "trail_tier2_pct", "trail_tier3_pct", "trail_tier4_pct",
+            "stale_exit_enabled", "stale_exit_minutes",
+            "mp_lookback_bars", "mp_min_impulse_pct", "mp_fib_min", "mp_fib_max", "mp_pullback_volume_ratio",
+            "mp_trigger_volume_mult", "mp_min_liq_to_mc_pct", "mp_require_revoked_authorities", "mp_reject_copycats",
+            "ew_higher_tf", "ew_require_htf", "ew_swing_atr", "ew_sub_degree", "ew_structure",
+            "ew_trade_wave3", "ew_trade_wave5", "ew_trade_correction",
+            "ew_w2_retrace_min", "ew_w2_retrace_max", "ew_w4_retrace_min", "ew_w4_retrace_max",
+            "ew_min_guidelines", "ew_wave3_entry", "ew_entry_window_bars", "ew_stop_anchor",
+            "ew_stop_buffer_atr", "ew_w3_target", "ew_w5_target", "ew_min_reward_risk",
         )
         dropped.forEach { driver.execute(null, "ALTER TABLE strategy DROP COLUMN $it", 0) }
         // Таблица trade в старом формате (без initial_stop / entry_atr_frac). DROP COLUMN для
@@ -218,9 +318,18 @@ class StrategyStoreRangeTest {
         assertEquals(false, cfg.rLadderEnabled)
         assertEquals(1.5, cfg.tp1R)
         assertEquals("15m", cfg.bpHigherTf)
+        assertEquals(false, cfg.tieredTrailEnabled)
+        assertEquals(false, cfg.staleExitEnabled)
+        assertEquals(0.786, cfg.mpFibMax)
+        assertEquals("1h", cfg.ewHigherTf)
+        assertEquals(2.5, cfg.ewSwingAtr)
+        assertEquals("BREAK", cfg.ewWave3Entry)
+        assertEquals(true, cfg.ewTradeWave3)
+        assertEquals(false, cfg.ewTradeCorrection)
         val trade = db.tradeQueries.getOpenTrades().executeAsList().single()
         assertEquals(0.0, trade.initial_stop)   // нет данных → монитор возьмёт R из SL% конфига
         assertEquals(0.0, trade.entry_atr_frac)
+        assertEquals(0L, trade.peak_at)         // нет данных → «нет нового максимума» считается от входа
     }
 
     /**
