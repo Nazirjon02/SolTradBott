@@ -234,7 +234,7 @@ R — риск сделки, расстояние от входа до *нача
 | `TG_BOT_TOKEN` | `""` | Токен Telegram-бота. Пусто — Telegram не запускается. |
 | `TG_CHAT_ID` | `0` | Твой Telegram chat_id (бот отвечает только ему). |
 | `PORT` | `8080` | Порт HTTP-сервера. |
-| `SOLTRAD_API_KEY` | `soltrad-secret` | Bearer-токен REST API. **Поменяй на проде!** |
+| `SOLTRAD_API_KEY` | — | Bearer-токен REST API. Не задан — сервер генерирует случайный, хранит в БД и печатает в лог при старте. |
 | `DB_PATH` | `soltradbot.db` | Путь к SQLite. Сервер и Desktop должны указывать одинаковый, чтобы делить базу. |
 
 ---
@@ -327,8 +327,8 @@ Inline-меню после `/menu`:
 | `WS` | `/ws` | Пуш смены статуса: `{"type":"status","value":"RUNNING"}`. Требует тот же Bearer-токен. |
 
 ```bash
-curl -X POST http://localhost:8080/api/v1/bot/start -H "Authorization: Bearer soltrad-secret"
-curl http://localhost:8080/api/v1/bot/status -H "Authorization: Bearer soltrad-secret"
+curl -X POST http://localhost:8080/api/v1/bot/start -H "Authorization: Bearer $SOLTRAD_API_KEY"
+curl http://localhost:8080/api/v1/bot/status -H "Authorization: Bearer $SOLTRAD_API_KEY"
 ```
 
 ---
@@ -433,7 +433,7 @@ sudo journalctl -u drx -f
 
 1. **Никогда не коммить `.env` и seed-фразу в Git** — уже в `.gitignore`.
 2. **Seed-фраза** хранится локально (env или SQLite). Заведи **отдельный кошелёк для бота** с небольшой суммой — не основной!
-3. **Поменяй `SOLTRAD_API_KEY`** — дефолтный `soltrad-secret` в проде нельзя.
+3. **Задай свой `SOLTRAD_API_KEY`** (или возьми сгенерированный из лога сервера) — ключ `soltrad-secret` из старых примеров в проде нельзя.
 4. **Один `TG_CHAT_ID`** — чужой аккаунт не сможет управлять ботом.
 5. **Сначала DEMO, потом REAL.** Минимум 1–2 недели наблюдений.
 6. **Мемкоины — экстремально рискованный рынок.** Rug pull, honeypot и осушение ликвидности случаются постоянно; ликвидность-стоп снижает риск, но не убирает его.

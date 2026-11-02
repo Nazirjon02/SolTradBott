@@ -17,7 +17,11 @@ class StrategyStore(private val db: DrxDatabase) {
 
     fun delete(id: String) = db.strategyQueries.delete(id)
 
-    fun save(cfg: StrategyConfig) {
+    /**
+     * Одной транзакцией: конфиг пишется десятком UPDATE'ов, и монитор сделок, читающий стратегию
+     * параллельно, мог увидеть её наполовину сохранённой (а обрыв на середине оставлял смесь).
+     */
+    fun save(cfg: StrategyConfig) = db.transaction {
         val exists = db.strategyQueries.getById(cfg.id).executeAsOneOrNull() != null
         if (exists) update(cfg) else insert(cfg)
         // Фильтр по диапазону не входит в insert/updateStrategy — пишем отдельным запросом.

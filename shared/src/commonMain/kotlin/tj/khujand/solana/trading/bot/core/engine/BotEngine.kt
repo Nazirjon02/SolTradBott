@@ -22,6 +22,7 @@ import tj.khujand.solana.trading.bot.data.BotStatus
 import tj.khujand.solana.trading.bot.data.OpenPosition
 import tj.khujand.solana.trading.bot.data.SettingsStore
 import tj.khujand.solana.trading.bot.data.db.DrxDatabase
+import tj.khujand.solana.trading.bot.data.db.Trade as TradeRow
 import tj.khujand.solana.trading.bot.exchange.dex.AccountCache
 import tj.khujand.solana.trading.bot.exchange.dex.DexClient
 
@@ -50,7 +51,6 @@ class BotEngine(
         if (_status.value == BotStatus.RUNNING) return
         _status.value = BotStatus.RUNNING
         startTime = Clock.System.now().toEpochMilliseconds()
-        notifier.send("🟢 DRX Bot запущен (${if (executor.isDemo()) "DEMO" else "REAL"})")
 
         val activeStrategies = db.strategyQueries.getActiveStrategies().executeAsList()
         val running = activeStrategies.take(MAX_ACTIVE_STRATEGIES)
@@ -65,6 +65,9 @@ class BotEngine(
         // Фиксируем «желаемое состояние» — чтобы после kill'а процесса сервис возобновил торговлю.
         settingsStore.setDesiredState(BotStatus.RUNNING.name)
         activityLog.success("🟢 Движок запущен — стратегий активно: ${running.size}")
+        // «Запущен» — только когда реально есть что запускать: раньше это уходило в Telegram
+        // до проверки, и сразу за ним следовало «⚠️ Бот не запущен».
+        notifier.send("🟢 DRX Bot запущен (${if (executor.isDemo()) "DEMO" else "REAL"})")
         running.forEach { s ->
             scope.launch { strategyManager.run(s.toStrategyConfig()) }
         }
@@ -139,6 +142,24 @@ class BotEngine(
         }
     }
 
+    /**
+     * Применяет сохранённую правку (или удаление) стратегии к уже работающему сканеру.
+     * Цикл стратегии держит снимок конфига со своего старта: без перезапуска новые фильтры/SL/TP
+     * не действовали бы до рестарта бота, а удалённая стратегия продолжала бы открывать сделки.
+     * Не запущенную стратегию не трогаем — она возьмёт конфиг из БД при старте/включении.
+     */
+    suspend fun reloadStrategy(strategyId: String) {
+        if (!strategyManager.isRunning(strategyId)) return
+        strategyManager.stopStrategy(strategyId)
+        val s = db.strategyQueries.getById(strategyId).executeAsOneOrNull()
+        if (s == null || s.is_active == 0L || _status.value != BotStatus.RUNNING) {
+            activityLog.info("➖ Стратегия остановлена")
+            return
+        }
+        scope.launch { strategyManager.run(s.toStrategyConfig()) }
+        activityLog.info("🔄 «${s.name}»: новые параметры применены, сканер перезапущен")
+    }
+
     suspend fun getStats(): BotStats {
         val all = db.tradeQueries.getStats().executeAsOne()
         val todayStart = startOfDayMillis()
@@ -148,9 +169,9 @@ class BotEngine(
             totalTrades = all.total_trades,
             wins = all.wins ?: 0L,
             losses = all.losses ?: 0L,
-            totalPnl = all.total_pnl ?: 0.0,
-            totalFees = all.total_fees ?: 0.0,
-            todayPnl = today.total_pnl ?: 0.0,
+            totalPnl = all.total_pnl,
+            totalFees = all.total_fees,
+            todayPnl = today.total_pnl,
             todayWins = today.wins ?: 0L,
             todayLosses = today.losses ?: 0L,
             uptime = uptime
@@ -213,15 +234,30 @@ class BotEngine(
         }
     }
 
+    /**
+     * Цена для ручного закрытия. DEMO исполняется ровно по этой цене, поэтому без живой цены
+     * закрывать нельзя (null): подстановка цены входа записала бы выдуманный нулевой PnL.
+     * REAL продаёт через Jupiter и считает выход по фактической выручке — там цена лишь подсказка.
+     */
+    private suspend fun manualClosePrice(t: TradeRow): Double? {
+        val live = runCatching { client.getTokenPriceUsd(t.mint) }.getOrNull()?.takeIf { it > 0 }
+        return live ?: if (t.is_demo == 1L) null else t.entry_price
+    }
+
     /** 🚨 Закрыть все позиции немедленно (рыночно, по текущей цене). */
     suspend fun closeAllPositions() {
         val open = db.tradeQueries.getOpenTrades().executeAsList()
         var closed = 0
         open.forEach { t ->
-            val price = runCatching { client.getTokenPriceUsd(t.mint) }.getOrNull() ?: t.entry_price
-            val result = executor.closeTrade(t, price, 100.0, "Закрыто вручную")
-            if (result != null) closed++
-            else activityLog.error("⚠️ ${t.symbol}: не удалось закрыть — проверьте вручную")
+            val price = manualClosePrice(t)
+            val result = price?.let { executor.closeTrade(t, it, 100.0, "Закрыто вручную") }
+            when {
+                result != null -> closed++
+                // Уже закрыта параллельно (монитором по стопу/тейку) — цель достигнута.
+                !executor.isOpen(t.id) -> closed++
+                price == null -> activityLog.error("⚠️ ${t.symbol}: нет текущей цены — не закрыта, повторите позже")
+                else -> activityLog.error("⚠️ ${t.symbol}: не удалось закрыть — проверьте вручную")
+            }
         }
         val failed = open.size - closed
         notifier.send(
@@ -248,8 +284,13 @@ class BotEngine(
             ?: return ClosePositionResult(ClosePositionStatus.NOT_FOUND)
         if (t.status != "OPEN") return ClosePositionResult(ClosePositionStatus.NOT_OPEN, symbol = t.symbol)
 
-        val price = runCatching { client.getTokenPriceUsd(t.mint) }.getOrNull() ?: t.entry_price
+        val price = manualClosePrice(t) ?: run {
+            activityLog.error("⚠️ ${t.symbol}: нет текущей цены — позиция не закрыта, повторите позже")
+            return ClosePositionResult(ClosePositionStatus.FAILED, symbol = t.symbol)
+        }
         val result = executor.closeTrade(t, price, 100.0, "Закрыто вручную") ?: run {
+            // Пока ждали лок, позицию закрыл монитор (стоп/тейк) — сообщаем «уже закрыта», а не сбой.
+            if (!executor.isOpen(t.id)) return ClosePositionResult(ClosePositionStatus.NOT_OPEN, symbol = t.symbol)
             activityLog.error("⚠️ ${t.symbol}: не удалось закрыть вручную — проверьте позицию")
             return ClosePositionResult(ClosePositionStatus.FAILED, symbol = t.symbol)
         }

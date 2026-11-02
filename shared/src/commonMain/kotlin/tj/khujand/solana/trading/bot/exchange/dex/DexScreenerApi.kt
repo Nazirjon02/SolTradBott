@@ -352,12 +352,18 @@ class DexScreenerApi {
     private var useBoostsNext = true
     private var boostsRateLimitedUntilMs = 0L
 
+    /**
+     * Цена токена в USD по его самой ликвидной паре, где он — БАЗОВАЯ монета. В ответе бывают
+     * и пары, где токен котируемый: их priceUsd — цена другой монеты. По этой цене закрываются
+     * DEMO-сделки и сверяется вход, поэтому «первая попавшаяся пара» не годится.
+     */
     suspend fun getTokenPriceUsd(chainId: String, tokenAddress: String): Double? {
         val url = "https://api.dexscreener.com/tokens/v1/$chainId/$tokenAddress"
         val jsonElement = getJsonElementWithRetry(url) ?: return null
         val pairs = parsePairsFromJson(jsonElement)
-        val priceStr = pairs.firstOrNull()?.priceUsd
-        return priceStr?.toDoubleOrNull()
+        val pair = pairs.filter { it.baseToken?.address == tokenAddress && it.priceUsd?.toDoubleOrNull() != null }
+            .maxByOrNull { it.liquidity?.usd ?: 0.0 }
+        return pair?.priceUsd?.toDoubleOrNull()
     }
 
     // ✅ УЛУЧШЕННЫЙ МЕТОД: Получение НОВЫХ токенов Solana (выбор API через настройки)
@@ -415,7 +421,7 @@ class DexScreenerApi {
             val filtered = uniqueTokens.filter { token ->
                 if (token.pairAddress.isNullOrEmpty()) return@filter false
                 if (token.baseToken?.address.isNullOrEmpty()) return@filter false
-                if (token.baseToken?.symbol.isNullOrEmpty()) return@filter false
+                if (token.baseToken.symbol.isNullOrEmpty()) return@filter false
 
                 // 1. 🔗 Проверка цепочки (только Solana)
                 // Раньше здесь было `!chains.contains("solana") && chainId != "solana"`:
@@ -431,11 +437,11 @@ class DexScreenerApi {
                     val ageHours = (Clock.System.now().toEpochMilliseconds() - createdAtMs) / (1000.0 * 60.0 * 60.0)
                     val isNew = ageHours <= settings.pairMaxAgeHours
                     if (isNew) {
-                        println("🆕 НОВЫЙ: ${token.baseToken?.symbol} (возраст: ${ageHours}ч)")
+                        println("🆕 НОВЫЙ: ${token.baseToken.symbol} (возраст: ${ageHours}ч)")
                     }
                     isNew
                 } else {
-                    println("⚠️ ${token.baseToken?.symbol}: нет даты создания пары, пропускаем фильтр возраста")
+                    println("⚠️ ${token.baseToken.symbol}: нет даты создания пары, пропускаем фильтр возраста")
                     true
                 }
 
@@ -616,7 +622,7 @@ class DexScreenerApi {
         if (volumeToLiquidityRatio > 10) return true
 
         // 4. Нет ликвидности или она заблокирована слишком слабо
-        if ((token.liquidity?.usd ?: 0.0) < 3000) return true
+        if (token.liquidity.usd < 3000) return true
 
         // 5. Нет покупок вообще
         val buys5m = token.txns?.m5?.buys ?: 0

@@ -2,6 +2,11 @@ package tj.khujand.solana.trading.bot.core.engine
 
 import kotlin.random.Random
 import kotlin.time.Clock
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
+import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import tj.khujand.solana.trading.bot.core.strategy.Signal
 import tj.khujand.solana.trading.bot.core.strategy.StrategyConfig
@@ -26,6 +31,9 @@ data class CloseResult(
     val isFull: Boolean,
 )
 
+/** Итог REAL-продажи: выручка в USD и продан ли весь остаток токена на кошельке. */
+private class SaleResult(val proceedsUsd: Double, val soldAll: Boolean)
+
 /**
  * Исполнитель сделок: DEMO (paper-trading на виртуальном балансе в account_cache)
  * или REAL (свопы SOL→token→SOL через Jupiter с подписью seed-фразой).
@@ -40,6 +48,15 @@ class TradeExecutor(
 ) {
     private var cachedSigner: Signer? = null
     private var cachedSeed: String? = null
+
+    // DEMO-баланс меняют параллельно стратегии (вход) и монитор/ручное закрытие (выход) на
+    // Dispatchers.Default: без лока «прочитать → записать» одна из правок терялась.
+    private val demoMutex = Mutex()
+
+    // По локу на сделку: монитор и ручное закрытие (UI/Telegram/REST) не должны продать одну
+    // позицию дважды. Лок держится и на время REAL-свопа — второй вызов дождётся и увидит итог.
+    private val closeLocksGuard = Mutex()
+    private val closeLocks = mutableMapOf<String, Mutex>()
 
     fun isDemo(): Boolean = settings.getDemoMode() ?: true
 
@@ -106,28 +123,37 @@ class TradeExecutor(
         entryAtrFrac: Double = 0.0,
     ): String? {
         if (sizeUsd <= 0 || signal.entryPrice <= 0) return null
-        val id = if (isDemo()) openDemo(signal, config, sizeUsd, entryLiquidityUsd)
-        else openReal(signal, config, sizeUsd, entryLiquidityUsd)
-        // База выходов в R: начальный стоп (stop_loss потом двигают безубыток/трейлинг) и ATR входа.
-        if (id != null) db.tradeQueries.setRiskBasis(signal.stopLoss, entryAtrFrac, id)
-        return id
+        return if (isDemo()) openDemo(signal, config, sizeUsd, entryLiquidityUsd, entryAtrFrac)
+        else openReal(signal, config, sizeUsd, entryLiquidityUsd, entryAtrFrac)
     }
 
-    private fun openDemo(signal: Signal, config: StrategyConfig, sizeUsd: Double, liq: Double): String? {
+    private suspend fun openDemo(
+        signal: Signal,
+        config: StrategyConfig,
+        sizeUsd: Double,
+        liq: Double,
+        atrFrac: Double,
+    ): String? = demoMutex.withLock {
         val balance = demoBalanceUsd()
         if (balance < sizeUsd) {
             activityLog.warn("⚠️ DEMO: недостаточно баланса ($balance < $sizeUsd)")
-            return null
+            return@withLock null
         }
         val qty = sizeUsd / signal.entryPrice
         val id = newTradeId(signal.symbol)
-        insertTrade(id, signal, config, qty, sizeUsd, sizeSol = 0.0, liq, isDemo = true)
+        insertTrade(id, signal, config, qty, sizeUsd, sizeSol = 0.0, liq, atrFrac, isDemo = true)
         setDemoBalance(balance - sizeUsd)
         activityLog.success("🟢 DEMO вход: ${signal.symbol} $${fmtNum(sizeUsd)} @ ${signal.entryPrice}")
-        return id
+        id
     }
 
-    private suspend fun openReal(signal: Signal, config: StrategyConfig, sizeUsd: Double, liq: Double): String? {
+    private suspend fun openReal(
+        signal: Signal,
+        config: StrategyConfig,
+        sizeUsd: Double,
+        liq: Double,
+        atrFrac: Double,
+    ): String? {
         val s = signer() ?: run {
             activityLog.error("❌ REAL: seed-фраза не задана или некорректна")
             return null
@@ -157,9 +183,32 @@ class TradeExecutor(
 
         val swap = client.jupiter.getSwap(quote = quote, userPublicKey = pubkey)
             ?: run { activityLog.error("❌ REAL: сборка swap не удалась"); return null }
-        val unsigned = swap.swapTransaction ?: return null
-        val signed = signTransactionBase64(unsigned, s) ?: return null
-        val txId = client.rpc.sendTransaction(signed) ?: return null
+        val unsigned = swap.swapTransaction
+            ?: run { activityLog.error("❌ REAL: Jupiter не вернул транзакцию свопа (${signal.symbol})"); return null }
+        val signed = signTransactionBase64(unsigned, s)
+            ?: run { activityLog.error("❌ REAL: не удалось подписать транзакцию покупки"); return null }
+        // С момента отправки покупку нельзя бросать на полпути: отмена (стоп/пауза бота, правка
+        // стратегии) между sendTransaction и записью оставила бы токены без сделки в БД — монитор
+        // их бы не сопровождал и не продал.
+        return withContext(NonCancellable) {
+            sendAndRecordBuy(signal, config, signed, pubkey, tokenBefore, quote, lamports, solPrice, liq, atrFrac)
+        }
+    }
+
+    private suspend fun sendAndRecordBuy(
+        signal: Signal,
+        config: StrategyConfig,
+        signed: String,
+        pubkey: String,
+        tokenBefore: Long?,
+        quote: JsonObject,
+        lamports: Long,
+        solPrice: Double,
+        liq: Double,
+        atrFrac: Double,
+    ): String? {
+        val txId = client.rpc.sendTransaction(signed)
+            ?: run { activityLog.error("❌ REAL: RPC отклонил транзакцию покупки ${signal.symbol}"); return null }
         val confirmed = client.rpc.confirmTransaction(txId)
 
         // Фактический приход токенов: quoted outAmount может завышать (slippage),
@@ -183,19 +232,26 @@ class TradeExecutor(
         val quotedOut = quote["outAmount"]?.jsonPrimitive?.content?.toLongOrNull() ?: 0L
         val outRaw = if (receivedRaw > 0) receivedRaw else quotedOut
         val inLamports = quote["inAmount"]?.jsonPrimitive?.content?.toLongOrNull() ?: lamports
+        val sizeSol = inLamports.toDouble() / LAMPORTS_PER_SOL
+        val sizeUsd = sizeSol * solPrice
         val id = newTradeId(signal.symbol)
         insertTrade(
             id, signal, config,
             qty = outRaw.toDouble(),
-            sizeUsd = inLamports.toDouble() / LAMPORTS_PER_SOL * solPrice,
-            sizeSol = inLamports.toDouble() / LAMPORTS_PER_SOL,
+            sizeUsd = sizeUsd,
+            sizeSol = sizeSol,
             entryLiquidityUsd = liq,
+            entryAtrFrac = atrFrac,
             isDemo = false,
         )
         activityLog.success("🟢 REAL вход: ${signal.symbol} $${fmtNum(sizeUsd)} @ ${signal.entryPrice}, tx=$txId")
         return id
     }
 
+    /**
+     * Строка сделки + база выходов в R (начальный стоп и ATR входа) одной транзакцией:
+     * стоп потом двигают безубыток/трейлинг, а R считается от начального.
+     */
     private fun insertTrade(
         id: String,
         signal: Signal,
@@ -204,8 +260,9 @@ class TradeExecutor(
         sizeUsd: Double,
         sizeSol: Double,
         entryLiquidityUsd: Double,
+        entryAtrFrac: Double,
         isDemo: Boolean,
-    ) {
+    ) = db.transaction {
         val now = Clock.System.now().toEpochMilliseconds()
         db.tradeQueries.insert(
             id = id,
@@ -236,13 +293,26 @@ class TradeExecutor(
             opened_at = now,
             closed_at = null,
         )
+        db.tradeQueries.setRiskBasis(signal.stopLoss, entryAtrFrac, id)
     }
 
     // ─── Закрытие ────────────────────────────────────────────────────────────
 
+    /** Сделка всё ещё открыта (null из [closeTrade] мог означать, что её уже закрыли параллельно). */
+    fun isOpen(tradeId: String): Boolean =
+        db.tradeQueries.getById(tradeId).executeAsOneOrNull()?.status == "OPEN"
+
+    private suspend fun closeLock(tradeId: String): Mutex =
+        closeLocksGuard.withLock { closeLocks.getOrPut(tradeId) { Mutex() } }
+
     /**
      * Закрывает долю позиции. @param portionOfOriginal % от ИСХОДНОГО объёма (100 = весь остаток).
      * Обновляет строку trade (partial → applyPartialClose, полный → closeTrade) и DEMO-баланс.
+     *
+     * Под локом сделки строка перечитывается из БД: [trade] — лишь снимок вызывающего, а позицию
+     * могли уже закрыть или уменьшить параллельно. Закрытая позиция → null (проверяйте [isOpen]);
+     * частичная фиксация, решённая по устаревшему снимку, пропускается — монитор пересчитает её
+     * в следующем цикле по свежим данным.
      */
     suspend fun closeTrade(
         trade: TradeRow,
@@ -251,54 +321,88 @@ class TradeExecutor(
         reason: String,
         tp1Done: Boolean = trade.tp1_done == 1L,
         tp2Done: Boolean = trade.tp2_done == 1L,
+    ): CloseResult? = closeLock(trade.id).withLock {
+        // Закрытие не прерываем отменой (стоп бота, пересоздание рантайма): продажа, исполненная
+        // без записи в БД, оставила бы позицию «открытой» без токенов на кошельке.
+        withContext(NonCancellable) { closeLocked(trade, currentPrice, portionOfOriginal, reason, tp1Done, tp2Done) }
+    }
+
+    private suspend fun closeLocked(
+        trade: TradeRow,
+        currentPrice: Double,
+        portionOfOriginal: Double,
+        reason: String,
+        tp1Done: Boolean,
+        tp2Done: Boolean,
     ): CloseResult? {
-        val requestedQty = if (portionOfOriginal >= 100.0) trade.qty_remaining
-        else (trade.qty * portionOfOriginal / 100.0).coerceAtMost(trade.qty_remaining)
+        val t = db.tradeQueries.getById(trade.id).executeAsOneOrNull()
+        if (t == null || t.status != "OPEN") {
+            closeLocksGuard.withLock { closeLocks.remove(trade.id) }
+            return null
+        }
+        val partial = portionOfOriginal < 100.0
+        val staleSnapshot = t.qty_remaining != trade.qty_remaining ||
+            t.tp1_done != trade.tp1_done || t.tp2_done != trade.tp2_done
+        if (partial && staleSnapshot) return null
+
+        val requestedQty = if (!partial) t.qty_remaining
+        else (t.qty * portionOfOriginal / 100.0).coerceAtMost(t.qty_remaining)
         if (requestedQty <= 0) return null
-        val isFull = requestedQty >= trade.qty_remaining - 1e-9
+        var isFull = requestedQty >= t.qty_remaining - 1e-9
 
-        val costUsdPortion = trade.size_usd * (requestedQty / trade.qty)
-
+        val closedQty: Double
         val pnlUsd: Double
         val exitPrice: Double
-        if (trade.is_demo == 1L) {
+        if (t.is_demo == 1L) {
+            closedQty = requestedQty
+            val costUsdPortion = t.size_usd * (closedQty / t.qty)
             exitPrice = currentPrice
-            val proceeds = requestedQty * currentPrice
+            val proceeds = closedQty * currentPrice
             pnlUsd = proceeds - costUsdPortion
-            setDemoBalance(demoBalanceUsd() + costUsdPortion + pnlUsd)
+            demoMutex.withLock { setDemoBalance(demoBalanceUsd() + proceeds) }
         } else {
-            val result = sellReal(trade, requestedQty) ?: return null
-            pnlUsd = result.first - costUsdPortion
-            exitPrice = if (requestedQty > 0) result.first / requestedQty else currentPrice
+            val sale = sellReal(t, requestedQty) ?: return null
+            // На кошельке оказалось меньше, чем в БД (qty записан по котировке покупки), и продано
+            // всё, что было: позиция исчерпана — иначе остаток в БД висел бы открытым без токенов.
+            if (sale.soldAll) isFull = true
+            closedQty = if (isFull) t.qty_remaining else requestedQty
+            val costUsdPortion = t.size_usd * (closedQty / t.qty)
+            pnlUsd = sale.proceedsUsd - costUsdPortion
+            // qty в REAL — raw-единицы токена, а entry_price — USD за целый токен: делить выручку
+            // на qty нельзя (цена выхода выходила в 10^decimals раз меньше). Выход в тех же
+            // единицах, что вход, — через фактическую доходность продажи.
+            exitPrice = if (costUsdPortion > 0) t.entry_price * sale.proceedsUsd / costUsdPortion else currentPrice
         }
 
-        val totalPnl = (trade.pnl ?: 0.0) + pnlUsd
+        val totalPnl = (t.pnl ?: 0.0) + pnlUsd
         if (isFull) {
-            val pnlPercent = if (trade.size_usd > 0) totalPnl / trade.size_usd * 100 else 0.0
+            val pnlPercent = if (t.size_usd > 0) totalPnl / t.size_usd * 100 else 0.0
             db.tradeQueries.closeTrade(
                 exit_price = exitPrice,
                 pnl = totalPnl,
                 pnl_percent = pnlPercent,
-                fee = trade.fee,
+                fee = t.fee,
                 close_reason = reason,
                 closed_at = Clock.System.now().toEpochMilliseconds(),
-                id = trade.id,
+                id = t.id,
             )
+            // После полного закрытия лок не нужен: любой следующий вызов перечитает строку и увидит CLOSED.
+            closeLocksGuard.withLock { closeLocks.remove(t.id) }
         } else {
             db.tradeQueries.applyPartialClose(
-                qty_remaining = trade.qty_remaining - requestedQty,
+                qty_remaining = t.qty_remaining - closedQty,
                 tp1_done = if (tp1Done) 1 else 0,
                 tp2_done = if (tp2Done) 1 else 0,
                 pnl = totalPnl,
-                fee = trade.fee,
-                id = trade.id,
+                fee = t.fee,
+                id = t.id,
             )
         }
-        return CloseResult(exitPrice, requestedQty, pnlUsd, isFull)
+        return CloseResult(exitPrice, closedQty, pnlUsd, isFull)
     }
 
-    /** Продажа raw-количества токена через Jupiter. Возвращает (выручка USD, txId) или null. */
-    private suspend fun sellReal(trade: TradeRow, qtyRaw: Double): Pair<Double, String>? {
+    /** Продажа raw-количества токена через Jupiter. null — продажа не состоялась. */
+    private suspend fun sellReal(trade: TradeRow, qtyRaw: Double): SaleResult? {
         val s = signer() ?: run {
             activityLog.error("❌ REAL sell: кошелёк недоступен")
             return null
@@ -313,6 +417,9 @@ class TradeExecutor(
         }
         var amount = qtyRaw.toLong().coerceAtLeast(1L)
         if (onChain != null && amount > onChain) amount = onChain
+        // Цена SOL — ДО свопа: если Jupiter не ответит после продажи, выручка не должна обнулиться
+        // (это записало бы -100% PnL по уже исполненной продаже).
+        val solPriceBefore = client.getSolPriceUsd()
         val quote = client.jupiter.getQuote(
             inputMint = trade.mint,
             outputMint = SOL_MINT,
@@ -320,10 +427,14 @@ class TradeExecutor(
             slippageBps = 300, // выходим с запасом по slippage — важнее выйти, чем сэкономить
         ) ?: run { activityLog.error("❌ REAL sell: quote не получен (${trade.symbol})"); return null }
 
-        val swap = client.jupiter.getSwap(quote = quote, userPublicKey = pubkey) ?: return null
-        val unsigned = swap.swapTransaction ?: return null
-        val signed = signTransactionBase64(unsigned, s) ?: return null
-        val txId = client.rpc.sendTransaction(signed) ?: return null
+        val swap = client.jupiter.getSwap(quote = quote, userPublicKey = pubkey)
+            ?: run { activityLog.error("❌ REAL sell: сборка swap не удалась (${trade.symbol})"); return null }
+        val unsigned = swap.swapTransaction
+            ?: run { activityLog.error("❌ REAL sell: Jupiter не вернул транзакцию (${trade.symbol})"); return null }
+        val signed = signTransactionBase64(unsigned, s)
+            ?: run { activityLog.error("❌ REAL sell: не удалось подписать транзакцию"); return null }
+        val txId = client.rpc.sendTransaction(signed)
+            ?: run { activityLog.error("❌ REAL sell: RPC отклонил транзакцию продажи ${trade.symbol}"); return null }
         if (!client.rpc.confirmTransaction(txId)) {
             // Tx могла исполниться после таймаута — проверяем по списанию баланса.
             val after = client.rpc.getTokenBalanceRaw(pubkey, trade.mint)
@@ -336,10 +447,13 @@ class TradeExecutor(
         }
 
         val outLamports = quote["outAmount"]?.jsonPrimitive?.content?.toLongOrNull() ?: 0L
-        val solPrice = client.getSolPriceUsd() ?: 0.0
+        val solPrice = solPriceBefore ?: client.getSolPriceUsd() ?: trade.entrySolPriceUsd()
         val proceedsUsd = outLamports.toDouble() / LAMPORTS_PER_SOL * solPrice
-        return proceedsUsd to txId
+        return SaleResult(proceedsUsd, soldAll = onChain != null && amount >= onChain)
     }
+
+    /** Цена SOL на момент входа (размер в USD / в SOL) — последний запасной вариант оценки выручки. */
+    private fun TradeRow.entrySolPriceUsd(): Double = if (size_sol > 0) size_usd / size_sol else 0.0
 
     private fun newTradeId(symbol: String): String =
         "trade-${symbol.lowercase()}-${Clock.System.now().toEpochMilliseconds()}-${Random.nextInt(1000, 9999)}"

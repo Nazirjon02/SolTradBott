@@ -27,6 +27,8 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
+import java.security.MessageDigest
+import java.security.SecureRandom
 import tj.khujand.solana.trading.bot.core.NoopNotifier
 import tj.khujand.solana.trading.bot.core.engine.ActivityLog
 import tj.khujand.solana.trading.bot.core.engine.BotEngine
@@ -34,6 +36,7 @@ import tj.khujand.solana.trading.bot.core.engine.TradeExecutor
 import tj.khujand.solana.trading.bot.core.engine.TradeMonitor
 import tj.khujand.solana.trading.bot.core.risk.RiskManager
 import tj.khujand.solana.trading.bot.core.strategy.StrategyManager
+import tj.khujand.solana.trading.bot.data.BotStatus
 import tj.khujand.solana.trading.bot.data.SettingsStore
 import tj.khujand.solana.trading.bot.data.createDatabaseDriver
 import tj.khujand.solana.trading.bot.data.db.DrxDatabase
@@ -89,10 +92,23 @@ fun main() {
     val tradeMonitor = TradeMonitor(client, db, executor, notifier, activityLog)
     tradeMonitor.start()
 
+    val apiKey = resolveApiKey(config.apiKey, settingsStore)
+
     // SupervisorJob обязателен: в этом scope живёт и long-polling Telegram, и коллекторы
     // статуса для каждого WebSocket. С обычным Job падение одной корутины (например,
     // send в отвалившийся сокет) отменяло весь scope и молча убивало Telegram-управление.
     val scope = CoroutineScope(Dispatchers.Default + SupervisorJob())
+
+    // После рестарта процесса (docker `restart: always`, перезагрузка VPS) возвращаем движок в то
+    // состояние, в котором его оставили, — как это делает Android-сервис. Иначе бот молча стоял
+    // до ручного /start, хотя до падения торговал.
+    scope.launch {
+        when (settingsStore.getDesiredState()) {
+            BotStatus.RUNNING.name -> engine.start()
+            BotStatus.PAUSED.name -> engine.pause()
+            else -> Unit
+        }
+    }
 
     // Telegram-управление: long-polling запускается только при заданном токене.
     if (tgToken.isNotBlank()) {
@@ -109,7 +125,9 @@ fun main() {
         install(Authentication) {
             bearer("api-key") {
                 authenticate { cred ->
-                    if (cred.token == config.apiKey) UserIdPrincipal("admin") else null
+                    // Сравнение за постоянное время — без утечки ключа по таймингу ответа.
+                    val ok = MessageDigest.isEqual(cred.token.toByteArray(), apiKey.toByteArray())
+                    if (ok) UserIdPrincipal("admin") else null
                 }
             }
         }
@@ -215,4 +233,29 @@ fun main() {
             }
         }
     }.start(wait = true)
+}
+
+private const val API_KEY_SETTING = "server.api_key"
+private const val LEGACY_DEFAULT_API_KEY = "soltrad-secret"
+
+/**
+ * Ключ REST API: из SOLTRAD_API_KEY, а если не задан — случайный, сгенерированный один раз
+ * и сохранённый в БД (переживает рестарты). Печатается в лог при старте, чтобы его можно было взять.
+ */
+private fun resolveApiKey(configured: String, settingsStore: SettingsStore): String {
+    if (configured.isNotBlank()) {
+        if (configured == LEGACY_DEFAULT_API_KEY) {
+            println("⚠️ SOLTRAD_API_KEY = «$LEGACY_DEFAULT_API_KEY» — общеизвестный ключ из примера, смените его!")
+        }
+        return configured
+    }
+    val stored = settingsStore.get(API_KEY_SETTING)?.takeIf { it.isNotBlank() }
+    val key = stored ?: generateApiKey().also { settingsStore.set(API_KEY_SETTING, it) }
+    println("🔑 SOLTRAD_API_KEY не задан — используется ключ из БД: $key")
+    return key
+}
+
+private fun generateApiKey(): String {
+    val bytes = ByteArray(24).also { SecureRandom().nextBytes(it) }
+    return bytes.joinToString("") { "%02x".format(it) }
 }

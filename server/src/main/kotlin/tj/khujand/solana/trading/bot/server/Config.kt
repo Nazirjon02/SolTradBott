@@ -13,7 +13,10 @@ data class DrxConfig(
     val telegramChatId: Long = env("TG_CHAT_ID")?.toLongOrNull() ?: 0L,
 
     val serverPort: Int = env("PORT")?.toIntOrNull() ?: 8080,
-    val apiKey: String = env("SOLTRAD_API_KEY") ?: "soltrad-secret",
+    // Пусто → сервер генерирует случайный ключ и хранит его в БД (см. resolveApiKey в Application.kt).
+    // Раньше дефолтом был общеизвестный "soltrad-secret": любой, кто достучался до порта,
+    // мог включить REAL-режим и закрыть позиции.
+    val apiKey: String = env("SOLTRAD_API_KEY") ?: "",
 
     val dbPath: String = env("DB_PATH") ?: "soltradbot.db",
 )

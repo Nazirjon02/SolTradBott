@@ -13,6 +13,7 @@ import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
@@ -433,8 +434,14 @@ class SolanaRpcClient(
                 val response = postRpcWithRetry(requestJson, "sendTransaction") ?: return@withPermit null
 
                 val responseText = response.bodyAsText()
-                val jsonElement = json.parseToJsonElement(responseText)
-                val result = jsonElement.jsonObject["result"]?.jsonPrimitive?.content
+                val body = json.parseToJsonElement(responseText).jsonObject
+                val result = body["result"]?.jsonPrimitive?.content
+                if (result == null) {
+                    // Отказ preflight-симуляции (нет SOL на комиссию, slippage и т.п.) приходит
+                    // как JSON-RPC error при HTTP 200 — без лога причина терялась бесследно.
+                    val reason = body["error"]?.jsonObject?.get("message")?.jsonPrimitive?.content
+                    println("⚠️ sendTransaction отклонена RPC: ${reason ?: responseText.take(300)}")
+                }
                 result
             } catch (e: CancellationException) {
                 throw e
@@ -462,17 +469,28 @@ class SolanaRpcClient(
             """.trimIndent()
             val response = postRpcWithRetry(requestJson, "getSignatureStatuses")
             if (response != null) {
-                val jsonElement = json.parseToJsonElement(response.bodyAsText())
-                val value = jsonElement.jsonObject["result"]
-                    ?.jsonObject
-                    ?.get("value")
-                    ?.jsonArray
-                    ?.firstOrNull()
-                    ?.jsonObject
-                val confirmationStatus = value?.get("confirmationStatus")?.jsonPrimitive?.content
-                val err = value?.get("err")
-                if (confirmationStatus == "confirmed" || confirmationStatus == "finalized") return true
-                if (err != null && err != JsonNull) return false
+                // Пока узел не видел подпись, value = [null]: `.jsonObject` на JsonNull бросал
+                // исключение, и оно вылетало из подтверждения уже ОТПРАВЛЕННОЙ транзакции —
+                // покупка исполнялась, а сделка не записывалась. Сбой разбора = «ещё ждём».
+                val value = try {
+                    json.parseToJsonElement(response.bodyAsText()).jsonObject["result"]
+                        ?.jsonObject
+                        ?.get("value")
+                        ?.jsonArray
+                        ?.firstOrNull() as? JsonObject
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    null
+                }
+                when (signatureOutcome(value)) {
+                    true -> return true
+                    false -> {
+                        println("❌ Транзакция $signature исполнилась с ошибкой: ${value?.get("err")}")
+                        return false
+                    }
+                    null -> Unit // ещё не подтверждена — ждём
+                }
             }
             delay(backoffMs)
             backoffMs = (backoffMs * 2).coerceAtMost(3000L)
@@ -483,5 +501,21 @@ class SolanaRpcClient(
     fun close() {
         client.close()
     }
+}
+
+/**
+ * Итог по статусу подписи из `getSignatureStatuses`: true — исполнена успешно, false — упала
+ * (ошибка программы, например превышен slippage свопа), null — ещё не подтверждена.
+ *
+ * Ошибку проверяем ДО статуса: упавшая транзакция тоже попадает в блок и получает
+ * confirmationStatus "confirmed"/"finalized". Раньше такой своп считался успешным — бот
+ * записывал выход из позиции, хотя токены оставались на кошельке.
+ */
+internal fun signatureOutcome(status: JsonObject?): Boolean? {
+    if (status == null) return null
+    val err = status["err"]
+    if (err != null && err != JsonNull) return false
+    val confirmation = (status["confirmationStatus"] as? JsonPrimitive)?.content
+    return if (confirmation == "confirmed" || confirmation == "finalized") true else null
 }
 

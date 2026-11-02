@@ -45,6 +45,9 @@ internal const val MAX_ENTRY_PRICE_DRIFT = 0.03
 /** Предел размера карты пер-mint локов, чтобы за месяцы работы она не росла бесконечно. */
 private const val MINT_LOCKS_LIMIT = 500
 
+/** Окно дедупа алертов «только сигнал» по одной монете. */
+private const val SIGNAL_DEDUP_MS = 30 * 60_000L
+
 /**
  * Менеджер стратегий (модель MRX): держит по джобу на активную стратегию.
  * Цикл: сканер кандидатов → свечи → анализ → риск-чек → вход (DEMO/REAL/только сигнал).
@@ -109,7 +112,9 @@ class StrategyManager(
         val strategy = createStrategy(config, client)
         val scope = CoroutineScope(Dispatchers.Default + SupervisorJob())
         val job = scope.launchScanLoop(config, strategy)
-        mutex.withLock { activeJobs[config.id] = job }
+        // Повторный запуск той же стратегии (двойное включение, рестарт после правки) не должен
+        // оставлять прежний цикл сиротой: два сканера одной стратегии входили бы дважды.
+        mutex.withLock { activeJobs.put(config.id, job)?.cancel() }
     }
 
     /** Один цикл стратегии: кандидаты сканера → анализ каждого → возможный вход → пауза. */
@@ -277,8 +282,10 @@ class StrategyManager(
     private suspend fun emitSignalOnly(signal: Signal, config: StrategyConfig) {
         val now = now()
         val send = mutex.withLock {
+            // Истёкшие записи дедупа больше ничего не блокируют — чистим, чтобы карта не росла месяцами.
+            lastSignalAt.entries.removeAll { now - it.value >= SIGNAL_DEDUP_MS }
             val prev = lastSignalAt[signal.mint] ?: 0L
-            if (now - prev < 30 * 60_000L) false
+            if (now - prev < SIGNAL_DEDUP_MS) false
             else { lastSignalAt[signal.mint] = now; true }
         }
         if (!send) return

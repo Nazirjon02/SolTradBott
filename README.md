@@ -173,7 +173,7 @@ DEMO_MODE=true           # true = paper-trading, REAL только когда у
 TG_BOT_TOKEN=            # Telegram-бот
 TG_CHAT_ID=0             # единственный разрешённый chat_id
 PORT=8080
-SOLTRAD_API_KEY=soltrad-secret   # Bearer для REST — сменить на проде!
+SOLTRAD_API_KEY=                 # Bearer для REST; пусто — сервер сгенерирует ключ и напечатает в лог
 DB_PATH=soltradbot.db
 ```
 

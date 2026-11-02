@@ -3,9 +3,13 @@ package tj.khujand.solana.trading.bot.core
 import app.cash.sqldelight.driver.jdbc.sqlite.JdbcSqliteDriver
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.runBlocking
 import tj.khujand.solana.trading.bot.core.engine.ActivityLog
 import tj.khujand.solana.trading.bot.core.engine.TradeExecutor
@@ -115,5 +119,78 @@ class TradeExecutorTest {
         executor.openTrade(signal(), StrategyConfig(id = "s1"), sizeUsd = 500.0, entryLiquidityUsd = 0.0)
         executor.resetDemoBalance()
         assertEquals(10_000.0, executor.demoBalanceUsd(), 0.001)
+    }
+
+    @Test
+    fun secondCloseBySameSnapshotIsIgnored() = runBlocking {
+        // Монитор и ручное закрытие держат один и тот же снимок строки: второе закрытие
+        // не должно второй раз зачислить выручку и перезаписать итог сделки.
+        val (executor, db, _) = makeExecutor()
+        val entry = 0.001
+        val id = executor.openTrade(signal(entry), StrategyConfig(id = "s1"), sizeUsd = 1_000.0, entryLiquidityUsd = 0.0)!!
+        val snapshot = db.tradeQueries.getById(id).executeAsOne()
+
+        assertNotNull(executor.closeTrade(snapshot, entry * 1.2, 100.0, "Take Profit"))
+        assertNull(executor.closeTrade(snapshot, entry * 0.5, 100.0, "Закрыто вручную"))
+
+        val closed = db.tradeQueries.getById(id).executeAsOne()
+        assertEquals("Take Profit", closed.close_reason)
+        assertEquals(200.0, closed.pnl ?: 0.0, 0.5)
+        assertEquals(10_200.0, executor.demoBalanceUsd(), 1.0) // 9000 + 1200, без второго зачисления
+        assertFalse(executor.isOpen(id))
+    }
+
+    @Test
+    fun concurrentClosesSellOnce() = runBlocking {
+        val (executor, db, _) = makeExecutor()
+        val entry = 0.001
+        val id = executor.openTrade(signal(entry), StrategyConfig(id = "s1"), sizeUsd = 1_000.0, entryLiquidityUsd = 0.0)!!
+        val snapshot = db.tradeQueries.getById(id).executeAsOne()
+
+        val results = (1..8).map {
+            async(Dispatchers.Default) { executor.closeTrade(snapshot, entry * 1.1, 100.0, "close-$it") }
+        }.awaitAll()
+
+        assertEquals(1, results.count { it != null }, "позицию закрыть ровно один раз")
+        assertEquals(10_100.0, executor.demoBalanceUsd(), 1.0)
+    }
+
+    @Test
+    fun partialCloseByStaleSnapshotIsSkipped() = runBlocking {
+        // TP1 уже взят по свежей строке — повтор по старому снимку не должен продать ещё 50%.
+        val (executor, db, _) = makeExecutor()
+        val entry = 0.002
+        val id = executor.openTrade(signal(entry), StrategyConfig(id = "s1"), sizeUsd = 1_000.0, entryLiquidityUsd = 0.0)!!
+        val snapshot = db.tradeQueries.getById(id).executeAsOne()
+
+        assertNotNull(executor.closeTrade(snapshot, entry * 1.15, 50.0, "TP1", tp1Done = true))
+        assertNull(executor.closeTrade(snapshot, entry * 1.15, 50.0, "TP1", tp1Done = true))
+
+        val t = db.tradeQueries.getById(id).executeAsOne()
+        assertEquals("OPEN", t.status)
+        assertEquals(t.qty / 2, t.qty_remaining, t.qty * 1e-6)
+    }
+
+    @Test
+    fun concurrentOpensKeepDemoBalanceConsistent() = runBlocking {
+        // Вход и выход меняют DEMO-баланс из разных корутин — ни одна правка не должна потеряться.
+        val (executor, _, _) = makeExecutor()
+        val ids = (1..10).map {
+            async(Dispatchers.Default) {
+                executor.openTrade(signal(), StrategyConfig(id = "s$it"), sizeUsd = 100.0, entryLiquidityUsd = 0.0)
+            }
+        }.awaitAll()
+        assertEquals(10, ids.count { it != null })
+        assertEquals(9_000.0, executor.demoBalanceUsd(), 0.001)
+    }
+
+    @Test
+    fun openStoresRiskBasisWithTrade() = runBlocking {
+        val (executor, db, _) = makeExecutor()
+        val s = signal(0.001)
+        val id = executor.openTrade(s, StrategyConfig(id = "s1"), sizeUsd = 100.0, entryLiquidityUsd = 0.0, entryAtrFrac = 0.04)!!
+        val t = db.tradeQueries.getById(id).executeAsOne()
+        assertEquals(s.stopLoss, t.initial_stop, 1e-12)
+        assertEquals(0.04, t.entry_atr_frac, 1e-12)
     }
 }

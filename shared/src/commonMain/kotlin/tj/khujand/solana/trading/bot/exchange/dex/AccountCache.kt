@@ -36,13 +36,21 @@ class AccountCache(private val db: DrxDatabase) {
      */
     fun realUsd(): Double = all().filter { it.coin != COIN_DEMO }.sumOf { it.balanceUsd }
 
-    /** Обновить SOL-баланс из RPC + цену SOL из Jupiter (REAL-режим). */
+    /**
+     * Обновить SOL-баланс из RPC + цену SOL из Jupiter (REAL-режим).
+     * Цена не пришла — берём прежнюю из кеша: обнулённый USD-баланс давал нулевой размер позиции
+     * (бот переставал входить), а дневной лимит убытка считался от запасной базы.
+     */
     suspend fun refreshSol(client: DexClient, walletPublicKey: String): CoinBalance? {
         val sol = client.getSolBalance(walletPublicKey) ?: return null
-        val priceUsd = client.getSolPriceUsd() ?: 0.0
+        val priceUsd = client.getSolPriceUsd() ?: cachedSolPriceUsd() ?: 0.0
         set(COIN_SOL, sol, sol * priceUsd)
         return get(COIN_SOL)
     }
+
+    /** Цена SOL из последнего кеша (USD-баланс / баланс), null — кеша нет или он пустой. */
+    private fun cachedSolPriceUsd(): Double? =
+        get(COIN_SOL)?.takeIf { it.balance > 0 && it.balanceUsd > 0 }?.let { it.balanceUsd / it.balance }
 
     fun clear() = db.accountCacheQueries.deleteAll()
 

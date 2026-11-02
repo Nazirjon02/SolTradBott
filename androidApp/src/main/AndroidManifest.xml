@@ -13,9 +13,11 @@
     <!-- Android 14+: specialUse вместо dataSync — у dataSync лимит ~6 ч/сутки на Android 15+ -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
 
+    <!-- Бэкап выключен: в БД seed-фраза кошелька в открытом виде (см. xml/data_extraction_rules). -->
     <application
         android:name=".DrxApp"
-        android:allowBackup="true"
+        android:allowBackup="false"
+        android:dataExtractionRules="@xml/data_extraction_rules"
         android:icon="@mipmap/ic_launcher"
         android:label="@string/app_name"
         android:roundIcon="@mipmap/ic_launcher_round"

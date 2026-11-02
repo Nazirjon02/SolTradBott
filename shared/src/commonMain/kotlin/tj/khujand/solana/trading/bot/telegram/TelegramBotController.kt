@@ -100,8 +100,16 @@ class TelegramBotController(
                 }
                 val updates = response.body<TgUpdatesResponse>()
                 updates.result.forEach { update ->
-                    processUpdate(update)
+                    // offset сдвигаем ДО обработки: апдейт, упавший с исключением, иначе приходил бы
+                    // снова каждые 5 с и команда (например, /closeall) выполнялась бы по кругу.
                     offset = update.updateId + 1
+                    try {
+                        processUpdate(update)
+                    } catch (e: kotlinx.coroutines.CancellationException) {
+                        throw e
+                    } catch (e: Exception) {
+                        println("⚠️ Telegram: ошибка обработки апдейта ${update.updateId}: ${e.message}")
+                    }
                 }
             } catch (e: kotlinx.coroutines.CancellationException) {
                 throw e
@@ -149,6 +157,14 @@ class TelegramBotController(
         update.message?.text?.let { handleTextCommand(chatId, it) }
 
         update.callbackQuery?.let { cb ->
+            // Отвечаем на нажатие сразу: REAL-закрытие идёт до минуты, а Telegram ждёт ответ
+            // считанные секунды — иначе кнопка «висит» с часиками и ответ отбрасывается.
+            runCatching {
+                client.post("$apiUrl/answerCallbackQuery") {
+                    contentType(ContentType.Application.Json)
+                    setBody(buildJsonObject { put("callback_query_id", cb.id) })
+                }
+            }
             val data = cb.data ?: ""
             when {
                 data.startsWith("cmd:") -> handleCmd(chatId, data.removePrefix("cmd:"))
@@ -156,12 +172,6 @@ class TelegramBotController(
                 data.startsWith("strategy:") -> handleStrategyCallback(chatId, data)
                 data.startsWith("mode:") -> handleModeCallback(chatId, data)
                 data.startsWith("signal:") -> handleSignalCallback(chatId, data)
-            }
-            runCatching {
-                client.post("$apiUrl/answerCallbackQuery") {
-                    contentType(ContentType.Application.Json)
-                    setBody(buildJsonObject { put("callback_query_id", cb.id) })
-                }
             }
         }
     }
@@ -184,10 +194,19 @@ class TelegramBotController(
         }
     }
 
-    /** Кнопки `cmd:*`: «Старт» запускает движок, «Меню» открывает панель, остальное — общие действия. */
+    /**
+     * Кнопки `cmd:*`: «Старт» запускает движок, «Меню» открывает панель, остальное — общие действия.
+     *
+     * Итог старта/стопа/паузы/резюме движок сам шлёт в этот же чат (через notifier) — здесь
+     * отвечаем только когда движок промолчит. Раньше ответ был безусловным: на «Старт» без
+     * активных стратегий приходило «⚠️ Бот не запущен», а следом — «🟢 Бот запущен».
+     */
     private suspend fun handleCmd(chatId: Long, action: String) {
         when (action) {
-            "start" -> { engine.start(); send(chatId, "🟢 Бот запущен") }
+            "start" -> {
+                if (engine.getStatus() == BotStatus.RUNNING) send(chatId, "ℹ️ Бот уже запущен")
+                else engine.start()
+            }
             "menu" -> sendMainMenu(chatId)
             else -> runAction(chatId, action)
         }
@@ -196,10 +215,18 @@ class TelegramBotController(
     /** Действия, общие для текстовых команд и кнопок — единый источник поведения. */
     private suspend fun runAction(chatId: Long, action: String) {
         when (action) {
-            "stop" -> { engine.stop(); send(chatId, "🔴 Бот остановлен") }
-            "pause" -> { engine.pause(); send(chatId, "⏸ Бот на паузе") }
-            "resume" -> { engine.resume(); send(chatId, "▶️ Бот возобновлён") }
-            "closeall" -> { engine.closeAllPositions(); send(chatId, "🚨 Команда на закрытие всех позиций отправлена") }
+            "stop" -> engine.stop()
+            "pause" -> engine.pause()
+            "resume" -> {
+                if (engine.getStatus() != BotStatus.PAUSED) send(chatId, "ℹ️ Бот не на паузе — продолжать нечего")
+                else engine.resume()
+            }
+            "closeall" -> {
+                // REAL-продажи идут по очереди и могут занять минуты — подтверждаем приём сразу,
+                // итог («закрыто N из M») движок пришлёт сам.
+                send(chatId, "🚨 Закрываю все позиции…")
+                engine.closeAllPositions()
+            }
             "status" -> sendStatus(chatId)
             "balance" -> sendBalance(chatId)
             "positions" -> sendPositions(chatId)
@@ -368,15 +395,15 @@ class TelegramBotController(
         val lossTrades = report.loss_trades ?: 0L
         val total = winTrades + lossTrades
         val winRate = if (total > 0L) (winTrades * 100 / total).toInt() else 0
-        val avgWin = report.avg_win ?: 0.0
-        val avgLoss = report.avg_loss ?: 0.0
+        val avgWin = report.avg_win
+        val avgLoss = report.avg_loss
         val pf = if (avgLoss != 0.0) avgWin / (-avgLoss) else 0.0
         send(chatId, """
             📋 *Ежедневный отчёт DRX*
 
             💰 *Финансы:*
-            P&L: ${fmt(report.total_pnl ?: 0.0)} USD
-            Комиссии: ${fmt(report.total_fees ?: 0.0)} USD
+            P&L: ${fmt(report.total_pnl)} USD
+            Комиссии: ${fmt(report.total_fees)} USD
 
             📊 *Торговля:*
             Всего сделок: ${report.total_trades}
@@ -387,8 +414,8 @@ class TelegramBotController(
             Avg убыток: ${fmt(avgLoss)} USD
             Profit Factor: ${fmt(pf)}
 
-            🏆 Лучшая сделка: +${fmt(report.best_trade ?: 0.0)} USD
-            💩 Худшая сделка: ${fmt(report.worst_trade ?: 0.0)} USD
+            🏆 Лучшая сделка: ${if (report.best_trade > 0) "+" else ""}${fmt(report.best_trade)} USD
+            💩 Худшая сделка: ${fmt(report.worst_trade)} USD
         """.trimIndent())
     }
 
@@ -429,7 +456,9 @@ class TelegramBotController(
 
     private suspend fun setMode(chatId: Long, demo: Boolean) {
         if (!demo && settingsStore.getWalletSeed() == null) {
-            send(chatId, "⚠️ REAL-режим не включён: не задана seed-фраза кошелька (настройки приложения или SOLANA_WALLET_SEED).")
+            // `_` в имени переменной без экранирования ломал Markdown — Telegram молча отклонял
+            // сообщение, и предупреждение не доходило.
+            send(chatId, "⚠️ REAL-режим не включён: не задана seed-фраза кошелька (настройки приложения или ${"SOLANA_WALLET_SEED".escapeMarkdown()}).")
             return
         }
         settingsStore.setDemoMode(demo)

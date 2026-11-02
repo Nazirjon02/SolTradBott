@@ -231,6 +231,8 @@ fun DrxApp(runtime: DrxRuntime? = null) {
                     initial = editingStrategy,
                     onSave = { cfg ->
                         runtime?.strategyStore?.save(cfg)
+                        // Работающий сканер держит старый конфиг — перезапускаем его с новым.
+                        scope.launch { engine?.reloadStrategy(cfg.id) }
                         reload()
                         showForm = false
                         editingStrategy = null
@@ -292,6 +294,8 @@ fun DrxApp(runtime: DrxRuntime? = null) {
                         onEdit = { cfg -> editingStrategy = cfg; showForm = true },
                         onDelete = { cfg ->
                             runtime?.strategyStore?.delete(cfg.id)
+                            // Удалённая стратегия не должна продолжать сканировать и входить.
+                            scope.launch { engine?.reloadStrategy(cfg.id) }
                             reload()
                         },
                         onToggle = { cfg ->

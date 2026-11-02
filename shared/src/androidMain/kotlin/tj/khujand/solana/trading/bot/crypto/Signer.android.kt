@@ -15,7 +15,7 @@ import javax.crypto.spec.PBEKeySpec
 
 actual fun createSignerFromSeedPhrase(seedPhrase: String): Signer {
     Security.addProvider(EdDSASecurityProvider())
-    val seed = mnemonicToSeed(seedPhrase.trim(), "")
+    val seed = mnemonicToSeed(normalizeMnemonic(seedPhrase), "")
     val keySeed = deriveSlip10Ed25519(seed)
     return Ed25519Signer(keySeed)
 }

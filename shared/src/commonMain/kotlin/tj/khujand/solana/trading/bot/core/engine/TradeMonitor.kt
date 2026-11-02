@@ -152,7 +152,10 @@ class TradeMonitor(
 
     private suspend fun closeFull(t: TradeRow, price: Double, reason: String) {
         val result = executor.closeTrade(t, price, 100.0, reason) ?: run {
-            activityLog.error("❌ ${t.symbol}: не удалось закрыть ($reason) — попробую в следующем цикле")
+            // Пока монитор шёл по списку, позицию могли закрыть вручную (UI/Telegram/REST) — это не сбой.
+            if (executor.isOpen(t.id)) {
+                activityLog.error("❌ ${t.symbol}: не удалось закрыть ($reason) — попробую в следующем цикле")
+            }
             return
         }
         val pnlPercent = if (t.size_usd > 0) ((t.pnl ?: 0.0) + result.pnlUsd) / t.size_usd * 100 else 0.0

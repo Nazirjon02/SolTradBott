@@ -14,7 +14,11 @@ import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.jsonObject
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
+
+/** Wrapped SOL: Price API v3 принимает в `ids` только mint-адреса (тикер "SOL" отдаёт пустой `{}`). */
+private const val SOL_MINT = "So11111111111111111111111111111111111111112"
 
 @Serializable
 data class JupiterPriceResponse(
@@ -62,16 +66,18 @@ class JupiterApi {
         val url = "$baseUrl/price/v3"
         return try {
             val response = getWithRetry(url, apiKey) {
-                parameter("ids", "SOL")
+                parameter("ids", SOL_MINT)
             } ?: return null
             val text = response.bodyAsText()
             val element = json.parseToJsonElement(text).jsonObject
-            element["So11111111111111111111111111111111111111112"]
+            element[SOL_MINT]
                 ?.jsonObject
                 ?.get("usdPrice")
                 ?.jsonPrimitive
                 ?.content
                 ?.toDoubleOrNull()
+        } catch (e: CancellationException) {
+            throw e
         } catch (e: Exception) {
             println("❌ Jupiter price error: ${e.message}")
             null
@@ -94,6 +100,8 @@ class JupiterApi {
                 parameter("slippageBps", slippageBps)
             } ?: return null
             response.body()
+        } catch (e: CancellationException) {
+            throw e
         } catch (e: Exception) {
             println("❌ Jupiter quote error: ${e.message}")
             null
@@ -167,6 +175,8 @@ class JupiterApi {
                 prioritizationFeeLamports = request.prioritizationFeeLamports
             ), apiKey) ?: return null
             response.body()
+        } catch (e: CancellationException) {
+            throw e
         } catch (e: Exception) {
             println("❌ Jupiter swap error: ${e.message}")
             null
@@ -206,6 +216,8 @@ class JupiterApi {
                 }
                 logApi("GET $url -> ${status.value} ok")
                 return response
+            } catch (e: CancellationException) {
+                throw e
             } catch (e: Exception) {
                 attempt++
                 logApi("GET $url failed: ${e.message}")
@@ -248,6 +260,8 @@ class JupiterApi {
                 }
                 logApi("POST $url -> ${status.value} ok")
                 return response
+            } catch (e: CancellationException) {
+                throw e
             } catch (e: Exception) {
                 attempt++
                 logApi("POST $url failed: ${e.message}")
