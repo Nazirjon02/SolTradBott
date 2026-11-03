@@ -17,5 +17,6 @@ fun createStrategy(config: StrategyConfig, client: DexClient? = null): Strategy 
         symbolPairsSource = { symbol -> client?.dexScreener?.searchSolanaPairsBySymbol(symbol) },
     )
     StrategyType.ELLIOTT.name -> ElliottStrategy(config)
+    StrategyType.VOLUME_BREAKOUT.name -> VolumeBreakoutStrategy(config)
     else -> DarsStrategy(config)
 }

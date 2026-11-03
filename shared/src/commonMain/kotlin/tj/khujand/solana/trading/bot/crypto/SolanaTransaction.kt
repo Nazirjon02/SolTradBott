@@ -36,6 +36,25 @@ fun signTransactionBase64(unsignedTxBase64: String, signer: Signer): String? {
     return Base64.encode(txBytes)
 }
 
+/**
+ * Подпись плательщика из уже подписанной транзакции (base58) — это и есть id транзакции в сети.
+ * Известна до отправки: по ней журнал находит итог, даже если ответ RPC потерялся.
+ * null — транзакция не разбирается или первая подпись пустая (не подписана).
+ */
+@OptIn(ExperimentalEncodingApi::class)
+fun transactionSignatureBase58(signedTxBase64: String): String? {
+    val txBytes = try {
+        Base64.decode(signedTxBase64)
+    } catch (e: Exception) {
+        return null
+    }
+    val (sigCount, sigLen) = readShortVec(txBytes, 0) ?: return null
+    if (sigCount <= 0 || txBytes.size < sigLen + 64) return null
+    val signature = txBytes.copyOfRange(sigLen, sigLen + 64)
+    if (signature.all { it.toInt() == 0 }) return null
+    return encodeBase58(signature)
+}
+
 private fun readShortVec(data: ByteArray, offset: Int): Pair<Int, Int>? {
     var len = 0
     var size = 0

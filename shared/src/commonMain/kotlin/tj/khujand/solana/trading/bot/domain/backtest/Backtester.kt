@@ -17,6 +17,7 @@ import tj.khujand.solana.trading.bot.core.strategy.ScoreStrategy
 import tj.khujand.solana.trading.bot.core.strategy.Strategy
 import tj.khujand.solana.trading.bot.core.strategy.StrategyConfig
 import tj.khujand.solana.trading.bot.core.strategy.StrategyType
+import tj.khujand.solana.trading.bot.core.strategy.VolumeBreakoutStrategy
 import tj.khujand.solana.trading.bot.core.strategy.rangeAllowsEntry
 import tj.khujand.solana.trading.bot.domain.dars.DarsEntryEngine
 import tj.khujand.solana.trading.bot.domain.dars.MarketAnalyzerService
@@ -79,6 +80,7 @@ fun backtestStrategy(config: StrategyConfig, slices: CandleSlices): Strategy {
             htfSource = { _, _, limit -> slices.higher.takeLast(limit) },
             nowMs = { Long.MAX_VALUE },
         )
+        StrategyType.VOLUME_BREAKOUT.name -> VolumeBreakoutStrategy(config, nowMs = { Long.MAX_VALUE })
         else -> DarsStrategy(config, engine = DarsEntryEngine(candleSource = source))
     }
 }

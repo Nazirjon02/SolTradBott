@@ -1,5 +1,13 @@
 package tj.khujand.solana.trading.bot.exchange.dex
 
+import kotlin.time.Clock
+
+/**
+ * Сколько живёт цена SOL в кеше. Без ключа Jupiter даёт 0.5 запроса/с на все свои API сразу,
+ * а цену SOL спрашивают и проверка входа, и исполнение, и обновление баланса.
+ */
+private const val SOL_PRICE_TTL_MS = 30_000L
+
 /**
  * Единый фасад DEX-слоя (аналог BybitClient в MRX).
  *
@@ -22,7 +30,17 @@ class DexClient(
     suspend fun getTokenPriceUsd(mint: String): Double? =
         dexScreener.getTokenPriceUsd("solana", mint)
 
-    suspend fun getSolPriceUsd(): Double? = jupiter.getSolPriceUsd()
+    // Гонка двух одновременных запросов безвредна: оба положат свежую цену.
+    private var solPriceCache: Pair<Double, Long>? = null
+
+    /** Цена SOL в USD (Jupiter) с кешем на [SOL_PRICE_TTL_MS]; null — Jupiter не ответил. */
+    suspend fun getSolPriceUsd(): Double? {
+        val now = Clock.System.now().toEpochMilliseconds()
+        solPriceCache?.let { (price, at) -> if (now - at < SOL_PRICE_TTL_MS) return price }
+        val fresh = jupiter.getSolPriceUsd() ?: return null
+        solPriceCache = fresh to now
+        return fresh
+    }
 
     suspend fun getPairDetails(pairAddress: String): TokenPair? =
         dexScreener.getTokenDetails(pairAddress)

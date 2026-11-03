@@ -117,6 +117,16 @@ class StrategyStore(private val db: DrxDatabase) {
             ew_min_reward_risk = cfg.ewMinRewardRisk,
             id = cfg.id,
         )
+        db.strategyQueries.updateVolumeBreakoutParams(
+            vb_lookback_bars = cfg.vbLookbackBars.toLong(),
+            vb_min_impulse_pct = cfg.vbMinImpulsePct,
+            vb_min_pullback_pct = cfg.vbMinPullbackPct,
+            vb_max_pullback_retrace = cfg.vbMaxPullbackRetrace,
+            vb_near_high_pct = cfg.vbNearHighPct,
+            vb_volume_mult = cfg.vbVolumeMult,
+            vb_max_extension_pct = cfg.vbMaxExtensionPct,
+            id = cfg.id,
+        )
     }
 
     private fun update(cfg: StrategyConfig) = db.strategyQueries.updateStrategy(

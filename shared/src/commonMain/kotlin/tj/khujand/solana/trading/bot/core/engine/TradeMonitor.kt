@@ -30,6 +30,10 @@ import tj.khujand.solana.trading.bot.exchange.dex.DexClient
  *  6) trailing stop — подтягивание SL за пиком цены (по %, по ATR — Chandelier, или ступенчатый «по иксам»);
  *  7) time-stop — принудительный выход по времени; «нет нового максимума» — выход, если пик давно не обновлялся.
  *
+ * Продажа не прошла — следующая попытка с бо́льшим slippage; с [EXIT_BLOCKED_AFTER] неудач подряд позиция
+ * «продажа заблокирована»: попытки идут с паузой, в Telegram — одно предупреждение.
+ * Каждый цикл начинается со сверки журнала REAL-транзакций (поздние подтверждения, потерянные ответы).
+ *
  * Работает независимо от статуса движка (позиции сопровождаются и на паузе).
  */
 class TradeMonitor(
@@ -76,6 +80,7 @@ class TradeMonitor(
     }
 
     suspend fun checkOnce() {
+        reconcileJournal()
         val open = db.tradeQueries.getOpenTrades().executeAsList()
         if (open.isEmpty()) return
         for (t in open) {
@@ -86,6 +91,22 @@ class TradeMonitor(
             } catch (e: Exception) {
                 activityLog.warn("⚠️ ${t.symbol}: ошибка сопровождения — ${e.message}")
             }
+        }
+    }
+
+    /** Итоги REAL-транзакций, которые не дождались в момент отправки, — в ленту и Telegram. */
+    private suspend fun reconcileJournal() {
+        val messages = try {
+            executor.reconcileJournal()
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            activityLog.warn("⚠️ Сверка журнала транзакций: ${e.message ?: "ошибка"}")
+            return
+        }
+        for (m in messages) {
+            activityLog.warn(m)
+            notifier.send(m)
         }
     }
 
@@ -103,6 +124,8 @@ class TradeMonitor(
             }
         activityLog.requestOk()
         if (price <= 0) return
+        // Последняя цена — для лимитов портфеля (нереализованный PnL без лишних запросов).
+        db.tradeQueries.updateLastPrice(price, t.id)
         applyExits(t, config, price, pair?.liquidity?.usd)
     }
 
@@ -113,13 +136,18 @@ class TradeMonitor(
      * @param liquidity текущая ликвидность пула, null — неизвестна (ликвидность-стоп пропускается).
      */
     internal suspend fun applyExits(t: TradeRow, config: StrategyConfig, price: Double, liquidity: Double?) {
-        val d = decideExit(t.toPositionState(), config, price, liquidity, Clock.System.now().toEpochMilliseconds())
+        val now = Clock.System.now().toEpochMilliseconds()
+        val d = decideExit(t.toPositionState(), config, price, liquidity, now)
 
         if (d.peak > t.peak_price) db.tradeQueries.updatePeak(d.peak, d.peakAtMs, t.id)
         if (d.stop > t.stop_loss) {
             db.tradeQueries.updateStopLoss(d.stop, t.id)
             if (d.breakEvenMoved) activityLog.info("🛡 ${t.symbol}: SL перенесён в безубыток (${fmtNum(d.stop)})")
         }
+
+        // Продажа уже не прошла несколько раз подряд — до назначенного времени не повторяем (пик и стоп
+        // выше всё равно обновлены, решение о выходе пересчитается на следующей попытке).
+        if (d.action != ExitAction.Hold && now < t.exit_retry_at) return
 
         when (val action = d.action) {
             ExitAction.Hold -> Unit
@@ -152,10 +180,14 @@ class TradeMonitor(
 
     private suspend fun closeFull(t: TradeRow, price: Double, reason: String) {
         val result = executor.closeTrade(t, price, 100.0, reason) ?: run {
-            // Пока монитор шёл по списку, позицию могли закрыть вручную (UI/Telegram/REST) — это не сбой.
-            if (executor.isOpen(t.id)) {
-                activityLog.error("❌ ${t.symbol}: не удалось закрыть ($reason) — попробую в следующем цикле")
-            }
+            onCloseFailed(t, reason)
+            return
+        }
+        if (result.soldNothing) {
+            notifier.send(
+                "⚠️ ${t.symbol}: токенов на кошельке нет — позиция закрыта без продажи ($reason). " +
+                    "Похоже, монету продали вне бота: PnL этой сделки неизвестен."
+            )
             return
         }
         val pnlPercent = if (t.size_usd > 0) ((t.pnl ?: 0.0) + result.pnlUsd) / t.size_usd * 100 else 0.0
@@ -180,13 +212,36 @@ class TradeMonitor(
         tp1: Boolean,
         tp2: Boolean,
     ): CloseResult? {
-        val result = executor.closeTrade(t, price, portion, reason, tp1Done = tp1, tp2Done = tp2) ?: return null
+        val result = executor.closeTrade(t, price, portion, reason, tp1Done = tp1, tp2Done = tp2) ?: run {
+            onCloseFailed(t, reason)
+            return null
+        }
+        if (result.soldNothing) {
+            notifier.send("⚠️ ${t.symbol}: токенов на кошельке нет — позиция закрыта без продажи ($reason).")
+            return result
+        }
         activityLog.success("💰 ${t.symbol}: частичная фиксация ${portion.toInt()}% ($reason), PnL ${fmtNum(result.pnlUsd)} USD")
         notifier.send(
             "💰 ЧАСТИЧНАЯ ФИКСАЦИЯ ${if (t.is_demo == 1L) "(DEMO)" else ""} ${t.symbol}\n" +
                 "$reason — продано ${portion.toInt()}% позиции, PnL ${fmtNum(result.pnlUsd)} USD"
         )
         return result
+    }
+
+    /**
+     * Выход не состоялся. Причины разные: позицию уже закрыли вручную (UI/Telegram/REST) — не сбой;
+     * продажа «в полёте» — ждём сверку; продажа не прошла — исполнитель уже записал неудачу, а на
+     * [EXIT_BLOCKED_AFTER]-й подряд шлём одно предупреждение: дальше попытки идут с паузой.
+     */
+    private suspend fun onCloseFailed(t: TradeRow, reason: String) {
+        val fresh = db.tradeQueries.getById(t.id).executeAsOneOrNull() ?: return
+        if (fresh.status != "OPEN" || executor.hasPendingSell(t.id)) return
+        if (fresh.exit_failures.toInt() == EXIT_BLOCKED_AFTER && fresh.exit_failures > t.exit_failures) {
+            val text = "🚫 ${t.symbol}: продажа не проходит $EXIT_BLOCKED_AFTER раза подряд ($reason) — ${fresh.exit_note}. " +
+                "Бот продолжит попытки с паузой и растущим slippage; проверьте монету вручную."
+            activityLog.error(text)
+            notifier.send(text)
+        }
     }
 
     /** Стратегию удалили, а сделка ещё открыта — сопровождаем с дефолтными параметрами. */

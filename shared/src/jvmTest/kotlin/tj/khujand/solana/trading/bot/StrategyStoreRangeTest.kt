@@ -135,7 +135,7 @@ class StrategyStoreRangeTest {
         val db = freshDb()
         seedDefaultStrategies(db)
         val ids = StrategyStore(db).loadAll().map { it.id }.toSet()
-        assertEquals(setOf("dars-memecoins", BREAKOUT_PULLBACK_ID, MEME_PLAYBOOK_ID, ELLIOTT_ID), ids)
+        assertEquals(setOf("dars-memecoins", BREAKOUT_PULLBACK_ID, MEME_PLAYBOOK_ID, ELLIOTT_ID, VOLUME_BREAKOUT_ID), ids)
     }
 
     @Test fun memePlaybookSeededOnceIntoExistingDb() {
@@ -229,6 +229,47 @@ class StrategyStoreRangeTest {
         assertEquals(2.5, r.ewMinRewardRisk)
     }
 
+    @Test fun volumeBreakoutSeededOnceIntoExistingDb() {
+        val db = freshDb()
+        val store = StrategyStore(db)
+        store.save(StrategyConfig(id = "user", name = "user strategy"))
+
+        seedDefaultStrategies(db)
+        val seeded = store.loadAll().first { it.id == VOLUME_BREAKOUT_ID }
+        assertEquals(false, seeded.isActive, "включается вручную")
+        assertEquals(StrategyType.VOLUME_BREAKOUT.name, seeded.type)
+        assertEquals("1m", seeded.timeframe)
+
+        store.delete(VOLUME_BREAKOUT_ID)
+        seedDefaultStrategies(db)
+        assertTrue(store.loadAll().none { it.id == VOLUME_BREAKOUT_ID }, "удалённую не возвращаем")
+    }
+
+    @Test fun volumeBreakoutParamsSurviveSaveAndReload() {
+        val store = StrategyStore(freshDb())
+        store.save(
+            volumeBreakoutDefaults().copy(
+                vbLookbackBars = 90, vbMinImpulsePct = 35.0, vbMinPullbackPct = 7.5, vbMaxPullbackRetrace = 0.618,
+                vbNearHighPct = 4.0, vbVolumeMult = 3.5, vbMaxExtensionPct = 10.0,
+            )
+        )
+        val r = store.loadAll().first { it.id == VOLUME_BREAKOUT_ID }
+        assertEquals(StrategyType.VOLUME_BREAKOUT.name, r.type)
+        assertEquals(true, r.rLadderEnabled)
+        assertEquals(2.0, r.tp1R)
+        assertEquals(true, r.tieredTrailEnabled)
+        assertEquals(120, r.staleExitMinutes)
+        assertEquals(20L, r.minTokenAgeMinutes)
+        assertEquals(720L, r.maxTokenAgeMinutes)
+        assertEquals(90, r.vbLookbackBars)
+        assertEquals(35.0, r.vbMinImpulsePct)
+        assertEquals(7.5, r.vbMinPullbackPct)
+        assertEquals(0.618, r.vbMaxPullbackRetrace)
+        assertEquals(4.0, r.vbNearHighPct)
+        assertEquals(3.5, r.vbVolumeMult)
+        assertEquals(10.0, r.vbMaxExtensionPct)
+    }
+
     /**
      * Старая БД после удаления Momentum и RSI+EMA: физически в ней остались колонки RSI/EMA/порога
      * объёма (с DEFAULT) и строки этих стратегий. Строки удаляются при старте, а чтение и запись
@@ -251,7 +292,10 @@ class StrategyStoreRangeTest {
         seedDefaultStrategies(db)
 
         val store = StrategyStore(db)
-        assertEquals(setOf("dars-memecoins", BREAKOUT_PULLBACK_ID, MEME_PLAYBOOK_ID, ELLIOTT_ID), store.loadAll().map { it.id }.toSet())
+        assertEquals(
+            setOf("dars-memecoins", BREAKOUT_PULLBACK_ID, MEME_PLAYBOOK_ID, ELLIOTT_ID, VOLUME_BREAKOUT_ID),
+            store.loadAll().map { it.id }.toSet(),
+        )
         store.save(StrategyConfig(id = "new", name = "new", atrPeriod = 10)) // insert с лишними колонками
         store.save(store.loadAll().first { it.id == "new" }.copy(atrPeriod = 12)) // и update
         assertEquals(12, store.loadAll().first { it.id == "new" }.atrPeriod)
@@ -276,6 +320,8 @@ class StrategyStoreRangeTest {
             "ew_w2_retrace_min", "ew_w2_retrace_max", "ew_w4_retrace_min", "ew_w4_retrace_max",
             "ew_min_guidelines", "ew_wave3_entry", "ew_entry_window_bars", "ew_stop_anchor",
             "ew_stop_buffer_atr", "ew_w3_target", "ew_w5_target", "ew_min_reward_risk",
+            "vb_lookback_bars", "vb_min_impulse_pct", "vb_min_pullback_pct", "vb_max_pullback_retrace",
+            "vb_near_high_pct", "vb_volume_mult", "vb_max_extension_pct",
         )
         dropped.forEach { driver.execute(null, "ALTER TABLE strategy DROP COLUMN $it", 0) }
         // Таблица trade в старом формате (без initial_stop / entry_atr_frac). DROP COLUMN для
@@ -310,6 +356,8 @@ class StrategyStoreRangeTest {
                 "VALUES ('t1', 'old', 'legacy', 'm', 'S', 1.0, 10.0, 10.0, 10.0, 0.9, 1.3, 1.0, 'x', 0)",
             0,
         )
+        // Журнала транзакций в старой БД нет: Android-драйвер не вызывает Schema.create для существующего файла.
+        driver.execute(null, "DROP TABLE tx_journal", 0)
 
         migrateStrategyTable(driver)
 
@@ -326,10 +374,21 @@ class StrategyStoreRangeTest {
         assertEquals("BREAK", cfg.ewWave3Entry)
         assertEquals(true, cfg.ewTradeWave3)
         assertEquals(false, cfg.ewTradeCorrection)
+        assertEquals(60, cfg.vbLookbackBars)
+        assertEquals(2.5, cfg.vbVolumeMult)
+        assertEquals(0.786, cfg.vbMaxPullbackRetrace)
+        assertEquals(15.0, cfg.vbMaxExtensionPct)
         val trade = db.tradeQueries.getOpenTrades().executeAsList().single()
         assertEquals(0.0, trade.initial_stop)   // нет данных → монитор возьмёт R из SL% конфига
         assertEquals(0.0, trade.entry_atr_frac)
         assertEquals(0L, trade.peak_at)         // нет данных → «нет нового максимума» считается от входа
+        assertEquals(0.0, trade.last_price)     // монитор ещё не видел цену → лимиты портфеля берут цену входа
+        assertEquals(0L, trade.exit_failures)
+        assertEquals("", trade.exit_note)
+        assertEquals("", trade.exec_mode)       // старая сделка: режим неизвестен
+        // Журнал создан миграцией и работает.
+        db.txJournalQueries.insert("sig", "BUY", "m", "S", null, "{}", 0L, 0L)
+        assertEquals(listOf("m"), db.txJournalQueries.pendingBuyMints().executeAsList())
     }
 
     /**

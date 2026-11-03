@@ -23,6 +23,9 @@ import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import tj.khujand.solana.trading.bot.core.engine.BotEngine
+import tj.khujand.solana.trading.bot.core.engine.EXEC_REAL
+import tj.khujand.solana.trading.bot.core.engine.EXEC_SHADOW
+import tj.khujand.solana.trading.bot.core.engine.EXIT_BLOCKED_AFTER
 import tj.khujand.solana.trading.bot.core.engine.TradeExecutor
 import tj.khujand.solana.trading.bot.core.strategy.StrategyManager
 import tj.khujand.solana.trading.bot.data.BotStatus
@@ -242,9 +245,16 @@ class TelegramBotController(
 
     // ─── Меню ────────────────────────────────────────────────────────────────
 
+    /** Режим для сообщений: DEMO, DEMO по котировкам Jupiter (SHADOW) или REAL. */
+    private fun modeText(): String = when (executor.modeLabel()) {
+        EXEC_REAL -> "💸 REAL"
+        EXEC_SHADOW -> "🎮 DEMO · котировки Jupiter (SHADOW)"
+        else -> "🎮 DEMO"
+    }
+
     private suspend fun sendMainMenu(chatId: Long) {
         val status = engine.getStatus()
-        val mode = if (executor.isDemo()) "🎮 DEMO" else "💸 REAL"
+        val mode = modeText()
         val keyboard = keyboard(
             row("🟢 Старт" to "cmd:start", "🔴 Стоп" to "cmd:stop"),
             row("⏸ Пауза" to "cmd:pause", "▶️ Продолжить" to "cmd:resume"),
@@ -275,7 +285,7 @@ class TelegramBotController(
             🤖 *DRX Bot Status*
 
             Статус: ${status.emoji} ${status.name}
-            Режим: ${if (executor.isDemo()) "🎮 DEMO" else "💸 REAL"}
+            Режим: ${modeText()}
             ⏱ Время работы: ${stats.uptime}
 
             📊 *Сегодня:*
@@ -315,12 +325,18 @@ class TelegramBotController(
             return
         }
         val text = positions.joinToString("\n\n") {
-            "📌 ${it.symbol.escapeMarkdown()} ${if (it.isDemo) "(DEMO)" else ""}\n" +
+            val exitLine = when {
+                it.exitFailures >= EXIT_BLOCKED_AFTER ->
+                    "\n🚫 Продажа заблокирована (${it.exitFailures} подряд): ${it.exitNote.escapeMarkdown()}"
+                it.exitFailures > 0 -> "\n⚠️ Продажа не прошла (${it.exitFailures}): ${it.exitNote.escapeMarkdown()}"
+                else -> ""
+            }
+            "📌 ${it.symbol.escapeMarkdown()} ${if (it.isDemo) "(${it.execMode.ifEmpty { "DEMO" }})" else ""}\n" +
                 "🧠 ${it.strategyName.escapeMarkdown()}\n" +
                 "Вход: ${fmt(it.entryPrice)} → Сейчас: ${fmt(it.currentPrice)}\n" +
                 "🕒 ${tradeTimeLine(it.openedAt)}\n" +
                 "PnL: ${fmt(it.pnlUsd)} USD (${fmt(it.pnlPercent)}%)\n" +
-                "SL: ${fmt(it.stopLoss)} | TP: ${fmt(it.takeProfit)}"
+                "SL: ${fmt(it.stopLoss)} | TP: ${fmt(it.takeProfit)}" + exitLine
         }
         // По кнопке на каждую позицию — закрытие вручную; внизу общий «Закрыть всё».
         val closeRows = positions.map { p -> row("🔴 Закрыть ${p.symbol}" to "close:${p.tradeId}") }.toTypedArray()
@@ -438,20 +454,38 @@ class TelegramBotController(
 
     private suspend fun sendModeMenu(chatId: Long) {
         val demo = executor.isDemo()
+        val shadow = executor.isShadow()
         val seedConfigured = settingsStore.getWalletSeed() != null
-        val keyboard = keyboard(
+        val rows = mutableListOf(
             row((if (demo) "💸 Включить REAL" else "🎮 Включить DEMO") to (if (demo) "mode:real" else "mode:demo")),
-            row("↩️ Назад" to "cmd:menu")
         )
+        if (demo) rows += row((if (shadow) "⭕ Выключить SHADOW" else "🔁 Включить SHADOW") to "mode:shadow")
+        rows += row("↩️ Назад" to "cmd:menu")
         send(chatId, """
             🎮 *Режим торговли*
 
-            Текущий: ${if (demo) "🎮 DEMO (виртуальный счёт)" else "💸 REAL (Jupiter-свопы)"}
+            Текущий: ${modeText()}
             Кошелёк: ${if (seedConfigured) "🔑 настроен" else "❌ seed-фраза не задана"}
 
             DEMO — сделки виртуальные, баланс $10 000.
+            SHADOW — DEMO по реальным котировкам Jupiter: вход и выход с комиссиями пулов и проскальзыванием, транзакции не отправляются.
             REAL — реальные свопы через Jupiter с вашего кошелька. ⚠️ Включайте только когда уверены!
-        """.trimIndent(), keyboard)
+        """.trimIndent(), keyboard(*rows.toTypedArray()))
+    }
+
+    private suspend fun toggleShadow(chatId: Long) {
+        if (!executor.isDemo()) {
+            send(chatId, "ℹ️ SHADOW работает только в DEMO — сначала включите DEMO.")
+            return
+        }
+        val on = !executor.isShadow()
+        settingsStore.setShadowQuotes(on)
+        send(
+            chatId,
+            if (on) "🔁 SHADOW включён — DEMO-сделки исполняются по котировкам Jupiter."
+            else "🎮 SHADOW выключен — DEMO снова по цене графика."
+        )
+        sendModeMenu(chatId)
     }
 
     private suspend fun setMode(chatId: Long, demo: Boolean) {
@@ -473,6 +507,7 @@ class TelegramBotController(
         when (data.removePrefix("mode:")) {
             "demo" -> setMode(chatId, demo = true)
             "real" -> setMode(chatId, demo = false)
+            "shadow" -> toggleShadow(chatId)
         }
     }
 

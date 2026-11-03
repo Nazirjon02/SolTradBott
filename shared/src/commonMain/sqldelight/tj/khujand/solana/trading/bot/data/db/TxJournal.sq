@@ -1,0 +1,53 @@
+-- Журнал REAL-транзакций: строка пишется ДО отправки, по подписи (она известна сразу после подписания).
+-- Если ответ RPC потерялся, подтверждение опоздало или процесс упал между отправкой и записью сделки,
+-- сверка (TradeExecutor.reconcileJournal) узнаёт итог по подписи: восстанавливает сделку по поздно
+-- исполнившейся покупке и доводит поздно исполнившуюся продажу. Пока покупка «в полёте», монету
+-- повторно не покупаем; пока «в полёте» продажа — вторую не отправляем.
+CREATE TABLE IF NOT EXISTS tx_journal (
+    signature TEXT NOT NULL PRIMARY KEY,
+    kind TEXT NOT NULL,            -- BUY / SELL
+    mint TEXT NOT NULL,
+    symbol TEXT NOT NULL,
+    trade_id TEXT,                 -- SELL — продаваемая сделка; BUY — созданная после подтверждения
+    status TEXT NOT NULL,          -- PENDING / CONFIRMED / FAILED
+    payload TEXT NOT NULL,         -- JSON с тем, что нужно довести операцию без исходного вызова
+    note TEXT NOT NULL DEFAULT '',
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+);
+
+insert:
+INSERT INTO tx_journal (signature, kind, mint, symbol, trade_id, status, payload, note, created_at, updated_at)
+VALUES (?, ?, ?, ?, ?, 'PENDING', ?, '', ?, ?);
+
+-- Итог пишется только поверх PENDING: кто первым записал итог (обычный путь или сверка), тот и
+-- учитывает операцию — второй увидит 0 изменённых строк и ничего не сделает.
+settle:
+UPDATE tx_journal SET status = ?, trade_id = COALESCE(?, trade_id), note = ?, updated_at = ?
+WHERE signature = ? AND status = 'PENDING';
+
+getPending:
+SELECT * FROM tx_journal WHERE status = 'PENDING' ORDER BY created_at;
+
+getBySignature:
+SELECT * FROM tx_journal WHERE signature = ?;
+
+-- Монеты с покупкой «в полёте»: повторно не входим, пока итог неизвестен.
+pendingBuyMints:
+SELECT DISTINCT mint FROM tx_journal WHERE kind = 'BUY' AND status = 'PENDING';
+
+hasPendingBuy:
+SELECT COUNT(*) FROM tx_journal WHERE kind = 'BUY' AND status = 'PENDING' AND mint = ?;
+
+pendingBuyCount:
+SELECT COUNT(*) FROM tx_journal WHERE kind = 'BUY' AND status = 'PENDING';
+
+hasPendingSell:
+SELECT COUNT(*) FROM tx_journal WHERE kind = 'SELL' AND status = 'PENDING' AND trade_id = ?;
+
+-- Завершённые записи старше порога не нужны — журнал остаётся коротким.
+deleteSettledBefore:
+DELETE FROM tx_journal WHERE status != 'PENDING' AND updated_at < ?;
+
+deleteAll:
+DELETE FROM tx_journal;

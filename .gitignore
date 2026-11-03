@@ -21,4 +21,6 @@ node_modules/
 # Секреты и локальные данные DRX
 .env
 *.db
-data/
+# Только корневая папка с БД (docker-compose: ./data:/data). Без «/» правило прятало и исходники
+# в пакетах …/bot/data/ — FavoriteCoin.kt и новые .sq-файлы не попадали в коммиты.
+/data/

@@ -12,8 +12,8 @@ import tj.khujand.solana.trading.bot.data.db.DrxDatabase
  * Живёт в shared, чтобы и сервер, и desktop-приложение сеяли одни и те же дефолты
  * в общую базу.
  *
- * Четыре стратегии: Dars / Smart Money (по умолчанию активна), «Пробой + откат», «Мем-плейбук»
- * и «Волны Эллиотта» (три последние включаются вручную).
+ * Пять стратегий: Dars / Smart Money (по умолчанию активна), «Пробой + откат», «Мем-плейбук»,
+ * «Волны Эллиотта» и «Пробой на объёме» (четыре последние включаются вручную).
  */
 fun seedDefaultStrategies(db: DrxDatabase) {
     // Momentum Scalping и RSI+EMA удалены из бота — убираем их строки из старых БД.
@@ -25,11 +25,12 @@ fun seedDefaultStrategies(db: DrxDatabase) {
 
     val existing = db.strategyQueries.getAll().executeAsList()
     if (existing.isNotEmpty()) {
-        // Базовые стратегии уже есть, но «Пробой + откат», «Мем-плейбук» и «Волны Эллиотта»
-        // появились позже — досеваем один раз.
+        // Базовые стратегии уже есть, но «Пробой + откат», «Мем-плейбук», «Волны Эллиотта»
+        // и «Пробой на объёме» появились позже — досеваем один раз.
         seedBreakoutPullbackOnce(db)
         seedMemePlaybookOnce(db)
         seedElliottOnce(db)
+        seedVolumeBreakoutOnce(db)
         return
     }
 
@@ -95,6 +96,9 @@ fun seedDefaultStrategies(db: DrxDatabase) {
 
     // ─── Стратегия 4: Волны Эллиотта (включается вручную) ─────────────────────
     seedElliottOnce(db)
+
+    // ─── Стратегия 5: Пробой на объёме (включается вручную) ──────────────────
+    seedVolumeBreakoutOnce(db)
 }
 
 /** Ключ-флаг: стратегия «Пробой + откат» уже засеяна (удалённую пользователем не возвращаем). */
@@ -242,6 +246,62 @@ private fun seedElliottOnce(db: DrxDatabase) {
     val store = StrategyStore(db)
     if (store.loadAll().none { it.id == ELLIOTT_ID }) store.save(elliottDefaults())
     db.settingsQueries.set(ELLIOTT_SEED_KEY, "1", Clock.System.now().toEpochMilliseconds())
+}
+
+/** Ключ-флаг: стратегия «Пробой на объёме» уже засеяна (удалённую пользователем не возвращаем). */
+private const val VOLUME_BREAKOUT_SEED_KEY = "volume_breakout_seeded_v1"
+
+internal const val VOLUME_BREAKOUT_ID = "volume-breakout"
+
+/**
+ * Дефолты «Пробоя на объёме»: 1m — сетап ловится у монет от ~20 минут (на 5m к моменту пробоя баров
+ * мало, а вход запаздывал бы на целую свечу). Стоп под базой перед пробоем, дальше 15% — пропуск.
+ * Размер от риска 1% (потолок 10% баланса и 1% пула). Выходы: 30% на +2R → безубыток, 30% на +4R,
+ * остаток — под ступенчатым трейлингом «по иксам»: пампы после пробоя быстро отдают прибыль обратно.
+ * Пробой, не давший +2R за час, закрывается; 2 часа без нового максимума — выход.
+ */
+internal fun volumeBreakoutDefaults(): StrategyConfig = StrategyConfig(
+    id = VOLUME_BREAKOUT_ID,
+    name = "Пробой на объёме — первый откат и пробой максимума",
+    type = StrategyType.VOLUME_BREAKOUT.name,
+    isActive = false,
+    timeframe = "1m",
+    positionSize = 10.0,          // потолок размера; фактический — от риска
+    maxPositions = 1,
+    slippagePercent = 2.0,        // на пробое пул «горячий»
+    stopLossPercent = 15.0,       // стоп под базой дальше 15% — база не тугая, вход пропускается
+    takeProfitPercent = 300.0,    // в режиме раннера не закрывает позицию
+    breakEvenOffsetPercent = 2.0, // безубыток с запасом на слиппедж выхода
+    tp1ClosePercent = 30.0,
+    tp2ClosePercent = 30.0,
+    timeStopMinutes = 60,         // пробой должен сработать быстро: нет +2R за час — выходим
+    liquidityExitDropPercent = 30.0,
+    rLadderEnabled = true,
+    tp1R = 2.0,
+    tp2R = 4.0,
+    breakEvenAfterTp1 = true,
+    runnerEnabled = true,
+    tieredTrailEnabled = true,
+    staleExitEnabled = true,
+    staleExitMinutes = 120,
+    riskSizingEnabled = true,
+    riskPerTradePercent = 1.0,
+    maxPoolSharePercent = 1.0,
+    maxDrawdown = 40.0,           // больше двух стопов — штатный стоп не блокирует стратегию
+    minLiquidityUsd = 15_000.0,
+    minMarketCap = 50_000.0,
+    maxMarketCap = 10_000_000.0,
+    minTokenAgeMinutes = 20,      // на 1m — 20 баров: импульс, откат, ретест и пробой
+    maxTokenAgeMinutes = 720,     // «первый откат» — сетап первых часов жизни монеты
+)
+
+/** Добавляет «Пробой на объёме» один раз — и в новую, и в уже существующую БД. */
+private fun seedVolumeBreakoutOnce(db: DrxDatabase) {
+    val alreadyDone = db.settingsQueries.get(VOLUME_BREAKOUT_SEED_KEY).executeAsOneOrNull() != null
+    if (alreadyDone) return
+    val store = StrategyStore(db)
+    if (store.loadAll().none { it.id == VOLUME_BREAKOUT_ID }) store.save(volumeBreakoutDefaults())
+    db.settingsQueries.set(VOLUME_BREAKOUT_SEED_KEY, "1", Clock.System.now().toEpochMilliseconds())
 }
 
 /** Ключ-флаг: нормализация Dars-дефолтов к методичке выполнена (чтобы не повторять). */

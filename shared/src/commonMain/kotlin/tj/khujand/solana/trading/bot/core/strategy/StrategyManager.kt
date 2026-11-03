@@ -20,7 +20,9 @@ import tj.khujand.solana.trading.bot.core.TradeNotifier
 import tj.khujand.solana.trading.bot.core.engine.ActivityLog
 import tj.khujand.solana.trading.bot.core.engine.TradeExecutor
 import tj.khujand.solana.trading.bot.core.engine.atrFraction
+import tj.khujand.solana.trading.bot.core.engine.buySlippageBps
 import tj.khujand.solana.trading.bot.core.engine.fmtNum
+import tj.khujand.solana.trading.bot.core.risk.EntryGuard
 import tj.khujand.solana.trading.bot.core.risk.RiskManager
 import tj.khujand.solana.trading.bot.data.SettingsStore
 import tj.khujand.solana.trading.bot.data.db.DrxDatabase
@@ -48,9 +50,23 @@ private const val MINT_LOCKS_LIMIT = 500
 /** Окно дедупа алертов «только сигнал» по одной монете. */
 private const val SIGNAL_DEDUP_MS = 30 * 60_000L
 
+/** Чем закончилась попытка входа по сигналу. */
+private enum class EntryOutcome {
+    OPENED,
+
+    /** Эту монету пропускаем (проверка монеты, нет размера, сбой исполнения) — смотрим следующих кандидатов. */
+    SKIPPED,
+
+    /** Портфель не пускает новые входы — до конца цикла пробовать бессмысленно. */
+    PORTFOLIO_BLOCKED,
+}
+
 /**
  * Менеджер стратегий (модель MRX): держит по джобу на активную стратегию.
- * Цикл: сканер кандидатов → свечи → анализ → риск-чек → вход (DEMO/REAL/только сигнал).
+ * Цикл: сканер кандидатов → свечи → анализ → риск-чек (стратегия и портфель) → проверка монеты → вход
+ * (DEMO/SHADOW/REAL/только сигнал).
+ *
+ * @param entryGuard общая проверка монеты перед покупкой; null — без проверки (тесты, старые сборки).
  */
 class StrategyManager(
     private val client: DexClient,
@@ -61,6 +77,7 @@ class StrategyManager(
     private val executor: TradeExecutor,
     private val activityLog: ActivityLog = ActivityLog(),
     private val settingsStore: SettingsStore? = null,
+    private val entryGuard: EntryGuard? = null,
 ) {
     /**
      * Режим «только сигнал» (глобальный переключатель из настроек/Telegram).
@@ -144,12 +161,13 @@ class StrategyManager(
             return
         }
 
-        // Риск-лимиты (в режиме «только сигнал» не проверяем — сделок нет).
+        // Риск-лимиты стратегии и портфеля (в режиме «только сигнал» не проверяем — сделок нет).
         if (!_signalOnly.value) {
             // Размер позиции считается из кеша баланса — в REAL его нужно освежить,
             // иначе кеш пустой/протухший и вход отваливается с «нулевым размером».
             executor.refreshRealBalanceIfStale()
             val block = riskManager.blockReason(config)
+                ?: riskManager.portfolioBlockReason()?.let { "портфель — $it" }
             if (block != null) {
                 activityLog.warn("⏸ ${config.name}: $block")
                 return
@@ -167,8 +185,11 @@ class StrategyManager(
 
         // «Одна монета — одна сделка»: пропускаем все монеты, по которым уже была сделка
         // в текущем режиме (demo/real) — открытая ИЛИ уже закрытая. Повторно не входим.
+        // И монеты с REAL-покупкой «в полёте» (итог по подписи ещё неизвестен): вторая покупка
+        // по потерянному ответу RPC — ровно тот случай, от которого защищает журнал транзакций.
         val demoFlag = if (executor.isDemo()) 1L else 0L
-        val tradedMints = db.tradeQueries.tradedMints(demoFlag).executeAsList().toSet()
+        val tradedMints = db.tradeQueries.tradedMints(demoFlag).executeAsList().toSet() +
+            db.txJournalQueries.pendingBuyMints().executeAsList()
 
         for (candidate in candidates) {
             if (candidate.mint in tradedMints) continue
@@ -200,16 +221,21 @@ class StrategyManager(
 
             // Сериализуем вход по монете + перепроверка внутри лока (защита от гонки
             // между стратегиями и от повторного входа в уже торговавшуюся монету).
-            val opened = mintLock(candidate.mint).withLock {
-                val alreadyTraded = db.tradeQueries.hasTradedMint(candidate.mint, demoFlag).executeAsOne() > 0L
-                if (alreadyTraded) return@withLock false
-                if (!riskManager.canTrade(config)) return@withLock false
-                val fresh = withFreshEntryPrice(signal) ?: return@withLock false
+            val outcome = mintLock(candidate.mint).withLock {
+                val alreadyTraded = db.tradeQueries.hasTradedMint(candidate.mint, demoFlag).executeAsOne() > 0L ||
+                    db.txJournalQueries.hasPendingBuy(candidate.mint).executeAsOne() > 0L
+                if (alreadyTraded) return@withLock EntryOutcome.SKIPPED
+                if (!riskManager.canTrade(config)) return@withLock EntryOutcome.SKIPPED
+                val fresh = withFreshEntryPrice(signal) ?: return@withLock EntryOutcome.SKIPPED
                 executeSignal(fresh, config, candidate, candles)
             }
-            if (opened) {
-                mutex.withLock { lastTradeAt[config.id] = now() }
-                return // одна сделка за цикл — дальше кулдаун
+            when (outcome) {
+                EntryOutcome.OPENED -> {
+                    mutex.withLock { lastTradeAt[config.id] = now() }
+                    return // одна сделка за цикл — дальше кулдаун
+                }
+                EntryOutcome.PORTFOLIO_BLOCKED -> return
+                EntryOutcome.SKIPPED -> Unit
             }
         }
     }
@@ -246,36 +272,59 @@ class StrategyManager(
         )
     }
 
+    /**
+     * Вход по сигналу: размер → слот портфеля (лимиты всех стратегий вместе) → проверка монеты (authority,
+     * Token-2022, влияние на цену, обратная продажа) → исполнение по котировке из проверки.
+     */
     private suspend fun executeSignal(
         signal: Signal,
         config: StrategyConfig,
         candidate: TokenCandidate,
         candles: List<Candle>,
-    ): Boolean {
+    ): EntryOutcome {
         val sizeUsd = riskManager.calculatePositionSizeUsd(
             config, signal.entryPrice, signal.stopLoss, candidate.liquidityUsd,
         )
         if (sizeUsd <= 0) {
             activityLog.warn("⚠️ ${config.name}: нулевой размер позиции (нет баланса?)")
-            return false
+            return EntryOutcome.SKIPPED
         }
-        activityLog.success(
-            "⚡ ${signal.symbol}: сигнал BUY (${(signal.confidence * 100).toInt()}%) — открываю на $${fmtNum(sizeUsd)}"
-        )
-        // ATR входа — для ATR-трейлинга (если включён); считаем по тем же свечам, что видела стратегия.
-        val atrFrac = atrFraction(candles, config.atrPeriod, signal.entryPrice)
-        val tradeId = executor.openTrade(signal, config, sizeUsd, candidate.liquidityUsd, atrFrac) ?: return false
-        notifier.sendOpenAlert(
-            symbol = signal.symbol,
-            strategyName = config.name,
-            entryPrice = signal.entryPrice,
-            sizeUsd = kotlin.math.round(sizeUsd * 100) / 100,
-            stopLoss = signal.stopLoss,
-            takeProfit = signal.takeProfit,
-            isDemo = executor.isDemo(),
-            reason = signal.reason,
-        )
-        return tradeId.isNotEmpty()
+        val slot = riskManager.reserveEntry(sizeUsd)
+        if (slot is RiskManager.EntrySlot.Denied) {
+            activityLog.warn("⏸ ${config.name}: портфель — ${slot.reason}")
+            return EntryOutcome.PORTFOLIO_BLOCKED
+        }
+        try {
+            val verdict = entryGuard?.check(signal.mint, sizeUsd, buySlippageBps(config))
+            if (verdict is EntryGuard.Verdict.Reject) {
+                // Повтор отказа из кеша не пишем: стратегия видит тот же сетап каждый цикл.
+                if (!verdict.cached) activityLog.info("🛡 ${signal.symbol}: вход отклонён — ${verdict.reason}")
+                return EntryOutcome.SKIPPED
+            }
+            val pass = verdict as? EntryGuard.Verdict.Pass
+            val check = pass?.roundTripLossPct?.let { " · потери туда-обратно ${fmtNum(it)}%" } ?: ""
+            activityLog.success(
+                "⚡ ${signal.symbol}: сигнал BUY (${(signal.confidence * 100).toInt()}%) — открываю на $${fmtNum(sizeUsd)}$check"
+            )
+            // ATR входа — для ATR-трейлинга (если включён); считаем по тем же свечам, что видела стратегия.
+            val atrFrac = atrFraction(candles, config.atrPeriod, signal.entryPrice)
+            val tradeId = executor.openTrade(signal, config, sizeUsd, candidate.liquidityUsd, atrFrac, pass?.buyQuote)
+                ?: return EntryOutcome.SKIPPED
+            notifier.sendOpenAlert(
+                symbol = signal.symbol,
+                strategyName = config.name,
+                entryPrice = signal.entryPrice,
+                sizeUsd = kotlin.math.round(sizeUsd * 100) / 100,
+                stopLoss = signal.stopLoss,
+                takeProfit = signal.takeProfit,
+                isDemo = executor.isDemo(),
+                reason = signal.reason,
+            )
+            return if (tradeId.isNotEmpty()) EntryOutcome.OPENED else EntryOutcome.SKIPPED
+        } finally {
+            // Сделка уже в БД (и считается там) или не открылась — бронь больше не нужна.
+            riskManager.releaseEntry(slot)
+        }
     }
 
     /** Режим «только сигнал»: шлём алерт с параметрами входа, дедуп по mint раз в 30 минут. */

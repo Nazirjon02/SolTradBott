@@ -14,11 +14,16 @@ import tj.khujand.solana.trading.bot.data.db.DrxDatabase
  */
 class SettingsStore(private val db: DrxDatabase) {
 
+    // JSON-значения (избранное, защита): лишние поля из будущих версий не ломают чтение.
+    private val json = Json { ignoreUnknownKeys = true; encodeDefaults = true }
+
     object Keys {
         const val TELEGRAM_TOKEN   = "telegram.token"
         const val TELEGRAM_CHAT_ID = "telegram.chat_id"
         const val DEMO_MODE        = "bot.demo_mode"
+        const val SHADOW_QUOTES    = "bot.shadow_quotes"
         const val SIGNAL_ONLY      = "bot.signal_only"
+        const val PROTECTION       = "risk.protection"
         const val DESIRED_STATE    = "bot.desired_state"
         const val RPC_URL          = "solana.rpc_url"
         const val WALLET_SEED      = "wallet.seed_phrase"
@@ -57,6 +62,11 @@ class SettingsStore(private val db: DrxDatabase) {
     fun getDemoMode(): Boolean?      = get(Keys.DEMO_MODE)?.toBooleanStrictOrNull()
     fun setDemoMode(v: Boolean)      = set(Keys.DEMO_MODE, v.toString())
 
+    // SHADOW: DEMO, но вход и выход исполняются по реальным котировкам Jupiter (без отправки
+    // транзакций) — в результатах DEMO видны комиссии пулов, проскальзывание и монеты без продажи.
+    fun getShadowQuotes(): Boolean   = get(Keys.SHADOW_QUOTES)?.toBooleanStrictOrNull() ?: false
+    fun setShadowQuotes(v: Boolean)  = set(Keys.SHADOW_QUOTES, v.toString())
+
     // Режим «только сигнал»: бот не открывает сделки, а лишь шлёт сигнал + параметры входа.
     fun getSignalOnly(): Boolean?    = get(Keys.SIGNAL_ONLY)?.toBooleanStrictOrNull()
     fun setSignalOnly(v: Boolean)    = set(Keys.SIGNAL_ONLY, v.toString())
@@ -82,6 +92,16 @@ class SettingsStore(private val db: DrxDatabase) {
     fun getAiApiKey(): String?       = get(Keys.AI_API_KEY)?.takeIf { it.isNotBlank() }
     fun setAiApiKey(v: String)       = set(Keys.AI_API_KEY, v)
 
+    // ─── Защита торговли (проверка монеты, лимиты портфеля, продажа) ─────────
+
+    /** Настройки защиты; нет записи или она не читается — значения по умолчанию (защита включена). */
+    fun getProtection(): ProtectionSettings =
+        get(Keys.PROTECTION)?.takeIf { it.isNotBlank() }
+            ?.let { runCatching { json.decodeFromString<ProtectionSettings>(it) }.getOrNull() }
+            ?: ProtectionSettings()
+
+    fun setProtection(v: ProtectionSettings) = set(Keys.PROTECTION, json.encodeToString(v))
+
     // ─── Избранное на экране «Анализ» ────────────────────────────────────────
 
     // Избранные монеты храним как JSON-список самодостаточных снимков [FavoriteCoin] в том же
@@ -90,14 +110,12 @@ class SettingsStore(private val db: DrxDatabase) {
     // сканера. Раньше тут лежали только mint-адреса, а карточка бралась из свежего разбора, поэтому
     // после ротации кандидатов избранное выглядело «пропавшим». Старый формат читаем для совместимости.
 
-    private val favoritesJson = Json { ignoreUnknownKeys = true; encodeDefaults = true }
-
     /** Все избранные монеты — снимки из БД. Пусто, если ничего не отмечено. */
     fun getFavorites(): List<FavoriteCoin> {
         val raw = get(Keys.ANALYSIS_FAVORITES)?.takeIf { it.isNotBlank() } ?: return emptyList()
         // Новый формат — JSON-массив. Старый — mint-адреса через перевод строки (мигрируем на лету).
         return if (raw.trimStart().startsWith("[")) {
-            runCatching { favoritesJson.decodeFromString<List<FavoriteCoin>>(raw) }.getOrDefault(emptyList())
+            runCatching { json.decodeFromString<List<FavoriteCoin>>(raw) }.getOrDefault(emptyList())
         } else {
             raw.split('\n').map { it.trim() }.filter { it.isNotBlank() }
                 .map { FavoriteCoin(mint = it) }
@@ -105,7 +123,7 @@ class SettingsStore(private val db: DrxDatabase) {
     }
 
     private fun saveFavorites(list: List<FavoriteCoin>) =
-        set(Keys.ANALYSIS_FAVORITES, favoritesJson.encodeToString(list))
+        set(Keys.ANALYSIS_FAVORITES, json.encodeToString(list))
 
     /** Множество mint-адресов избранного — для отметки звёздочки на карточках. */
     fun getFavoriteMints(): Set<String> = getFavorites().mapTo(mutableSetOf()) { it.mint }

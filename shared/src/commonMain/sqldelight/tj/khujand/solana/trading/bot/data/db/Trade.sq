@@ -33,7 +33,17 @@ CREATE TABLE IF NOT EXISTS trade (
     entry_atr_frac REAL NOT NULL DEFAULT 0,
     -- Когда цена последний раз обновила пик (мс) — для выхода «нет нового максимума».
     -- Поздняя колонка, пишется updatePeak; 0 = нет данных (отсчёт от opened_at).
-    peak_at INTEGER NOT NULL DEFAULT 0
+    peak_at INTEGER NOT NULL DEFAULT 0,
+    -- Последняя цена, которую видел монитор: нереализованный PnL для лимитов портфеля
+    -- без лишних запросов к API. 0 = ещё не обновлялась.
+    last_price REAL NOT NULL DEFAULT 0,
+    -- Неудачные попытки выхода подряд, время, раньше которого монитор не повторяет продажу,
+    -- и причина последней неудачи. От EXIT_BLOCKED_AFTER подряд — «продажа заблокирована».
+    exit_failures INTEGER NOT NULL DEFAULT 0,
+    exit_retry_at INTEGER NOT NULL DEFAULT 0,
+    exit_note TEXT NOT NULL DEFAULT '',
+    -- Как исполнялась сделка: DEMO, SHADOW (DEMO по котировкам Jupiter) или REAL; '' — старые сделки.
+    exec_mode TEXT NOT NULL DEFAULT ''
 );
 
 getAll:
@@ -85,6 +95,35 @@ UPDATE trade SET initial_stop = ?, entry_atr_frac = ? WHERE id = ?;
 
 updatePeak:
 UPDATE trade SET peak_price = ?, peak_at = ? WHERE id = ?;
+
+updateLastPrice:
+UPDATE trade SET last_price = ? WHERE id = ?;
+
+-- Вне insert (поздняя колонка): пишется TradeExecutor'ом вместе со строкой сделки.
+setExecMode:
+UPDATE trade SET exec_mode = ? WHERE id = ?;
+
+-- Продажа не прошла: счётчик неудач подряд, когда пробовать снова и почему не вышло.
+setExitFailure:
+UPDATE trade SET exit_failures = ?, exit_retry_at = ?, exit_note = ? WHERE id = ? AND status = 'OPEN';
+
+clearExitFailures:
+UPDATE trade SET exit_failures = 0, exit_retry_at = 0, exit_note = '' WHERE id = ?;
+
+-- Лимиты портфеля: открытые сделки текущего режима (demo/real) всех стратегий.
+getOpenTradesByMode:
+SELECT * FROM trade WHERE status = 'OPEN' AND is_demo = ?;
+
+-- Реализованный PnL всех стратегий режима с момента (начало дня / неделя назад).
+realizedPnlSince:
+SELECT COALESCE(SUM(pnl), 0.0) FROM trade
+WHERE status = 'CLOSED' AND is_demo = ? AND closed_at >= ?;
+
+-- Последние закрытые сделки режима (новые первыми) — пауза после серии убытков.
+recentClosed:
+SELECT pnl, closed_at FROM trade
+WHERE status = 'CLOSED' AND is_demo = ? AND closed_at IS NOT NULL
+ORDER BY closed_at DESC LIMIT ?;
 
 applyPartialClose:
 UPDATE trade SET qty_remaining = ?, tp1_done = ?, tp2_done = ?, pnl = ?, fee = ? WHERE id = ? AND status = 'OPEN';

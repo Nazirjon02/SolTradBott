@@ -34,6 +34,7 @@ import tj.khujand.solana.trading.bot.core.engine.ActivityLog
 import tj.khujand.solana.trading.bot.core.engine.BotEngine
 import tj.khujand.solana.trading.bot.core.engine.TradeExecutor
 import tj.khujand.solana.trading.bot.core.engine.TradeMonitor
+import tj.khujand.solana.trading.bot.core.risk.EntryGuard
 import tj.khujand.solana.trading.bot.core.risk.RiskManager
 import tj.khujand.solana.trading.bot.core.strategy.StrategyManager
 import tj.khujand.solana.trading.bot.data.BotStatus
@@ -42,6 +43,7 @@ import tj.khujand.solana.trading.bot.data.createDatabaseDriver
 import tj.khujand.solana.trading.bot.data.db.DrxDatabase
 import tj.khujand.solana.trading.bot.exchange.dex.AccountCache
 import tj.khujand.solana.trading.bot.exchange.dex.DexClient
+import tj.khujand.solana.trading.bot.exchange.dex.JupiterSwapQuotes
 import tj.khujand.solana.trading.bot.exchange.dex.TokenCache
 import tj.khujand.solana.trading.bot.exchange.dex.TokenScanner
 import tj.khujand.solana.trading.bot.seedDefaultStrategies
@@ -75,8 +77,11 @@ fun main() {
     val tokenCache = TokenCache(db)
     val scanner = TokenScanner(client, tokenCache)
     val activityLog = ActivityLog()
-    val executor = TradeExecutor(client, db, settingsStore, accountCache, activityLog)
-    val riskManager = RiskManager(db, accountCache, executor::isDemo)
+    // Котировки Jupiter и mint-аккаунты — общие для проверки входа и исполнения (один кеш).
+    val quotes = JupiterSwapQuotes(client)
+    val executor = TradeExecutor(client, db, settingsStore, accountCache, activityLog, quotes)
+    val riskManager = RiskManager(db, accountCache, executor::isDemo, settingsStore::getProtection)
+    val entryGuard = EntryGuard(quotes, settingsStore::getProtection)
 
     // Telegram: токен из БД (приоритет) или из env. Пусто — нотификации глушатся.
     val tgToken = settingsStore.getTelegramToken() ?: config.telegramToken
@@ -84,7 +89,7 @@ fun main() {
     val notifier = if (tgToken.isNotBlank() && tgChatId != 0L) TelegramNotifier(tgToken, tgChatId) else NoopNotifier
 
     val strategyManager = StrategyManager(
-        client, riskManager, notifier, db, scanner, executor, activityLog, settingsStore
+        client, riskManager, notifier, db, scanner, executor, activityLog, settingsStore, entryGuard
     )
     val engine = BotEngine(client, strategyManager, notifier, db, accountCache, executor, settingsStore, activityLog)
 
@@ -145,7 +150,7 @@ fun main() {
                         call.respond(
                             mapOf(
                                 "status" to engine.getStatus().name,
-                                "mode" to if (executor.isDemo()) "DEMO" else "REAL"
+                                "mode" to executor.modeLabel()
                             )
                         )
                     }
@@ -198,14 +203,20 @@ fun main() {
                         )
                     }
 
-                    // Переключатель DEMO/REAL (глобальный).
+                    // Переключатель DEMO/SHADOW/REAL (глобальный). SHADOW — DEMO по котировкам Jupiter.
                     post("/mode/demo") {
                         settingsStore.setDemoMode(true)
-                        call.respond(mapOf("mode" to "DEMO"))
+                        settingsStore.setShadowQuotes(false)
+                        call.respond(mapOf("mode" to executor.modeLabel()))
+                    }
+                    post("/mode/shadow") {
+                        settingsStore.setDemoMode(true)
+                        settingsStore.setShadowQuotes(true)
+                        call.respond(mapOf("mode" to executor.modeLabel()))
                     }
                     post("/mode/real") {
                         settingsStore.setDemoMode(false)
-                        call.respond(mapOf("mode" to "REAL"))
+                        call.respond(mapOf("mode" to executor.modeLabel()))
                     }
                 }
 

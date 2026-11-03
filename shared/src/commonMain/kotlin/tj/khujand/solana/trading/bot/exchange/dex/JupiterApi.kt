@@ -16,9 +16,7 @@ import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.jsonObject
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
-
-/** Wrapped SOL: Price API v3 принимает в `ids` только mint-адреса (тикер "SOL" отдаёт пустой `{}`). */
-private const val SOL_MINT = "So11111111111111111111111111111111111111112"
+import kotlin.time.Clock
 
 @Serializable
 data class JupiterPriceResponse(
@@ -66,6 +64,7 @@ class JupiterApi {
         val url = "$baseUrl/price/v3"
         return try {
             val response = getWithRetry(url, apiKey) {
+                // Price API v3 принимает в `ids` только mint-адреса (тикер "SOL" отдаёт пустой `{}`).
                 parameter("ids", SOL_MINT)
             } ?: return null
             val text = response.bodyAsText()
@@ -90,23 +89,69 @@ class JupiterApi {
         amount: Long,
         slippageBps: Int,
         apiKey: String? = null
-    ): JsonObject? {
+    ): JsonObject? = (getQuoteResult(inputMint, outputMint, amount, slippageBps, apiKey) as? QuoteResult.Ok)?.quote?.raw
+
+    /**
+     * Котировка с причиной неудачи: HTTP 400 — Jupiter не нашёл маршрут (монета не торгуется или не
+     * продаётся на такой объём) → [QuoteResult.NoRoute]; сеть, 429, 5xx (после повторов) и 401/403 —
+     * [QuoteResult.Failed]. Проверке входа это важно: «нет маршрута продажи» — повод отказаться от
+     * монеты, а сбой сети — нет.
+     */
+    suspend fun getQuoteResult(
+        inputMint: String,
+        outputMint: String,
+        amount: Long,
+        slippageBps: Int,
+        apiKey: String? = null
+    ): QuoteResult {
         val url = "$baseUrl/swap/v1/quote"
-        return try {
-            val response = getWithRetry(url, apiKey) {
-                parameter("inputMint", inputMint)
-                parameter("outputMint", outputMint)
-                parameter("amount", amount)
-                parameter("slippageBps", slippageBps)
-            } ?: return null
-            response.body()
-        } catch (e: CancellationException) {
-            throw e
-        } catch (e: Exception) {
-            println("❌ Jupiter quote error: ${e.message}")
-            null
+        var attempt = 0
+        var backoffMs = 500L
+        var lastError = "нет ответа"
+        while (attempt < maxRetries) {
+            try {
+                logApi("GET $url attempt=${attempt + 1}")
+                val response = client.get(url) {
+                    applyApiKey(this, apiKey)
+                    parameter("inputMint", inputMint)
+                    parameter("outputMint", outputMint)
+                    parameter("amount", amount)
+                    parameter("slippageBps", slippageBps)
+                }
+                val status = response.status
+                if (status.value == 429 || status.value >= 500) {
+                    lastError = "HTTP ${status.value}"
+                    logApi("GET $url -> HTTP ${status.value}, retrying")
+                } else {
+                    val text = response.bodyAsText()
+                    if (!status.isSuccess()) {
+                        logApi("GET $url -> HTTP ${status.value} body=${text.take(logBodyLimit)}")
+                        val reason = jupiterErrorMessage(text) ?: "HTTP ${status.value}"
+                        return if (status.value == 400) QuoteResult.NoRoute(reason) else QuoteResult.Failed(reason)
+                    }
+                    logApi("GET $url -> ${status.value} ok")
+                    val quote = parseSwapQuote(json.parseToJsonElement(text).jsonObject, Clock.System.now().toEpochMilliseconds())
+                    return quote?.let { QuoteResult.Ok(it) } ?: QuoteResult.Failed("в котировке нет сумм")
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                lastError = e.message ?: "ошибка сети"
+                logApi("GET $url failed: $lastError")
+            }
+            attempt++
+            if (attempt < maxRetries) {
+                delay(backoffMs)
+                backoffMs = (backoffMs * 2).coerceAtMost(4000L)
+            }
         }
+        return QuoteResult.Failed(lastError)
     }
+
+    /** Текст ошибки Jupiter из тела ответа (`{"error": "..."}`), null — тело не JSON или без ошибки. */
+    private fun jupiterErrorMessage(body: String): String? = runCatching {
+        json.parseToJsonElement(body).jsonObject["error"]?.jsonPrimitive?.content
+    }.getOrNull()?.takeIf { it.isNotBlank() }
 
     data class QuoteDebugResult(
         val quote: JsonObject? = null,

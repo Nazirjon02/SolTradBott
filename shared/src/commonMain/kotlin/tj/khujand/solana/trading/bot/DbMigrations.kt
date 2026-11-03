@@ -3,11 +3,14 @@ package tj.khujand.solana.trading.bot
 import app.cash.sqldelight.db.SqlDriver
 
 /**
- * Идемпотентно добавляет новые колонки в таблицы `strategy` и `trade` для уже существующих БД.
+ * Идемпотентно добавляет новые колонки в таблицы `strategy` и `trade` (и новые таблицы) для уже
+ * существующих БД.
  *
  * Зачем: `createDatabaseDriver` вызывает `DrxDatabase.Schema.create`, но все таблицы —
  * `CREATE TABLE IF NOT EXISTS`, а версионных .sqm-миграций в проекте нет. Значит на уже
  * созданной БД новые колонки из CREATE TABLE НЕ появятся, и `SELECT *` (getAll) упадёт.
+ * Android-драйвер вызывает Schema.create только для нового файла БД — поэтому новые таблицы
+ * тоже создаём здесь (`CREATE TABLE IF NOT EXISTS` — копия DDL из .sq).
  *
  * Логика (как в MRX `migrateStrategyTable`):
  * - Новая БД → CREATE TABLE уже создал все колонки → ALTER падает «duplicate column» → ловим.
@@ -17,6 +20,19 @@ import app.cash.sqldelight.db.SqlDriver
  */
 fun migrateStrategyTable(driver: SqlDriver) {
     val alters = listOf(
+        // Журнал REAL-транзакций (TxJournal.sq)
+        """CREATE TABLE IF NOT EXISTS tx_journal (
+            signature TEXT NOT NULL PRIMARY KEY,
+            kind TEXT NOT NULL,
+            mint TEXT NOT NULL,
+            symbol TEXT NOT NULL,
+            trade_id TEXT,
+            status TEXT NOT NULL,
+            payload TEXT NOT NULL,
+            note TEXT NOT NULL DEFAULT '',
+            created_at INTEGER NOT NULL,
+            updated_at INTEGER NOT NULL
+        )""",
         "ALTER TABLE strategy ADD COLUMN range_filter_enabled INTEGER NOT NULL DEFAULT 0",
         "ALTER TABLE strategy ADD COLUMN range_max_entry_pct REAL NOT NULL DEFAULT 0.8",
         "ALTER TABLE strategy ADD COLUMN range_lookback_bars INTEGER NOT NULL DEFAULT 100",
@@ -84,11 +100,25 @@ fun migrateStrategyTable(driver: SqlDriver) {
         "ALTER TABLE strategy ADD COLUMN ew_w3_target REAL NOT NULL DEFAULT 1.618",
         "ALTER TABLE strategy ADD COLUMN ew_w5_target REAL NOT NULL DEFAULT 1.0",
         "ALTER TABLE strategy ADD COLUMN ew_min_reward_risk REAL NOT NULL DEFAULT 1.5",
+        // Пробой на объёме
+        "ALTER TABLE strategy ADD COLUMN vb_lookback_bars INTEGER NOT NULL DEFAULT 60",
+        "ALTER TABLE strategy ADD COLUMN vb_min_impulse_pct REAL NOT NULL DEFAULT 20.0",
+        "ALTER TABLE strategy ADD COLUMN vb_min_pullback_pct REAL NOT NULL DEFAULT 5.0",
+        "ALTER TABLE strategy ADD COLUMN vb_max_pullback_retrace REAL NOT NULL DEFAULT 0.786",
+        "ALTER TABLE strategy ADD COLUMN vb_near_high_pct REAL NOT NULL DEFAULT 8.0",
+        "ALTER TABLE strategy ADD COLUMN vb_volume_mult REAL NOT NULL DEFAULT 2.5",
+        "ALTER TABLE strategy ADD COLUMN vb_max_extension_pct REAL NOT NULL DEFAULT 15.0",
         // Таблица trade: база для R и ATR-трейлинга (0 = нет данных, старые сделки)
         "ALTER TABLE trade ADD COLUMN initial_stop REAL NOT NULL DEFAULT 0",
         "ALTER TABLE trade ADD COLUMN entry_atr_frac REAL NOT NULL DEFAULT 0",
         // Время последнего пика — для выхода «нет нового максимума» (0 = считать от входа)
         "ALTER TABLE trade ADD COLUMN peak_at INTEGER NOT NULL DEFAULT 0",
+        // Лимиты портфеля (последняя цена), неудачные выходы (EXIT_BLOCKED) и режим исполнения
+        "ALTER TABLE trade ADD COLUMN last_price REAL NOT NULL DEFAULT 0",
+        "ALTER TABLE trade ADD COLUMN exit_failures INTEGER NOT NULL DEFAULT 0",
+        "ALTER TABLE trade ADD COLUMN exit_retry_at INTEGER NOT NULL DEFAULT 0",
+        "ALTER TABLE trade ADD COLUMN exit_note TEXT NOT NULL DEFAULT ''",
+        "ALTER TABLE trade ADD COLUMN exec_mode TEXT NOT NULL DEFAULT ''",
     )
     for (sql in alters) {
         try {

@@ -67,7 +67,7 @@ class BotEngine(
         activityLog.success("🟢 Движок запущен — стратегий активно: ${running.size}")
         // «Запущен» — только когда реально есть что запускать: раньше это уходило в Telegram
         // до проверки, и сразу за ним следовало «⚠️ Бот не запущен».
-        notifier.send("🟢 DRX Bot запущен (${if (executor.isDemo()) "DEMO" else "REAL"})")
+        notifier.send("🟢 DRX Bot запущен (${executor.modeLabel()})")
         running.forEach { s ->
             scope.launch { strategyManager.run(s.toStrategyConfig()) }
         }
@@ -230,6 +230,9 @@ class BotEngine(
                 takeProfit = t.take_profit,
                 isDemo = t.is_demo == 1L,
                 openedAt = t.opened_at,
+                exitFailures = t.exit_failures.toInt(),
+                exitNote = t.exit_note,
+                execMode = t.exec_mode,
             )
         }
     }
@@ -250,7 +253,7 @@ class BotEngine(
         var closed = 0
         open.forEach { t ->
             val price = manualClosePrice(t)
-            val result = price?.let { executor.closeTrade(t, it, 100.0, "Закрыто вручную") }
+            val result = price?.let { executor.closeTrade(t, it, 100.0, "Закрыто вручную", manual = true) }
             when {
                 result != null -> closed++
                 // Уже закрыта параллельно (монитором по стопу/тейку) — цель достигнута.
@@ -288,11 +291,18 @@ class BotEngine(
             activityLog.error("⚠️ ${t.symbol}: нет текущей цены — позиция не закрыта, повторите позже")
             return ClosePositionResult(ClosePositionStatus.FAILED, symbol = t.symbol)
         }
-        val result = executor.closeTrade(t, price, 100.0, "Закрыто вручную") ?: run {
+        val result = executor.closeTrade(t, price, 100.0, "Закрыто вручную", manual = true) ?: run {
             // Пока ждали лок, позицию закрыл монитор (стоп/тейк) — сообщаем «уже закрыта», а не сбой.
             if (!executor.isOpen(t.id)) return ClosePositionResult(ClosePositionStatus.NOT_OPEN, symbol = t.symbol)
-            activityLog.error("⚠️ ${t.symbol}: не удалось закрыть вручную — проверьте позицию")
+            val why = if (executor.hasPendingSell(t.id)) "продажа уже отправлена, ждём подтверждения"
+            else "проверьте позицию"
+            activityLog.error("⚠️ ${t.symbol}: не удалось закрыть вручную — $why")
             return ClosePositionResult(ClosePositionStatus.FAILED, symbol = t.symbol)
+        }
+        // Токенов на кошельке не было — позиция просто снята с сопровождения, выручки нет.
+        if (result.soldNothing) {
+            notifier.send("⚠️ ${t.symbol}: токенов на кошельке нет — позиция закрыта без продажи (PnL неизвестен)")
+            return ClosePositionResult(ClosePositionStatus.CLOSED, symbol = t.symbol)
         }
 
         val pnlUsd = kotlin.math.round(result.pnlUsd * 100) / 100

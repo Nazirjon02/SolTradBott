@@ -83,6 +83,7 @@ import kotlinx.datetime.toLocalDateTime
 import tj.khujand.solana.trading.bot.core.engine.ActivityEvent
 import tj.khujand.solana.trading.bot.core.engine.ActivityLevel
 import tj.khujand.solana.trading.bot.core.engine.ActivityStats
+import tj.khujand.solana.trading.bot.core.engine.EXIT_BLOCKED_AFTER
 import tj.khujand.solana.trading.bot.core.strategy.StrategyConfig
 import tj.khujand.solana.trading.bot.core.strategy.StrategyType
 import tj.khujand.solana.trading.bot.domain.backtest.BacktestReport
@@ -96,6 +97,7 @@ import tj.khujand.solana.trading.bot.exchange.dex.GtPoolList
 import tj.khujand.solana.trading.bot.data.AccountBalance
 import tj.khujand.solana.trading.bot.data.BotStatus
 import tj.khujand.solana.trading.bot.data.OpenPosition
+import tj.khujand.solana.trading.bot.data.ProtectionSettings
 import tj.khujand.solana.trading.bot.data.SettingsStore
 import tj.khujand.solana.trading.bot.data.db.DrxDatabase
 import tj.khujand.solana.trading.bot.util.formatDexTime
@@ -159,7 +161,8 @@ fun DrxApp(runtime: DrxRuntime? = null) {
                     rpcUrl = s.getRpcUrl() ?: "https://api.mainnet-beta.solana.com",
                     walletSeed = s.getWalletSeed() ?: "",
                     telegramToken = s.getTelegramToken() ?: "",
-                    telegramChatId = s.getTelegramChatId()?.toString() ?: ""
+                    telegramChatId = s.getTelegramChatId()?.toString() ?: "",
+                    protection = s.getProtection(),
                 )
             } ?: DrxSettings()
         )
@@ -167,6 +170,8 @@ fun DrxApp(runtime: DrxRuntime? = null) {
 
     // Режим DEMO/REAL — применяется сразу (исполнитель читает флаг из БД на каждой сделке).
     var demoMode by remember { mutableStateOf(settingsStore?.getDemoMode() ?: true) }
+    // SHADOW (DEMO по котировкам Jupiter) — тоже сразу.
+    var shadowMode by remember { mutableStateOf(settingsStore?.getShadowQuotes() ?: false) }
 
     // Режим «только сигнал» — общий StateFlow с Telegram.
     val fallbackSignalOnly = remember { MutableStateFlow(false) }
@@ -309,12 +314,17 @@ fun DrxApp(runtime: DrxRuntime? = null) {
                         settings = settings,
                         connected = runtime != null,
                         demoMode = demoMode,
+                        shadowMode = shadowMode,
                         demoBalance = balance?.demoUsd ?: 10_000.0,
                         signalOnly = signalOnly,
                         onDemoModeChange = { v ->
                             // REAL требует seed-фразы — без неё исполнитель всё равно не откроет сделку.
                             demoMode = v
                             settingsStore?.setDemoMode(v)
+                        },
+                        onShadowModeChange = { v ->
+                            shadowMode = v
+                            settingsStore?.setShadowQuotes(v)
                         },
                         onSignalOnlyChange = { v ->
                             val sm = runtime?.strategyManager
@@ -328,6 +338,8 @@ fun DrxApp(runtime: DrxRuntime? = null) {
                                 if (newSettings.walletSeed.isNotBlank()) setWalletSeed(newSettings.walletSeed.trim())
                                 setTelegramToken(newSettings.telegramToken.trim())
                                 setTelegramChatId(newSettings.telegramChatId.trim().toLongOrNull() ?: 0L)
+                                // Защиту читают на каждой проверке — действует со следующего входа/выхода.
+                                setProtection(newSettings.protection)
                             }
                             // Новый токен/чат применяем к живому notifier движка сразу.
                             runtime?.notifier?.updateCredentials(
@@ -351,6 +363,7 @@ data class DrxSettings(
     val walletSeed: String = "",
     val telegramToken: String = "",
     val telegramChatId: String = "",
+    val protection: ProtectionSettings = ProtectionSettings(),
 )
 
 // ─── Bottom nav ───────────────────────────────────────────────────────────────
@@ -1101,7 +1114,7 @@ fun PositionCard(pos: OpenPosition, onClose: () -> Unit) {
                         )
                     }
                     Text(pos.symbol, fontWeight = FontWeight.ExtraBold, color = TextPrimary, fontSize = 15.sp)
-                    Tag(if (pos.isDemo) "DEMO" else "REAL", if (pos.isDemo) Purple else Amber)
+                    Tag(pos.execMode.ifEmpty { if (pos.isDemo) "DEMO" else "REAL" }, if (pos.isDemo) Purple else Amber)
                 }
                 Text(
                     "${if (pos.pnlPercent >= 0) "+" else ""}${"%.1f".format(pos.pnlPercent)}%",
@@ -1136,6 +1149,24 @@ fun PositionCard(pos: OpenPosition, onClose: () -> Unit) {
                 "SL ${fmtPrice(pos.stopLoss)}  •  TP ${fmtPrice(pos.takeProfit)}",
                 fontSize = 11.sp, color = TextSecondary
             )
+
+            // Продажа не прошла: монитор повторяет с бо́льшим slippage, после EXIT_BLOCKED_AFTER подряд — с паузой.
+            if (pos.exitFailures > 0) {
+                val blocked = pos.exitFailures >= EXIT_BLOCKED_AFTER
+                Spacer(Modifier.height(8.dp))
+                Surface(
+                    color = if (blocked) RedDim else Amber.copy(alpha = 0.12f),
+                    shape = RoundedCornerShape(8.dp),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text(
+                        "${if (blocked) "🚫 Продажа заблокирована" else "⚠️ Продажа не прошла"} " +
+                            "(${pos.exitFailures} подряд): ${pos.exitNote}",
+                        color = if (blocked) Red else Amber, fontSize = 12.sp,
+                        modifier = Modifier.padding(10.dp)
+                    )
+                }
+            }
 
             Spacer(Modifier.height(8.dp))
             // Строка 3: кол-во токенов • текущая стоимость • вложено
@@ -2256,6 +2287,15 @@ fun StrategyFormScreen(
     var ewW5Target by remember { mutableStateOf(c?.ewW5Target?.toFloat() ?: 1f) }
     var ewMinRr by remember { mutableStateOf(c?.ewMinRewardRisk?.toFloat() ?: 1.5f) }
 
+    // ── Пробой на объёме ──
+    var vbLookback by remember { mutableStateOf((c?.vbLookbackBars ?: 60).toString()) }
+    var vbMinImpulse by remember { mutableStateOf(c?.vbMinImpulsePct?.toFloat() ?: 20f) }
+    var vbMinPullback by remember { mutableStateOf(c?.vbMinPullbackPct?.toFloat() ?: 5f) }
+    var vbMaxRetrace by remember { mutableStateOf(c?.vbMaxPullbackRetrace?.toFloat() ?: 0.786f) }
+    var vbNearHigh by remember { mutableStateOf(c?.vbNearHighPct?.toFloat() ?: 8f) }
+    var vbVolume by remember { mutableStateOf(c?.vbVolumeMult?.toFloat() ?: 2.5f) }
+    var vbMaxExtension by remember { mutableStateOf(c?.vbMaxExtensionPct?.toFloat() ?: 15f) }
+
     // ── Риск ──
     var maxDailyLossEnabled by remember { mutableStateOf(c?.maxDailyLossEnabled ?: true) }
     var maxDailyLoss by remember { mutableStateOf(c?.maxDailyLoss?.toFloat() ?: 5f) }
@@ -2380,6 +2420,34 @@ fun StrategyFormScreen(
                                 riskPerTrade = 1f
                                 maxDrawdown = 50f
                                 minAge = "720"
+                            }
+                            // Новый «Пробой на объёме» — как в сиде (volumeBreakoutDefaults): 1m, молодые
+                            // монеты, 30% на +2R → безубыток, 30% на +4R, остаток под трейлингом «по иксам».
+                            if (!isEdit && t == StrategyType.VOLUME_BREAKOUT) {
+                                timeframe = "1m"
+                                positionSize = 10f
+                                slippage = 2f
+                                stopLoss = 15f
+                                takeProfit = 300f
+                                timeStop = "60"
+                                liqExit = 30f
+                                rLadder = true
+                                tp1R = 2f
+                                tp2R = 4f
+                                tp1Close = 30f
+                                tp2Close = 30f
+                                beAfterTp1 = true
+                                breakEvenOffset = 2f
+                                runner = true
+                                tieredTrail = true
+                                staleExit = true
+                                staleExitMinutes = "120"
+                                riskSizing = true
+                                riskPerTrade = 1f
+                                maxDrawdown = 40f
+                                minLiq = "15000"
+                                minAge = "20"
+                                maxAge = "720"
                             }
                         }
                     }
@@ -2784,6 +2852,39 @@ fun StrategyFormScreen(
                 }
             }
 
+            // 8d. Пробой на объёме
+            if (type == StrategyType.VOLUME_BREAKOUT.name) {
+                FormSection("📈  Пробой на объёме") {
+                    FormTextField("Окно поиска максимума, баров", vbLookback, isNumber = true) { vbLookback = it }
+                    FormSlider("Импульс к максимуму не меньше", vbMinImpulse, 5f, 200f,
+                        "+${"%.0f".format(vbMinImpulse)}%") { vbMinImpulse = it }
+                    FormSlider("Первый откат не мельче", vbMinPullback, 1f, 30f,
+                        "−${"%.0f".format(vbMinPullback)}% от максимума") { vbMinPullback = it }
+                    FormSlider("Откат не глубже", vbMaxRetrace, 0.382f, 0.95f,
+                        "${"%.3f".format(vbMaxRetrace)} импульса") { vbMaxRetrace = it }
+                    FormSlider("Ретест: закрытия под максимумом не ниже", vbNearHigh, 1f, 20f,
+                        "−${"%.0f".format(vbNearHigh)}%") { vbNearHigh = it }
+                    FormSlider("Объём бара пробоя", vbVolume, 1.5f, 10f,
+                        "×${"%.1f".format(vbVolume)} среднего") { vbVolume = it }
+                    FormSlider("Не догонять выше максимума на", vbMaxExtension, 3f, 50f,
+                        "+${"%.0f".format(vbMaxExtension)}%") { vbMaxExtension = it }
+                    Surface(color = Blue.copy(alpha = 0.08f), shape = RoundedCornerShape(8.dp)) {
+                        Text(
+                            "Сетап: импульс к максимуму → первый откат (минимум выше начала импульса) → цена " +
+                                "снова у максимума → закрытый бар пробивает максимум на всплеске объёма. Вход — " +
+                                "на самом пробое, по закрытию бара (формирующийся бар не считается). Цена, уже " +
+                                "ушедшая выше максимума больше заданного, не догоняется. Стоп — под базой из трёх " +
+                                "баров перед пробоем; если он дальше Stop Loss из настроек — вход пропускается.\n" +
+                                "Выход важнее входа: после пробоя пампы часто полностью откатываются — держите " +
+                                "частичные фиксации и трейлинг «по иксам». Монете нужно ≥ 16 закрытых баров " +
+                                "(ATR-период + 2).",
+                            fontSize = 11.sp, color = TextSecondary,
+                            modifier = Modifier.padding(10.dp), lineHeight = 16.sp
+                        )
+                    }
+                }
+            }
+
             // 9. Dars
             if (type == StrategyType.DARS.name) {
                 FormSection("🧠  Dars / Smart Money") {
@@ -2932,6 +3033,13 @@ fun StrategyFormScreen(
                     ewW3Target = ewW3Target.toDouble(),
                     ewW5Target = ewW5Target.toDouble(),
                     ewMinRewardRisk = ewMinRr.toDouble(),
+                    vbLookbackBars = vbLookback.toIntOrNull()?.coerceAtLeast(10) ?: 60,
+                    vbMinImpulsePct = vbMinImpulse.toDouble(),
+                    vbMinPullbackPct = vbMinPullback.toDouble(),
+                    vbMaxPullbackRetrace = vbMaxRetrace.toDouble(),
+                    vbNearHighPct = vbNearHigh.toDouble(),
+                    vbVolumeMult = vbVolume.toDouble(),
+                    vbMaxExtensionPct = vbMaxExtension.toDouble(),
                 ))
             },
             modifier = Modifier
@@ -2956,9 +3064,11 @@ fun SettingsScreen(
     settings: DrxSettings,
     connected: Boolean = false,
     demoMode: Boolean = true,
+    shadowMode: Boolean = false,
     demoBalance: Double = 10_000.0,
     signalOnly: Boolean = false,
     onDemoModeChange: (Boolean) -> Unit = {},
+    onShadowModeChange: (Boolean) -> Unit = {},
     onSignalOnlyChange: (Boolean) -> Unit = {},
     onResetDemo: () -> Unit = {},
     onResetBot: () -> Unit = {},
@@ -2969,6 +3079,7 @@ fun SettingsScreen(
     var showSeed by remember { mutableStateOf(false) }
     var telegramToken by remember(settings) { mutableStateOf(settings.telegramToken) }
     var telegramChatId by remember(settings) { mutableStateOf(settings.telegramChatId) }
+    var protection by remember(settings) { mutableStateOf(settings.protection) }
     var saved by remember { mutableStateOf(false) }
     var confirmReset by remember { mutableStateOf(false) }
 
@@ -3009,8 +3120,12 @@ fun SettingsScreen(
                     modifier = Modifier.fillMaxWidth()
                 ) {
                     Text(
-                        if (demoMode) "🎮  DEMO — сделки виртуальные (счёт ${"%.0f".format(demoBalance)} USD)"
-                        else "💸  REAL — реальные свопы через Jupiter с вашего кошелька!",
+                        when {
+                            !demoMode -> "💸  REAL — реальные свопы через Jupiter с вашего кошелька!"
+                            shadowMode -> "🎮  DEMO · SHADOW — счёт виртуальный (${"%.0f".format(demoBalance)} USD), " +
+                                "вход и выход по реальным котировкам Jupiter"
+                            else -> "🎮  DEMO — сделки виртуальные (счёт ${"%.0f".format(demoBalance)} USD)"
+                        },
                         fontSize = 12.sp,
                         color = if (demoMode) Purple else Red,
                         modifier = Modifier.padding(12.dp)
@@ -3018,6 +3133,15 @@ fun SettingsScreen(
                 }
                 Spacer(Modifier.height(4.dp))
                 FormToggle("Режим DEMO (paper-trading)", demoMode) { onDemoModeChange(it) }
+                if (demoMode) {
+                    FormToggle("SHADOW: исполнять по котировкам Jupiter", shadowMode) { onShadowModeChange(it) }
+                    Text(
+                        "Без SHADOW DEMO покупает и продаёт по цене графика — без комиссий пулов и проскальзывания, " +
+                            "поэтому результат лучше реального. SHADOW берёт суммы из настоящих котировок Jupiter " +
+                            "на ваш размер (транзакции не отправляются): монету без маршрута продажи не продать и тут.",
+                        fontSize = 11.sp, color = TextSecondary, lineHeight = 16.sp
+                    )
+                }
                 if (!demoMode) {
                     Surface(color = Red.copy(alpha = 0.1f), shape = RoundedCornerShape(8.dp)) {
                         Text("⚠ Реальная торговля — реальные деньги! Убедитесь, что seed-фраза задана и на кошельке есть SOL.",
@@ -3046,6 +3170,9 @@ fun SettingsScreen(
                     }
                 }
             }
+
+            // ── Защита сделок ─────────────────────────────────────────────
+            ProtectionSection(protection) { protection = it; saved = false }
 
             // ── Кошелёк Solana ────────────────────────────────────────────
             FormSection("🔑  Кошелёк Solana") {
@@ -3152,6 +3279,7 @@ fun SettingsScreen(
                     walletSeed = walletSeed,
                     telegramToken = telegramToken,
                     telegramChatId = telegramChatId,
+                    protection = protection,
                 ))
                 saved = true
             },
@@ -3164,6 +3292,84 @@ fun SettingsScreen(
         ) {
             Text("💾  Сохранить настройки", fontWeight = FontWeight.Bold, color = Color.Black, fontSize = 16.sp)
         }
+    }
+}
+
+/**
+ * «Защита сделок» — глобальные правила для всех стратегий (см. [ProtectionSettings]): проверка монеты
+ * перед покупкой, лимиты портфеля и продажа при сбоях. Сохраняется общей кнопкой настроек.
+ */
+@Composable
+private fun ProtectionSection(p: ProtectionSettings, onChange: (ProtectionSettings) -> Unit) {
+    FormSection("🛡  Защита сделок (все стратегии)") {
+        FormToggle("Проверять монету перед покупкой", p.guardEnabled) { onChange(p.copy(guardEnabled = it)) }
+        if (p.guardEnabled) {
+            FormToggle("Mint/freeze authority должны быть отозваны", p.requireRevokedAuthorities) {
+                onChange(p.copy(requireRevokedAuthorities = it))
+            }
+            FormToggle("Отклонять опасный Token-2022", p.rejectRiskyToken2022) {
+                onChange(p.copy(rejectRiskyToken2022 = it))
+            }
+            DecimalSettingField("Макс. влияние покупки на цену, %", p.maxPriceImpactPct) {
+                onChange(p.copy(maxPriceImpactPct = it))
+            }
+            DecimalSettingField("Макс. потери «купить и сразу продать», %", p.maxRoundTripLossPct) {
+                onChange(p.copy(maxRoundTripLossPct = it))
+            }
+            Text(
+                "Перед любой покупкой бот спрашивает у Jupiter котировку на свой размер и обратную продажу: " +
+                    "нет маршрута продажи — монету не покупаем. Token-2022 отклоняется при комиссии перевода, " +
+                    "перманентном делегате, хуке перевода, паузе или заморозке счетов. 0 — лимит выключен.",
+                fontSize = 11.sp, color = TextSecondary, lineHeight = 16.sp
+            )
+        }
+        Spacer(Modifier.height(8.dp))
+        FormToggle("Лимиты портфеля", p.portfolioEnabled) { onChange(p.copy(portfolioEnabled = it)) }
+        if (p.portfolioEnabled) {
+            IntSettingField("Открытых позиций всего", p.maxOpenPositions) { onChange(p.copy(maxOpenPositions = it)) }
+            DecimalSettingField("В позициях, % капитала", p.maxExposurePct) { onChange(p.copy(maxExposurePct = it)) }
+            DecimalSettingField("Убыток за день, % капитала", p.maxDailyLossPct) { onChange(p.copy(maxDailyLossPct = it)) }
+            DecimalSettingField("Убыток за 7 дней, % капитала", p.maxWeeklyLossPct) { onChange(p.copy(maxWeeklyLossPct = it)) }
+            IntSettingField("Пауза после N убыточных сделок подряд", p.lossStreakLimit) {
+                onChange(p.copy(lossStreakLimit = it))
+            }
+            IntSettingField("Длительность паузы, мин", p.lossStreakPauseMinutes) {
+                onChange(p.copy(lossStreakPauseMinutes = it))
+            }
+            Text(
+                "Считаются все стратегии текущего режима (DEMO или REAL) вместе; капитал — свободный баланс " +
+                    "плюс позиции, убыток — закрытые сделки и открытые по последней цене. 0 — лимит выключен.",
+                fontSize = 11.sp, color = TextSecondary, lineHeight = 16.sp
+            )
+        }
+        Spacer(Modifier.height(8.dp))
+        DecimalSettingField("Потолок slippage продажи, %", p.maxSellSlippagePct) { onChange(p.copy(maxSellSlippagePct = it)) }
+        Text(
+            "Продажа не прошла — следующая попытка с бо́льшим slippage (3% → 6% → 12%… до потолка). " +
+                "После $EXIT_BLOCKED_AFTER неудач подряд позиция помечается «продажа заблокирована»: попытки идут " +
+                "с паузой, в Telegram приходит предупреждение.",
+            fontSize = 11.sp, color = TextSecondary, lineHeight = 16.sp
+        )
+    }
+}
+
+/** Дробное поле настроек: текст хранится как набран, в модель уходит только то, что разобралось в число. */
+@Composable
+private fun DecimalSettingField(label: String, value: Double, onValue: (Double) -> Unit) {
+    var text by remember { mutableStateOf(if (value % 1.0 == 0.0) value.toLong().toString() else value.toString()) }
+    FormTextField(label, text, isNumber = true) { v ->
+        text = v
+        v.toDoubleOrNull()?.let { onValue(it.coerceAtLeast(0.0)) }
+    }
+}
+
+/** Целое поле настроек (см. [DecimalSettingField]). */
+@Composable
+private fun IntSettingField(label: String, value: Int, onValue: (Int) -> Unit) {
+    var text by remember { mutableStateOf(value.toString()) }
+    FormTextField(label, text, isNumber = true) { v ->
+        text = v
+        v.toIntOrNull()?.let { onValue(it.coerceAtLeast(0)) }
     }
 }
 

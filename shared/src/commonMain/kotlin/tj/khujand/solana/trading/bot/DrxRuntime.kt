@@ -10,6 +10,7 @@ import tj.khujand.solana.trading.bot.core.engine.ActivityLog
 import tj.khujand.solana.trading.bot.core.engine.BotEngine
 import tj.khujand.solana.trading.bot.core.engine.TradeExecutor
 import tj.khujand.solana.trading.bot.core.engine.TradeMonitor
+import tj.khujand.solana.trading.bot.core.risk.EntryGuard
 import tj.khujand.solana.trading.bot.core.risk.RiskManager
 import tj.khujand.solana.trading.bot.core.strategy.StrategyManager
 import tj.khujand.solana.trading.bot.data.SettingsStore
@@ -19,6 +20,7 @@ import tj.khujand.solana.trading.bot.domain.backtest.BacktestService
 import tj.khujand.solana.trading.bot.domain.dars.MarketAnalyzerService
 import tj.khujand.solana.trading.bot.exchange.dex.AccountCache
 import tj.khujand.solana.trading.bot.exchange.dex.DexClient
+import tj.khujand.solana.trading.bot.exchange.dex.JupiterSwapQuotes
 import tj.khujand.solana.trading.bot.exchange.dex.TokenCache
 import tj.khujand.solana.trading.bot.exchange.dex.TokenScanner
 import tj.khujand.solana.trading.bot.exchange.dex.toTokenCandidate
@@ -54,8 +56,12 @@ class DrxRuntime(val db: DrxDatabase) {
 
     // Бэктест стратегий по истории GeckoTerminal — держит загруженные свечи между прогонами.
     val backtest = BacktestService()
-    val executor = TradeExecutor(client, db, settingsStore, accountCache, activityLog)
-    val riskManager = RiskManager(db, accountCache, executor::isDemo)
+
+    // Котировки Jupiter и mint-аккаунты — общие для проверки входа и исполнения (один кеш).
+    private val quotes = JupiterSwapQuotes(client)
+    val executor = TradeExecutor(client, db, settingsStore, accountCache, activityLog, quotes)
+    val riskManager = RiskManager(db, accountCache, executor::isDemo, settingsStore::getProtection)
+    private val entryGuard = EntryGuard(quotes, settingsStore::getProtection)
 
     val notifier = TelegramNotifier(
         settingsStore.getTelegramToken() ?: "",
@@ -63,7 +69,7 @@ class DrxRuntime(val db: DrxDatabase) {
     )
 
     val strategyManager = StrategyManager(
-        client, riskManager, notifier, db, scanner, executor, activityLog, settingsStore
+        client, riskManager, notifier, db, scanner, executor, activityLog, settingsStore, entryGuard
     )
     val engine = BotEngine(client, strategyManager, notifier, db, accountCache, executor, settingsStore, activityLog)
     val tradeMonitor = TradeMonitor(client, db, executor, notifier, activityLog)
@@ -122,9 +128,10 @@ class DrxRuntime(val db: DrxDatabase) {
         client.close()
     }
 
-    /** Полный сброс бота: сделки, кеши, демо-счёт. Стратегии и настройки не трогаем. */
+    /** Полный сброс бота: сделки, журнал транзакций, кеши, демо-счёт. Стратегии и настройки не трогаем. */
     fun resetBotData() {
         db.tradeQueries.deleteAll()
+        db.txJournalQueries.deleteAll()
         db.tokenCacheQueries.deleteAll()
         db.accountCacheQueries.deleteAll()
         executor.resetDemoBalance()

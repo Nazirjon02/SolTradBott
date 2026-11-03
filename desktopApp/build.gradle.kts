@@ -27,6 +27,11 @@ compose.desktop {
     application {
         mainClass = "tj.khujand.solana.trading.bot.MainKt"
 
+        // sqlite-jdbc (и Skia) грузят нативные библиотеки через System.load: на JDK 24+ (JBR Android Studio —
+        // 25) без этого флага при старте печатается «restricted method», а в будущих JDK вызов запретят.
+        // Флаг понимают все JDK начиная с 17.
+        jvmArgs += listOf("--enable-native-access=ALL-UNNAMED")
+
         nativeDistributions {
             targetFormats(TargetFormat.Dmg, TargetFormat.Msi, TargetFormat.Deb)
             packageName = "tj.khujand.solana.trading.bot"

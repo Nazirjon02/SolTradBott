@@ -111,4 +111,11 @@ fun StrategyRow.toStrategyConfig(): StrategyConfig = StrategyConfig(
     ewW3Target = ew_w3_target,
     ewW5Target = ew_w5_target,
     ewMinRewardRisk = ew_min_reward_risk,
+    vbLookbackBars = vb_lookback_bars.toInt(),
+    vbMinImpulsePct = vb_min_impulse_pct,
+    vbMinPullbackPct = vb_min_pullback_pct,
+    vbMaxPullbackRetrace = vb_max_pullback_retrace,
+    vbNearHighPct = vb_near_high_pct,
+    vbVolumeMult = vb_volume_mult,
+    vbMaxExtensionPct = vb_max_extension_pct,
 )

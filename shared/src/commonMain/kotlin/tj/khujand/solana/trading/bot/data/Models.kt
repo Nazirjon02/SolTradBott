@@ -36,6 +36,12 @@ data class OpenPosition(
     val takeProfit: Double,
     val isDemo: Boolean,
     val openedAt: Long,
+    /** Неудачных попыток продажи подряд; от EXIT_BLOCKED_AFTER — «продажа заблокирована». */
+    val exitFailures: Int = 0,
+    /** Почему не прошла последняя продажа. */
+    val exitNote: String = "",
+    /** DEMO / SHADOW / REAL; пусто — сделка открыта до появления режимов. */
+    val execMode: String = "",
 )
 
 @Serializable

@@ -192,8 +192,8 @@ class RiskManagerTest {
         val db = inMemoryDb()
         seedDefaultStrategies(db)
         val all = db.strategyQueries.getAll().executeAsList()
-        // Dars, «Пробой + откат», «Мем-плейбук» и «Волны Эллиотта» (три последние — выключены).
-        assertEquals(4, all.size)
+        // Dars, «Пробой + откат», «Мем-плейбук», «Волны Эллиотта» и «Пробой на объёме» (четыре последние — выключены).
+        assertEquals(5, all.size)
         assertEquals(1, all.count { it.is_active == 1L })
         assertEquals("DARS", all.first { it.is_active == 1L }.type)
     }

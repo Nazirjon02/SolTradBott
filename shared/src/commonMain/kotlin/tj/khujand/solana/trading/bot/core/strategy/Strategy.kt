@@ -52,6 +52,7 @@ enum class StrategyType(val displayName: String) {
     BREAKOUT_PULLBACK("Пробой + откат"),
     MEME_PLAYBOOK("Мем-плейбук"),
     ELLIOTT("Волны Эллиотта"),
+    VOLUME_BREAKOUT("Пробой на объёме"),
 }
 
 /**
@@ -231,6 +232,20 @@ data class StrategyConfig(
     val ewW3Target: Double = 1.618,
     val ewW5Target: Double = 1.0,
     val ewMinRewardRisk: Double = 1.5,
+
+    // ── Пробой на объёме (стратегия VOLUME_BREAKOUT) ──
+    // «Первый откат → ретест максимума → пробой на всплеске объёма» в окне vbLookbackBars баров:
+    // импульс ≥ vbMinImpulsePct% до максимума, откат от него ≥ vbMinPullbackPct%, но не глубже
+    // vbMaxPullbackRetrace импульса, два бара перед пробоем закрылись не ниже vbNearHighPct% под максимумом,
+    // закрытый бар пробил максимум на объёме ≥ vbVolumeMult × средний. Цену дальше vbMaxExtensionPct%
+    // над максимумом не догоняем. Стоп — под базой перед пробоем. См. VolumeBreakoutStrategy.
+    val vbLookbackBars: Int = 60,
+    val vbMinImpulsePct: Double = 20.0,
+    val vbMinPullbackPct: Double = 5.0,
+    val vbMaxPullbackRetrace: Double = 0.786,
+    val vbNearHighPct: Double = 8.0,
+    val vbVolumeMult: Double = 2.5,
+    val vbMaxExtensionPct: Double = 15.0,
 ) {
     fun scanFilters(): ScanFilters = ScanFilters(
         minLiquidityUsd = minLiquidityUsd,

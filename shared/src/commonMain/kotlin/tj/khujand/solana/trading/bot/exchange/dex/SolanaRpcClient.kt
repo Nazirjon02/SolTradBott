@@ -23,16 +23,56 @@ import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
 import kotlin.time.Clock
 
+/** Программа Token-2022 (у обычных SPL-токенов владелец mint — TokenkegQ…). */
+const val TOKEN_2022_PROGRAM_ID = "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb"
+
+/** Token-2022: база mint добита до размера token-аккаунта (165 байт), за ней байт типа аккаунта и TLV. */
+private const val ACCOUNT_TYPE_OFFSET = 165
+private const val ACCOUNT_TYPE_MINT = 1
+private const val MINT_EXTENSIONS_START = ACCOUNT_TYPE_OFFSET + 1
+
+/** getSignatureStatuses принимает не больше 256 подписей за запрос. */
+private const val MAX_SIGNATURES_PER_REQUEST = 256
+
 /**
  * Модель для SPL Mint информации
+ *
+ * @param tokenProgram программа-владелец mint-аккаунта; null — неизвестна.
+ * @param extensions типы расширений Token-2022 (ExtensionType из spl-token-2022); пусто у SPL Token.
  */
 @Serializable
 data class SplMintInfo(
     val hasMintAuthority: Boolean,
     val hasFreezeAuthority: Boolean,
     val decimals: Int,
-    val supply: Long
+    val supply: Long,
+    val tokenProgram: String? = null,
+    val extensions: List<Int> = emptyList(),
 )
+
+/** Итог отправки транзакции в RPC. */
+sealed interface SendResult {
+    /** Узел принял транзакцию (исполнится ли — покажет [SolanaRpcClient.awaitSignature]). */
+    data class Sent(val signature: String) : SendResult
+
+    /** Узел явно отверг (preflight: нет SOL, slippage, ошибка программы) — в сеть она не ушла. */
+    data class Rejected(val reason: String) : SendResult
+
+    /** Ответа нет (сеть, таймаут, 5xx): транзакция могла уйти — итог узнаём по подписи. */
+    data object Unknown : SendResult
+}
+
+/** Итог ожидания подписи. */
+enum class TxOutcome {
+    /** Исполнена успешно (confirmed/finalized без ошибки). */
+    CONFIRMED,
+
+    /** Попала в блок с ошибкой (например, превышен slippage свопа) — средства не ушли. */
+    FAILED,
+
+    /** За отведённое время статуса нет: могла не дойти, а могла исполниться позже. */
+    TIMEOUT,
+}
 
 /**
  * Модель для RPC ответа
@@ -148,7 +188,7 @@ class SolanaRpcClient(
 
                 // Декодируем base64 данные
                 val base64Data = data[0]
-                return parseSplMintFromBase64(base64Data)
+                return parseSplMintFromBase64(base64Data)?.copy(tokenProgram = accountInfo.owner)
 
             } catch (e: CancellationException) {
                 throw e
@@ -163,7 +203,8 @@ class SolanaRpcClient(
      * Парсинг SPL Mint из base64 данных
      * Формат: mintAuthorityOption(u32), mintAuthority(32), supply(u64), decimals(u8), isInit(u8), freezeAuthorityOption(u32), freezeAuthority(32)
      * COption в SPL фиксированного размера: 32 байта ключа есть и при option = 0 (заполнены нулями).
-     * Token-2022 начинается с той же 82-байтной базы — расширения идут после неё.
+     * Token-2022 начинается с той же 82-байтной базы — расширения идут после неё: база добита
+     * нулями до 165 байт, байт 165 — тип аккаунта (1 = mint), дальше TLV: тип u16, длина u16, данные.
      */
     internal fun parseSplMintFromBase64(base64Data: String): SplMintInfo? {
         return try {
@@ -205,7 +246,8 @@ class SolanaRpcClient(
                 hasMintAuthority = hasMintAuthority,
                 hasFreezeAuthority = hasFreezeAuthority,
                 decimals = decimals,
-                supply = supply.toLong()
+                supply = supply.toLong(),
+                extensions = parseToken2022Extensions(bytes),
             )
 
         } catch (e: Exception) {
@@ -214,6 +256,26 @@ class SolanaRpcClient(
         }
     }
     
+    /** Типы TLV-расширений Token-2022 после базового mint; у обычного SPL-токена (82 байта) — пусто. */
+    private fun parseToken2022Extensions(bytes: ByteArray): List<Int> {
+        if (bytes.size <= MINT_EXTENSIONS_START || bytes[ACCOUNT_TYPE_OFFSET].toInt() != ACCOUNT_TYPE_MINT) {
+            return emptyList()
+        }
+        val types = mutableListOf<Int>()
+        var offset = MINT_EXTENSIONS_START
+        while (offset + 4 <= bytes.size) {
+            val type = bytesToUInt16(bytes, offset)
+            val length = bytesToUInt16(bytes, offset + 2)
+            if (type == 0) break // Uninitialized — дальше только добивка
+            types += type
+            offset += 4 + length
+        }
+        return types
+    }
+
+    private fun bytesToUInt16(bytes: ByteArray, offset: Int): Int =
+        (bytes[offset].toInt() and 0xFF) or ((bytes[offset + 1].toInt() and 0xFF) shl 8)
+
     /**
      * Простая реализация base64 декодирования (работает на всех платформах)
      */
@@ -412,7 +474,12 @@ class SolanaRpcClient(
         }
     }
 
-    suspend fun sendTransaction(base64Tx: String): String? {
+    /**
+     * Отправка подписанной транзакции. Различаем «узел отверг» (в сеть не ушла — можно считать
+     * неудачей) и «ответа нет» (могла уйти — итог только по подписи), иначе потерянный ответ
+     * выглядел как отказ, и бот мог повторить уже исполненную покупку.
+     */
+    suspend fun sendTransaction(base64Tx: String): SendResult {
         return semaphore.withPermit {
             try {
                 val requestJson = """
@@ -431,28 +498,64 @@ class SolanaRpcClient(
                 }
                 """.trimIndent()
 
-                val response = postRpcWithRetry(requestJson, "sendTransaction") ?: return@withPermit null
+                val response = postRpcWithRetry(requestJson, "sendTransaction")
+                    ?: return@withPermit SendResult.Unknown
 
                 val responseText = response.bodyAsText()
                 val body = json.parseToJsonElement(responseText).jsonObject
                 val result = body["result"]?.jsonPrimitive?.content
-                if (result == null) {
-                    // Отказ preflight-симуляции (нет SOL на комиссию, slippage и т.п.) приходит
-                    // как JSON-RPC error при HTTP 200 — без лога причина терялась бесследно.
-                    val reason = body["error"]?.jsonObject?.get("message")?.jsonPrimitive?.content
-                    println("⚠️ sendTransaction отклонена RPC: ${reason ?: responseText.take(300)}")
-                }
-                result
+                if (result != null) return@withPermit SendResult.Sent(result)
+                // Отказ preflight-симуляции (нет SOL на комиссию, slippage и т.п.) приходит
+                // как JSON-RPC error при HTTP 200 — без лога причина терялась бесследно.
+                val reason = body["error"]?.jsonObject?.get("message")?.jsonPrimitive?.content
+                    ?: responseText.take(300)
+                println("⚠️ sendTransaction отклонена RPC: $reason")
+                SendResult.Rejected(reason)
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
                 println("⚠️ sendTransaction error: ${e.message}")
-                null
+                SendResult.Unknown
             }
         }
     }
 
-    suspend fun confirmTransaction(signature: String): Boolean {
+    /**
+     * Статусы подписей одним запросом: true — исполнена, false — упала с ошибкой, null — сеть её
+     * не знает или она ещё не подтверждена. null вместо карты — RPC недоступен (решения не принимаем).
+     */
+    suspend fun getSignatureStatuses(signatures: List<String>): Map<String, Boolean?>? {
+        if (signatures.isEmpty()) return emptyMap()
+        val result = mutableMapOf<String, Boolean?>()
+        for (chunk in signatures.chunked(MAX_SIGNATURES_PER_REQUEST)) {
+            val list = chunk.joinToString(",") { "\"$it\"" }
+            val requestJson = """
+                {
+                    "jsonrpc": "2.0",
+                    "id": 1,
+                    "method": "getSignatureStatuses",
+                    "params": [
+                        [$list],
+                        { "searchTransactionHistory": true }
+                    ]
+                }
+            """.trimIndent()
+            val response = postRpcWithRetry(requestJson, "getSignatureStatuses") ?: return null
+            val values = try {
+                json.parseToJsonElement(response.bodyAsText()).jsonObject["result"]
+                    ?.jsonObject?.get("value")?.jsonArray
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                null
+            } ?: return null
+            chunk.forEachIndexed { i, sig -> result[sig] = signatureOutcome(values.getOrNull(i) as? JsonObject) }
+        }
+        return result
+    }
+
+    /** Ждёт итог подписи до таймаута подтверждения (см. [TxOutcome]). */
+    suspend fun awaitSignature(signature: String): TxOutcome {
         val startedMs = Clock.System.now().toEpochMilliseconds()
         var backoffMs = 500L
         while (Clock.System.now().toEpochMilliseconds() - startedMs < confirmTimeoutMs) {
@@ -484,10 +587,10 @@ class SolanaRpcClient(
                     null
                 }
                 when (signatureOutcome(value)) {
-                    true -> return true
+                    true -> return TxOutcome.CONFIRMED
                     false -> {
                         println("❌ Транзакция $signature исполнилась с ошибкой: ${value?.get("err")}")
-                        return false
+                        return TxOutcome.FAILED
                     }
                     null -> Unit // ещё не подтверждена — ждём
                 }
@@ -495,7 +598,7 @@ class SolanaRpcClient(
             delay(backoffMs)
             backoffMs = (backoffMs * 2).coerceAtMost(3000L)
         }
-        return false
+        return TxOutcome.TIMEOUT
     }
 
     fun close() {
