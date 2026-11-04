@@ -10,9 +10,12 @@ import tj.khujand.solana.trading.bot.core.engine.ActivityLog
 import tj.khujand.solana.trading.bot.core.engine.BotEngine
 import tj.khujand.solana.trading.bot.core.engine.TradeExecutor
 import tj.khujand.solana.trading.bot.core.engine.TradeMonitor
+import tj.khujand.solana.trading.bot.core.engine.beginNewRun
 import tj.khujand.solana.trading.bot.core.risk.EntryGuard
 import tj.khujand.solana.trading.bot.core.risk.RiskManager
 import tj.khujand.solana.trading.bot.core.strategy.StrategyManager
+import tj.khujand.solana.trading.bot.core.strategy.WatchBoard
+import tj.khujand.solana.trading.bot.data.BotStatus
 import tj.khujand.solana.trading.bot.data.SettingsStore
 import tj.khujand.solana.trading.bot.data.createDatabaseDriver
 import tj.khujand.solana.trading.bot.data.db.DrxDatabase
@@ -68,11 +71,14 @@ class DrxRuntime(val db: DrxDatabase) {
         settingsStore.getTelegramChatId() ?: 0L,
     )
 
+    // Доска наблюдения: что стратегии видят по каждому кандидату — из того же цикла сканера.
+    val watchBoard = WatchBoard()
+
     val strategyManager = StrategyManager(
-        client, riskManager, notifier, db, scanner, executor, activityLog, settingsStore, entryGuard
+        client, riskManager, notifier, db, scanner, executor, activityLog, settingsStore, entryGuard, watchBoard
     )
     val engine = BotEngine(client, strategyManager, notifier, db, accountCache, executor, settingsStore, activityLog)
-    val tradeMonitor = TradeMonitor(client, db, executor, notifier, activityLog)
+    val tradeMonitor = TradeMonitor(client, db, executor, notifier, activityLog, protection = settingsStore::getProtection)
 
     // Собственный scope рантайма: здесь живёт long-polling Telegram-контроллера, чтобы он
     // переживал уход Activity так же, как движок (раньше polling был привязан к Compose и
@@ -84,6 +90,31 @@ class DrxRuntime(val db: DrxDatabase) {
     init {
         tradeMonitor.start()
         syncTelegramController()
+    }
+
+    // Авто-возобновление при запуске приложения — один раз на процесс: не спорить с пользователем,
+    // который уже сам нажал «Стоп» или «Старт».
+    private var launchResumeConsumed = false
+
+    /**
+     * Вернуть ли торговлю при запуске приложения (десктоп, открытие приложения, перезагрузка телефона):
+     * см. [shouldResumeOnLaunch]. true — только при первом вызове за процесс.
+     */
+    fun takeResumeOnLaunch(): Boolean {
+        if (launchResumeConsumed) return false
+        launchResumeConsumed = true
+        return shouldResumeOnLaunch(settingsStore.getResumeOnLaunch(), engine.getStatus(), settingsStore.getDesiredState())
+    }
+
+    /** Возвращает движок в состояние, в котором его оставили: RUNNING или PAUSED. */
+    fun restoreDesiredState() {
+        runtimeScope.launch {
+            when (settingsStore.getDesiredState()) {
+                BotStatus.RUNNING.name -> engine.start()
+                BotStatus.PAUSED.name -> engine.pause()
+                else -> Unit
+            }
+        }
     }
 
     /**
@@ -110,6 +141,8 @@ class DrxRuntime(val db: DrxDatabase) {
             db = db,
             tokenCache = tokenCache,
             settingsStore = settingsStore,
+            riskManager = riskManager,
+            watchBoard = watchBoard,
         )
         telegramController = controller
         telegramJob = runtimeScope.launch { controller.startPolling() }
@@ -128,9 +161,31 @@ class DrxRuntime(val db: DrxDatabase) {
         client.close()
     }
 
+    /**
+     * Ручная покупка монеты из «Анализа»: пара — из кеша сканера или DexScreener, цена — живая прямо перед
+     * покупкой. Дальше — [StrategyManager.openManual]: лимиты портфеля, проверка монеты, исполнение режима.
+     */
+    suspend fun manualBuy(mint: String, sizeUsd: Double, stopLossPercent: Double, takeProfitPercent: Double): StrategyManager.ManualResult {
+        val now = Clock.System.now().toEpochMilliseconds()
+        val candidate = tokenCache.all().firstOrNull { it.mint == mint }
+            ?: runCatching { client.dexScreener.findSolanaPair(mint)?.toTokenCandidate(now) }.getOrNull()
+            ?: return StrategyManager.ManualResult.Rejected("пара монеты не найдена на DexScreener")
+        val live = runCatching { client.getTokenPriceUsd(mint) }.getOrNull()
+        return strategyManager.openManual(candidate, sizeUsd, stopLossPercent, takeProfitPercent, live)
+    }
+
+    /**
+     * «Новый старт» текущего режима: статистика и лимиты убытка — с этого момента, сделки остаются
+     * (см. [beginNewRun]). [newDemoBalance] — новый демо-счёт (только DEMO); null — прежний.
+     */
+    fun startNewRun(newDemoBalance: Double?): String =
+        beginNewRun(db, executor, riskManager, newDemoBalance, Clock.System.now().toEpochMilliseconds())
+            .also { activityLog.success(it) }
+
     /** Полный сброс бота: сделки, журнал транзакций, кеши, демо-счёт. Стратегии и настройки не трогаем. */
     fun resetBotData() {
         db.tradeQueries.deleteAll()
+        db.tradingRunQueries.deleteAll()
         db.txJournalQueries.deleteAll()
         db.tokenCacheQueries.deleteAll()
         db.accountCacheQueries.deleteAll()
@@ -138,6 +193,14 @@ class DrxRuntime(val db: DrxDatabase) {
         activityLog.clear()
     }
 }
+
+/**
+ * Возобновлять ли торговлю при запуске приложения: включён тумблер [enabled], движок ещё стоит, а
+ * оставили его работающим или на паузе ([desiredState] — имя [BotStatus]).
+ */
+internal fun shouldResumeOnLaunch(enabled: Boolean, status: BotStatus, desiredState: String?): Boolean =
+    enabled && status == BotStatus.STOPPED &&
+        (desiredState == BotStatus.RUNNING.name || desiredState == BotStatus.PAUSED.name)
 
 /**
  * Держатель singleton-рантайма. `init` вызывается из entry-point платформы

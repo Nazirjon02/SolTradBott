@@ -151,6 +151,11 @@ CREATE TABLE IF NOT EXISTS strategy (
     vb_volume_mult REAL NOT NULL DEFAULT 2.5,
     vb_max_extension_pct REAL NOT NULL DEFAULT 15.0,
 
+    -- Взведённый вход (поздние колонки, пишутся updateArmedParams): стратегия, у которой всё сошлось,
+    -- кроме триггера, взводит сетап, и бот входит по касанию уровня, а не по закрытию бара.
+    armed_entry_enabled INTEGER NOT NULL DEFAULT 0,
+    armed_expiry_bars INTEGER NOT NULL DEFAULT 3,
+
     created_at INTEGER NOT NULL,
     updated_at INTEGER NOT NULL
 );
@@ -275,6 +280,12 @@ updateVolumeBreakoutParams:
 UPDATE strategy SET
     vb_lookback_bars = ?, vb_min_impulse_pct = ?, vb_min_pullback_pct = ?, vb_max_pullback_retrace = ?,
     vb_near_high_pct = ?, vb_volume_mult = ?, vb_max_extension_pct = ?
+WHERE id = ?;
+
+-- Взведённый вход — тоже вне insert/updateStrategy.
+updateArmedParams:
+UPDATE strategy SET
+    armed_entry_enabled = ?, armed_expiry_bars = ?
 WHERE id = ?;
 
 -- Одноразовая нормализация уже засеянных Dars-стратегий к значениям методички

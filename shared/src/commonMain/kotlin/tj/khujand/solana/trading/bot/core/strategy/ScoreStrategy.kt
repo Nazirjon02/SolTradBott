@@ -31,19 +31,28 @@ class ScoreStrategy(
         candidate: TokenCandidate,
         candles: List<Candle>,
         higherTfCandles: List<Candle>,
-    ): Signal? {
+    ): Signal? = evaluate(candidate, candles, higherTfCandles).signal
+
+    /** Одно условие — балл против порога; на доске видно, сколько баллов не хватает. */
+    override suspend fun evaluate(
+        candidate: TokenCandidate,
+        candles: List<Candle>,
+        higherTfCandles: List<Candle>,
+    ): Evaluation {
         val entry = candidate.priceUsd
-        if (entry <= 0.0) return null
+        if (entry <= 0.0) return Evaluation.stoppedAt(1, 1, "нет цены кандидата")
 
         // Тот же конфиг, что и у экрана «Анализ» (activeDarsConfig), — балл получается идентичный.
         val cfg = DarsConfig.from(config.toDarsFilterSettings())
         val a = analyzer.analyze(candidate, cfg)
 
-        if (a.score < config.scoreThreshold) return null
+        if (a.score < config.scoreThreshold) {
+            return Evaluation.stoppedAt(1, 1, "балл ${a.score} < ${config.scoreThreshold} · ${a.readiness.label}")
+        }
 
         // SL/TP механические из конфига (дефолт −15% / +30%). RR-гейт намеренно не навешиваем:
         // по требованию вход определяется только баллом.
-        return Signal(
+        val signal = Signal(
             mint = candidate.mint,
             symbol = candidate.symbol,
             pairAddress = candidate.pairAddress,
@@ -53,5 +62,6 @@ class ScoreStrategy(
             stopLoss = config.stopLossPrice(entry),
             takeProfit = config.takeProfitPrice(entry),
         )
+        return Evaluation.ready(signal, total = 1)
     }
 }

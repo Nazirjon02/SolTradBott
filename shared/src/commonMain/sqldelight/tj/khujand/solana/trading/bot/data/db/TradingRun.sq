@@ -1,0 +1,29 @@
+-- «Новый старт» (забеги): момент, с которого считаются статистика, итоги на экранах и риск-лимиты.
+-- Сделки при этом НЕ удаляются: прошлые забеги остаются рядом для сравнения, а «одна монета — одна
+-- сделка» помнит всю историю. Забеги свои у DEMO (is_demo = 1) и REAL (0).
+-- start_balance / end_balance — капитал (свободный баланс + позиции по рынку) на старте и при закрытии;
+-- NULL — неизвестен.
+CREATE TABLE IF NOT EXISTS trading_run (
+    id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+    is_demo INTEGER NOT NULL,
+    started_at INTEGER NOT NULL,
+    ended_at INTEGER,
+    start_balance REAL,
+    end_balance REAL,
+    note TEXT NOT NULL DEFAULT ''
+);
+
+current:
+SELECT * FROM trading_run WHERE is_demo = ? AND ended_at IS NULL ORDER BY started_at DESC LIMIT 1;
+
+byMode:
+SELECT * FROM trading_run WHERE is_demo = ? ORDER BY started_at ASC;
+
+endCurrent:
+UPDATE trading_run SET ended_at = ?, end_balance = ? WHERE is_demo = ? AND ended_at IS NULL;
+
+insert:
+INSERT INTO trading_run (is_demo, started_at, start_balance, note) VALUES (?, ?, ?, ?);
+
+deleteAll:
+DELETE FROM trading_run;

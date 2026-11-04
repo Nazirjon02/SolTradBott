@@ -33,6 +33,16 @@ fun migrateStrategyTable(driver: SqlDriver) {
             created_at INTEGER NOT NULL,
             updated_at INTEGER NOT NULL
         )""",
+        // «Новый старт» (TradingRun.sq)
+        """CREATE TABLE IF NOT EXISTS trading_run (
+            id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+            is_demo INTEGER NOT NULL,
+            started_at INTEGER NOT NULL,
+            ended_at INTEGER,
+            start_balance REAL,
+            end_balance REAL,
+            note TEXT NOT NULL DEFAULT ''
+        )""",
         "ALTER TABLE strategy ADD COLUMN range_filter_enabled INTEGER NOT NULL DEFAULT 0",
         "ALTER TABLE strategy ADD COLUMN range_max_entry_pct REAL NOT NULL DEFAULT 0.8",
         "ALTER TABLE strategy ADD COLUMN range_lookback_bars INTEGER NOT NULL DEFAULT 100",
@@ -108,6 +118,9 @@ fun migrateStrategyTable(driver: SqlDriver) {
         "ALTER TABLE strategy ADD COLUMN vb_near_high_pct REAL NOT NULL DEFAULT 8.0",
         "ALTER TABLE strategy ADD COLUMN vb_volume_mult REAL NOT NULL DEFAULT 2.5",
         "ALTER TABLE strategy ADD COLUMN vb_max_extension_pct REAL NOT NULL DEFAULT 15.0",
+        // Взведённый вход (вход по касанию уровня)
+        "ALTER TABLE strategy ADD COLUMN armed_entry_enabled INTEGER NOT NULL DEFAULT 0",
+        "ALTER TABLE strategy ADD COLUMN armed_expiry_bars INTEGER NOT NULL DEFAULT 3",
         // Таблица trade: база для R и ATR-трейлинга (0 = нет данных, старые сделки)
         "ALTER TABLE trade ADD COLUMN initial_stop REAL NOT NULL DEFAULT 0",
         "ALTER TABLE trade ADD COLUMN entry_atr_frac REAL NOT NULL DEFAULT 0",

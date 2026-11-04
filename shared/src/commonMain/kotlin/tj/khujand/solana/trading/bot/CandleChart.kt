@@ -34,6 +34,7 @@ import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.PathEffect
@@ -69,6 +70,13 @@ import kotlin.math.roundToInt
 /** Меньше этого числа баров в окне не показываем: дальше это уже не график, а пара столбиков. */
 private const val MIN_VISIBLE_BARS = 10
 
+/**
+ * Горизонтальная линия цены поверх свечей — как бот ведёт сделку (вход, стоп сейчас и при входе, +1R,
+ * безубыток, старт трейлинга, цель) или уровень, у которого стратегия ждёт входа.
+ * @param dashed пунктир — «ещё не случилось» (уровень впереди), сплошная — действующий стоп/вход.
+ */
+data class PriceLine(val price: Double, val label: String, val color: Color, val dashed: Boolean = false)
+
 /** Шаг масштаба: один щелчок колеса или одно нажатие кнопки. */
 private const val ZOOM_STEP = 1.25f
 
@@ -102,6 +110,8 @@ fun CandleChart(
     lastBarForming: Boolean = false,
     /** Смена ключа сбрасывает масштаб: другая монета — другое окно. */
     viewportKey: Any? = null,
+    /** Линии сделки и уровней поверх свечей (график бота); диапазон цен расширяется, чтобы их было видно. */
+    priceLines: List<PriceLine> = emptyList(),
 ) {
     if (candles.size < 2) return
     val measurer = rememberTextMeasurer()
@@ -117,6 +127,10 @@ fun CandleChart(
     // свеча — не «сейчас», и стрелка из неё врала бы.
     val atRightEdge = viewport.atRightEdge
     val forming = lastBarForming && atRightEdge
+    // Угол под кнопками масштаба: подписи уровней его обходят, иначе «цель» у верхнего края ложится на «−».
+    val zoomCorner = with(LocalDensity.current) {
+        if (candles.size > MIN_VISIBLE_BARS) Rect(0f, 0f, 76.dp.toPx(), 30.dp.toPx()) else null
+    }
 
     Column(modifier = modifier.fillMaxWidth()) {
         Box(Modifier.fillMaxWidth().height(height + height / 4)) {
@@ -132,6 +146,8 @@ fun CandleChart(
                             projection = atRightEdge,
                             forming = forming,
                             measurer = measurer,
+                            priceLines = priceLines,
+                            reserved = zoomCorner,
                         )
                         onDrawBehind { geometry.draw(this) }
                     }
@@ -403,6 +419,9 @@ private class ChartGeometry(
     /** Последняя видимая свеча — формирующаяся. */
     private val forming: Boolean,
     private val measurer: TextMeasurer,
+    private val priceLines: List<PriceLine> = emptyList(),
+    /** Область, занятая кнопками поверх графика: подписи туда не ставим. */
+    private val reserved: Rect? = null,
 ) {
     private val labelStyle = TextStyle(fontSize = 9.sp, color = TextSecondary)
     private val levelStyle = TextStyle(fontSize = 9.sp, color = TextPrimary, fontWeight = FontWeight.Bold)
@@ -419,7 +438,7 @@ private class ChartGeometry(
     private val maxPrice: Float
 
     init {
-        val range = chartPriceRange(candles, overlay)
+        val range = chartPriceRange(candles, overlay, priceLines.map { it.price })
         minPrice = range.first
         maxPrice = range.second
     }
@@ -475,6 +494,7 @@ private class ChartGeometry(
             tag(o.stopLevel, Red)
             tag(o.takeLevel, Green)
         }
+        priceLines.forEach { tag(it.price, it.color) }
         if (forming) {
             val last = candles.last()
             tag(last.close, if (last.close >= last.open) Green else Red)
@@ -490,7 +510,7 @@ private class ChartGeometry(
      */
     private val captions: List<Caption> = buildList {
         if (priceHeight < 80f) return@buildList
-        val taken = mutableListOf<Rect>()
+        val taken = listOfNotNull(reserved).toMutableList()
         fun place(layout: TextLayoutResult, candidates: List<Offset>) {
             val w = layout.size.width.toFloat()
             val h = layout.size.height.toFloat()
@@ -504,6 +524,19 @@ private class ChartGeometry(
                     return
                 }
             }
+        }
+
+        // 0. Линии сделки — важнее всего на графике бота: подпись у левого края, над линией или под ней.
+        priceLines.forEach { line ->
+            val ly = y(line.price)
+            if (!inPrice(ly)) return@forEach
+            val layout = measurer.measure(line.label, labelStyle.copy(color = line.color, fontWeight = FontWeight.Bold))
+            place(layout, listOf(
+                Offset(2f, ly - layout.size.height - 1f),
+                Offset(2f, ly + 1f),
+                Offset(plotWidth * 0.35f, ly - layout.size.height - 1f),
+                Offset(plotWidth * 0.35f, ly + 1f),
+            ))
         }
 
         // 1. Отмеченные бары — над баром, иначе под ним.
@@ -579,6 +612,7 @@ private class ChartGeometry(
         drawBarMarks()
         drawWaves()
         drawLevels()
+        drawPriceLines()
         drawProjection()
         drawLivePrice()
         drawCaptions()
@@ -744,6 +778,18 @@ private class ChartGeometry(
         level(o.takeLevel, Green)
     }
 
+    /** Линии сделки через весь график: сплошные — действующие, пунктир — уровни впереди. */
+    private fun DrawScope.drawPriceLines() {
+        priceLines.forEach { line ->
+            val ly = y(line.price)
+            if (!inPrice(ly)) return@forEach
+            drawLine(
+                line.color.copy(alpha = 0.85f), Offset(0f, ly), Offset(drawRight, ly),
+                strokeWidth = if (line.dashed) 1f else 1.6f, pathEffect = if (line.dashed) dashed else null,
+            )
+        }
+    }
+
     /**
      * Проекция ожидания: пунктир от последней цены через уровень входа к цели. Зелёная, когда
      * сетап готов, и серая, пока чего-то не хватает, — плюс подпись под графиком словами.
@@ -811,11 +857,11 @@ private class ChartGeometry(
  * Видимый диапазон цен: свечи плюс уровни сетапа и запас по краям. Стоп, уехавший за нижний
  * край, читается как «стопа нет», а цель за верхним — как «цели нет».
  */
-internal fun chartPriceRange(candles: List<Candle>, overlay: SetupOverlay?): Pair<Float, Float> {
+internal fun chartPriceRange(candles: List<Candle>, overlay: SetupOverlay?, lines: List<Double> = emptyList()): Pair<Float, Float> {
     var lo = candles.minOf { it.low }
     var hi = candles.maxOf { it.high }
     val extra = listOfNotNull(overlay?.entryLevel, overlay?.stopLevel, overlay?.takeLevel) +
-        listOfNotNull(overlay?.entryWindow?.low, overlay?.entryWindow?.high)
+        listOfNotNull(overlay?.entryWindow?.low, overlay?.entryWindow?.high) + lines
     extra.forEach {
         if (it > 0.0 && it.isFinite()) { lo = min(lo, it); hi = max(hi, it) }
     }

@@ -161,6 +161,8 @@ fun AnalysisScreen(
     analyzer: MarketAnalyzerService?,
     darsConfig: DarsConfig,
     settingsStore: SettingsStore? = null,
+    /** Ручная покупка монеты из разбора; null — кнопки нет. */
+    onBuy: ((CoinAnalysis) -> Unit)? = null,
 ) {
     val scope = rememberCoroutineScope()
     val noScan = remember { MutableStateFlow<AnalysisProgress?>(null) }
@@ -362,6 +364,7 @@ fun AnalysisScreen(
                                     // Монету открыли специально — сразу весь разбор.
                                     startExpanded = true,
                                     chartHeight = 220.dp,
+                                    onBuy = onBuy?.let { buy -> { buy(sr) } },
                                 )
                             }
                         }
@@ -531,6 +534,7 @@ fun AnalysisScreen(
                                       else FavoriteState(a.mint in favoriteMints) { toggleFavorite(a) },
                                 candles = analyzer.cachedCandles(a.mint),
                                 onOpen = { query = a.symbol; runSearch(a.mint.ifBlank { a.symbol }, a.symbol) },
+                                onBuy = onBuy?.let { buy -> { buy(a) } },
                             )
                         }
                     }
@@ -1046,6 +1050,8 @@ internal fun CoinAnalysisCard(
     showHeader: Boolean = true,
     /** Открыть монету в режиме фокуса (пересчитать и показать отдельно). null — кнопки нет. */
     onOpen: (() -> Unit)? = null,
+    /** Купить монету вручную. null — кнопки нет. */
+    onBuy: (() -> Unit)? = null,
 ) {
     var expanded by remember(a.mint, a.symbol) { mutableStateOf(startExpanded) }
     val interaction = remember { MutableInteractionSource() }
@@ -1190,6 +1196,16 @@ internal fun CoinAnalysisCard(
                     Surface(color = Blue.copy(alpha = 0.12f), shape = RoundedCornerShape(10.dp),
                         modifier = Modifier.fillMaxWidth().clickable { onOpen() }) {
                         Text("🔎 Открыть отдельно и пересчитать", color = Blue, fontSize = 12.sp, fontWeight = FontWeight.Bold,
+                            textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth().padding(vertical = 10.dp))
+                    }
+                    Spacer(Modifier.height(12.dp))
+                }
+
+                // Ручная покупка: те же лимиты портфеля и проверка монеты, что у бота (см. ManualBuyDialog).
+                if (onBuy != null && a.mint.isNotBlank()) {
+                    Surface(color = Green.copy(alpha = 0.12f), shape = RoundedCornerShape(10.dp),
+                        modifier = Modifier.fillMaxWidth().clickable { onBuy() }) {
+                        Text("🛒 Купить вручную", color = Green, fontSize = 12.sp, fontWeight = FontWeight.Bold,
                             textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth().padding(vertical = 10.dp))
                     }
                     Spacer(Modifier.height(12.dp))

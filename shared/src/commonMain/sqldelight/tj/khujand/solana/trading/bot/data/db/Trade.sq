@@ -119,6 +119,13 @@ realizedPnlSince:
 SELECT COALESCE(SUM(pnl), 0.0) FROM trade
 WHERE status = 'CLOSED' AND is_demo = ? AND closed_at >= ?;
 
+-- PnL закрытых сделок режима по времени закрытия (старые первыми) — кривая реализованного PnL
+-- для просадки портфеля от пика.
+closedPnlSince:
+SELECT pnl FROM trade
+WHERE status = 'CLOSED' AND is_demo = ? AND closed_at IS NOT NULL AND closed_at >= ?
+ORDER BY closed_at ASC;
+
 -- Последние закрытые сделки режима (новые первыми) — пауза после серии убытков.
 recentClosed:
 SELECT pnl, closed_at FROM trade
@@ -151,6 +158,22 @@ SELECT
     COALESCE(SUM(pnl), 0.0) AS total_pnl,
     COALESCE(SUM(fee), 0.0) AS total_fees
 FROM trade WHERE status = 'CLOSED';
+
+-- Итоги режима (demo/real) с момента — начало забега или дня (см. TradingRuns.kt).
+getStatsByModeSince:
+SELECT
+    COUNT(*) AS total_trades,
+    SUM(CASE WHEN pnl > 0 THEN 1 ELSE 0 END) AS wins,
+    SUM(CASE WHEN pnl < 0 THEN 1 ELSE 0 END) AS losses,
+    COALESCE(SUM(pnl), 0.0) AS total_pnl,
+    COALESCE(SUM(fee), 0.0) AS total_fees
+FROM trade WHERE status = 'CLOSED' AND is_demo = ? AND closed_at >= ?;
+
+-- Закрытые сделки режима (старые первыми) — итоги забегов.
+closedByMode:
+SELECT strategy_name, pnl, fee, closed_at FROM trade
+WHERE status = 'CLOSED' AND is_demo = ? AND closed_at IS NOT NULL
+ORDER BY closed_at ASC;
 
 getTodayStats:
 SELECT

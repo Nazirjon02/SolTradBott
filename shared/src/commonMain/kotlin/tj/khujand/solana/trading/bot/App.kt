@@ -15,6 +15,7 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -27,6 +28,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
@@ -84,8 +86,16 @@ import tj.khujand.solana.trading.bot.core.engine.ActivityEvent
 import tj.khujand.solana.trading.bot.core.engine.ActivityLevel
 import tj.khujand.solana.trading.bot.core.engine.ActivityStats
 import tj.khujand.solana.trading.bot.core.engine.EXIT_BLOCKED_AFTER
+import tj.khujand.solana.trading.bot.core.engine.RunSummary
+import tj.khujand.solana.trading.bot.core.engine.fmtNum
+import tj.khujand.solana.trading.bot.core.engine.runStartedAt
+import tj.khujand.solana.trading.bot.core.engine.runSummaries
 import tj.khujand.solana.trading.bot.core.strategy.StrategyConfig
+import tj.khujand.solana.trading.bot.core.strategy.StrategyManager
+import tj.khujand.solana.trading.bot.domain.dars.CoinAnalysis
+import tj.khujand.solana.trading.bot.domain.dars.MarketAnalysis
 import tj.khujand.solana.trading.bot.core.strategy.StrategyType
+import tj.khujand.solana.trading.bot.core.strategy.WatchItem
 import tj.khujand.solana.trading.bot.domain.backtest.BacktestReport
 import tj.khujand.solana.trading.bot.domain.backtest.BacktestRequest
 import tj.khujand.solana.trading.bot.domain.backtest.BacktestService
@@ -148,6 +158,10 @@ fun DrxApp(runtime: DrxRuntime? = null) {
     var showForm by remember { mutableStateOf(false) }
     // Открытый бэктест (поверх вкладок); из него можно уйти в форму стратегии и вернуться.
     var backtestFor by remember { mutableStateOf<StrategyConfig?>(null) }
+    // Открытый график бота (поверх вкладок): монета с доски наблюдения или открытая позиция.
+    var chartTarget by remember { mutableStateOf<ChartTarget?>(null) }
+    // Ручная покупка из «Анализа» — диалог поверх экрана.
+    var manualBuy by remember { mutableStateOf<CoinAnalysis?>(null) }
 
     val db = runtime?.db
     val settingsStore = runtime?.settingsStore
@@ -172,6 +186,8 @@ fun DrxApp(runtime: DrxRuntime? = null) {
     var demoMode by remember { mutableStateOf(settingsStore?.getDemoMode() ?: true) }
     // SHADOW (DEMO по котировкам Jupiter) — тоже сразу.
     var shadowMode by remember { mutableStateOf(settingsStore?.getShadowQuotes() ?: false) }
+    // Возобновление торговли при запуске приложения — читается при следующем запуске.
+    var resumeOnLaunch by remember { mutableStateOf(settingsStore?.getResumeOnLaunch() ?: false) }
 
     // Режим «только сигнал» — общий StateFlow с Telegram.
     val fallbackSignalOnly = remember { MutableStateFlow(false) }
@@ -192,6 +208,13 @@ fun DrxApp(runtime: DrxRuntime? = null) {
     // Пульс сессии для шапки
     val statsFallback = remember { MutableStateFlow(ActivityStats()) }
     val activityStats by (runtime?.activityLog?.stats ?: statsFallback).collectAsState()
+    // Ошибки сессии — окно по клику на «N ош.» в шапке
+    val errorsFallback = remember { MutableStateFlow<List<ActivityEvent>>(emptyList()) }
+    val sessionErrors by (runtime?.activityLog?.errors ?: errorsFallback).collectAsState()
+
+    // Доска наблюдения — строки приходят из скан-цикла стратегий
+    val watchFallback = remember { MutableStateFlow<List<WatchItem>>(emptyList()) }
+    val watchItems by (runtime?.watchBoard?.items ?: watchFallback).collectAsState()
 
     var balance by remember { mutableStateOf<AccountBalance?>(null) }
 
@@ -226,8 +249,26 @@ fun DrxApp(runtime: DrxRuntime? = null) {
     }
     LaunchedEffect(runtime) { reload() }
 
+    // Защиту и автоматику могли переключить из Telegram (/settings) — при входе в настройки перечитываем
+    // их из БД, иначе «Сохранить» вернул бы поверх старые значения.
+    LaunchedEffect(screen) {
+        val s = settingsStore ?: return@LaunchedEffect
+        if (screen == Screen.SETTINGS) {
+            settings = settings.copy(protection = s.getProtection())
+            resumeOnLaunch = s.getResumeOnLaunch()
+        }
+    }
+
     // Закрытые сделки — перечитываются при смене экрана (TradeMonitor закрывает их в БД).
     val closedTrades = remember(screen) { loadClosedTrades(db) }
+
+    // «Новый старт»: итоги главной и «Аналитики» — с начала забега текущего режима (0 — вся история).
+    var runVersion by remember { mutableStateOf(0) }
+    val runStart = remember(screen, demoMode, runVersion) { db?.runStartedAt(demoMode) ?: 0L }
+    val runs = remember(screen, demoMode, runVersion) {
+        db?.let { runCatching { runSummaries(it, demoMode) }.getOrNull() } ?: emptyList()
+    }
+    val runTrades = if (runStart > 0) closedTrades.filter { it.isDemo == demoMode && it.closedAt >= runStart } else closedTrades
 
     Column(modifier = Modifier.fillMaxSize().background(BgDark)) {
         Box(modifier = Modifier.weight(1f)) {
@@ -246,6 +287,8 @@ fun DrxApp(runtime: DrxRuntime? = null) {
                     },
                     onCancel = { showForm = false; editingStrategy = null }
                 )
+            } else if (chartTarget != null) {
+                BotChartScreen(runtime, chartTarget!!) { chartTarget = null }
             } else if (backtestFor != null) {
                 BacktestScreen(
                     config = backtestFor!!,
@@ -262,14 +305,25 @@ fun DrxApp(runtime: DrxRuntime? = null) {
                         connected = runtime != null,
                         activity = activity,
                         stats = activityStats,
-                        trades = closedTrades,
+                        errors = sessionErrors,
+                        trades = runTrades,
                         openPositions = openPositions,
                         onClosePosition = { tradeId ->
                             scope.launch {
                                 engine?.closePosition(tradeId)
                                 refreshPositions() // сразу обновляем список после закрытия
                             }
-                        }
+                        },
+                        watch = watchItems,
+                        onWatchClick = { w ->
+                            chartTarget = ChartTarget(w.mint, w.symbol, w.pairAddress, strategyId = w.strategyId)
+                        },
+                        onPositionChart = { p ->
+                            // Пул и стратегию берём из строки сделки: в карточке позиции их нет.
+                            db?.tradeQueries?.getById(p.tradeId)?.executeAsOneOrNull()?.let { t ->
+                                chartTarget = ChartTarget(t.mint, t.symbol, t.pair_address, t.strategy_id, t.id)
+                            }
+                        },
                     ) { target ->
                         scope.launch {
                             when (target) {
@@ -290,9 +344,10 @@ fun DrxApp(runtime: DrxRuntime? = null) {
                         analyzer = runtime?.marketAnalyzer,
                         darsConfig = strategies.activeDarsConfig(),
                         settingsStore = settingsStore,
+                        onBuy = if (runtime != null) { a -> manualBuy = a } else null,
                     )
                     Screen.HISTORY -> HistoryScreen(closedTrades)
-                    Screen.STATS -> StatsScreen(closedTrades)
+                    Screen.STATS -> StatsScreen(closedTrades, runs, runStart, demoMode)
                     Screen.STRATEGIES -> StrategiesScreen(
                         strategies = strategies,
                         onCreate = { showForm = true; editingStrategy = null },
@@ -317,6 +372,11 @@ fun DrxApp(runtime: DrxRuntime? = null) {
                         shadowMode = shadowMode,
                         demoBalance = balance?.demoUsd ?: 10_000.0,
                         signalOnly = signalOnly,
+                        resumeOnLaunch = resumeOnLaunch,
+                        onResumeOnLaunchChange = { v ->
+                            resumeOnLaunch = v
+                            settingsStore?.setResumeOnLaunch(v)
+                        },
                         onDemoModeChange = { v ->
                             // REAL требует seed-фразы — без неё исполнитель всё равно не откроет сделку.
                             demoMode = v
@@ -331,7 +391,12 @@ fun DrxApp(runtime: DrxRuntime? = null) {
                             if (sm != null) sm.setSignalOnly(v) else fallbackSignalOnly.value = v
                         },
                         onResetDemo = { runtime?.executor?.resetDemoBalance() },
-                        onResetBot = { runtime?.resetBotData() },
+                        onResetBot = { runtime?.resetBotData(); runVersion++ },
+                        onNewRun = { balance ->
+                            val message = runtime?.startNewRun(balance) ?: "Рантайм не подключён"
+                            runVersion++
+                            message
+                        },
                         onSave = { newSettings ->
                             settingsStore?.apply {
                                 setRpcUrl(newSettings.rpcUrl.trim())
@@ -355,6 +420,28 @@ fun DrxApp(runtime: DrxRuntime? = null) {
             }
         }
         if (!showForm) BottomNav(screen) { screen = it }
+    }
+
+    manualBuy?.let { coin ->
+        val rt = runtime ?: return@let
+        ManualBuyDialog(
+            coin = coin,
+            modeLabel = rt.executor.modeLabel(),
+            isReal = !rt.executor.isDemo(),
+            // По умолчанию — 5% баланса, как у стратегий по умолчанию.
+            defaultSizeUsd = (balance?.totalUsd ?: 0.0).let { b -> if (b > 0) kotlin.math.round(b * 0.05) else 50.0 },
+            onBuy = { size, sl, tp ->
+                when (val r = rt.manualBuy(coin.mint, size, sl, tp)) {
+                    is StrategyManager.ManualResult.Opened ->
+                        "✅ Куплено ${r.symbol} на $${fmtNum(r.sizeUsd)} по ${MarketAnalysis.fmtPrice(r.entryPrice)} — позиция на главной"
+                    is StrategyManager.ManualResult.Rejected -> "⛔ ${r.reason}"
+                }
+            },
+            onDismiss = {
+                manualBuy = null
+                scope.launch { refreshPositions() }
+            },
+        )
     }
 }
 
@@ -435,9 +522,13 @@ fun DashboardScreen(
     connected: Boolean = false,
     activity: List<ActivityEvent> = emptyList(),
     stats: ActivityStats = ActivityStats(),
+    errors: List<ActivityEvent> = emptyList(),
     trades: List<TradeHistoryItem> = emptyList(),
     openPositions: List<OpenPosition> = emptyList(),
     onClosePosition: (String) -> Unit = {},
+    watch: List<WatchItem> = emptyList(),
+    onWatchClick: (WatchItem) -> Unit = {},
+    onPositionChart: ((OpenPosition) -> Unit)? = null,
     onStatusChange: (BotStatus) -> Unit
 ) {
     val pnlData = equityCurve(trades)
@@ -447,7 +538,7 @@ fun DashboardScreen(
         modifier = Modifier.fillMaxSize(),
         contentPadding = PaddingValues(bottom = 16.dp)
     ) {
-        item { DashboardHeader(botStatus, stats, connected) }
+        item { DashboardHeader(botStatus, stats, connected, errors) }
 
         item {
             Spacer(Modifier.height(12.dp))
@@ -467,6 +558,12 @@ fun DashboardScreen(
         item {
             Spacer(Modifier.height(12.dp))
             ControlButtons(botStatus, onStatusChange)
+        }
+
+        // Доска наблюдения — над лентой: лента отвечает «что бот делал», доска — «чего он ждёт».
+        item {
+            Spacer(Modifier.height(12.dp))
+            WatchBoardCard(watch, botStatus == BotStatus.RUNNING, onWatchClick)
         }
 
         item {
@@ -498,7 +595,7 @@ fun DashboardScreen(
             }
             items(openPositions, key = { it.tradeId }) { p ->
                 Spacer(Modifier.height(6.dp))
-                PositionCard(p, onClose = { onClosePosition(p.tradeId) })
+                PositionCard(p, onClose = { onClosePosition(p.tradeId) }, onChart = onPositionChart?.let { { it(p) } })
             }
         }
 
@@ -525,8 +622,10 @@ fun DashboardScreen(
 fun DashboardHeader(
     status: BotStatus,
     stats: ActivityStats = ActivityStats(),
-    connected: Boolean = false
+    connected: Boolean = false,
+    errors: List<ActivityEvent> = emptyList(),
 ) {
+    var showErrors by remember { mutableStateOf(false) }
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -538,15 +637,19 @@ fun DashboardHeader(
         Column {
             Text("DRX Bot", fontSize = 26.sp, fontWeight = FontWeight.ExtraBold, color = TextPrimary)
             Spacer(Modifier.height(3.dp))
-            PulseLine(stats, connected)
+            PulseLine(stats, connected) { showErrors = true }
         }
         StatusChip(status)
     }
+    if (showErrors) ErrorsDialog(errors, stats.errorCount) { showErrors = false }
 }
 
-/** Пульс сессии: точка + счётчик запросов + время последнего успешного ответа DEX-API. */
+/**
+ * Пульс сессии: точка + счётчик запросов + время последнего успешного ответа DEX-API.
+ * Счётчик ошибок кликабелен — [onErrorsClick] открывает их список.
+ */
 @Composable
-private fun PulseLine(stats: ActivityStats, connected: Boolean) {
+private fun PulseLine(stats: ActivityStats, connected: Boolean, onErrorsClick: () -> Unit) {
     val lastOk = stats.lastOkAt
     Row(verticalAlignment = Alignment.CenterVertically) {
         Box(
@@ -564,9 +667,53 @@ private fun PulseLine(stats: ActivityStats, connected: Boolean) {
         }
         if (stats.errorCount > 0) {
             Spacer(Modifier.width(6.dp))
-            Text("· ${stats.errorCount} ош.", fontSize = 12.sp, color = Red, fontWeight = FontWeight.SemiBold)
+            Text(
+                "· ${stats.errorCount} ош. ›", fontSize = 12.sp, color = Red, fontWeight = FontWeight.SemiBold,
+                modifier = Modifier.clickable { onErrorsClick() }
+            )
         }
     }
+}
+
+/**
+ * Окно со списком ошибок сессии (новые сверху): лента активности держит 60 событий и за минуту
+ * сканирования вытесняет ошибку, а здесь — последние 100. [total] — счётчик из шапки: в него входят и
+ * сбои запросов без текста, поэтому строк может быть меньше.
+ */
+@Composable
+private fun ErrorsDialog(errors: List<ActivityEvent>, total: Int, onDismiss: () -> Unit) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        containerColor = SurfaceCard,
+        title = { Text("Ошибки сессии · $total", fontSize = 16.sp, fontWeight = FontWeight.Bold, color = TextPrimary) },
+        text = {
+            if (errors.isEmpty()) {
+                Text(
+                    "Текстов ошибок нет — счётчик растёт и от сбоев запросов, о которых лента уже написала.",
+                    fontSize = 12.sp, color = TextSecondary, lineHeight = 16.sp
+                )
+            } else {
+                Column(
+                    Modifier.heightIn(max = 420.dp).verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    errors.asReversed().forEach { e ->
+                        Row {
+                            Text(formatClock(e.timestamp), fontSize = 11.sp, color = TextSecondary, fontFamily = FontFamily.Monospace)
+                            Spacer(Modifier.width(8.dp))
+                            Text(e.message, fontSize = 12.sp, color = TextPrimary, lineHeight = 16.sp, modifier = Modifier.weight(1f))
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            Text(
+                "Закрыть", color = Green, fontSize = 14.sp, fontWeight = FontWeight.Bold,
+                modifier = Modifier.clickable { onDismiss() }.padding(8.dp)
+            )
+        }
+    )
 }
 
 @Composable
@@ -1087,7 +1234,7 @@ private fun fmtPrice(v: Double): String {
 
 /** Карточка «живой» открытой позиции: текущий PnL + ручное закрытие с подтверждением. */
 @Composable
-fun PositionCard(pos: OpenPosition, onClose: () -> Unit) {
+fun PositionCard(pos: OpenPosition, onClose: () -> Unit, onChart: (() -> Unit)? = null) {
     val pnlColor = if (pos.pnlUsd >= 0) Green else Red
     var confirm by remember(pos.tradeId) { mutableStateOf(false) }
 
@@ -1190,6 +1337,20 @@ fun PositionCard(pos: OpenPosition, onClose: () -> Unit) {
             }
 
             Spacer(Modifier.height(10.dp))
+
+            // График бота: как он ведёт эту сделку — стоп сейчас и при входе, +1R, безубыток, трейлинг, цель.
+            if (onChart != null) {
+                Surface(
+                    color = Blue.copy(alpha = 0.12f), shape = RoundedCornerShape(10.dp),
+                    modifier = Modifier.fillMaxWidth().clickable { onChart() }
+                ) {
+                    Text(
+                        "📈 График и ведение сделки", color = Blue, fontSize = 13.sp, fontWeight = FontWeight.Bold,
+                        modifier = Modifier.padding(10.dp), textAlign = TextAlign.Center
+                    )
+                }
+                Spacer(Modifier.height(8.dp))
+            }
 
             // Ручное закрытие: рыночный выход необратим — подтверждаем вторым тапом.
             if (!confirm) {
@@ -1490,8 +1651,37 @@ fun MiniStat(label: String, value: String, color: Color, modifier: Modifier = Mo
 
 // ─── Stats screen ─────────────────────────────────────────────────────────────
 
+/**
+ * «Аналитика». После «Нового старта» ([runStartedAt] > 0) по умолчанию показывает текущий забег режима
+ * ([demoMode]); «Вся история» — все закрытые сделки, как раньше. Календарь P&L открывается поверх.
+ */
 @Composable
-fun StatsScreen(trades: List<TradeHistoryItem> = emptyList()) {
+fun StatsScreen(
+    allTrades: List<TradeHistoryItem> = emptyList(),
+    runs: List<RunSummary> = emptyList(),
+    runStartedAt: Long = 0L,
+    demoMode: Boolean = true,
+) {
+    var currentRunOnly by remember { mutableStateOf(true) }
+    var showCalendar by remember { mutableStateOf(false) }
+    val scoped = runStartedAt > 0 && currentRunOnly
+    val trades = if (scoped) allTrades.filter { it.isDemo == demoMode && it.closedAt >= runStartedAt } else allTrades
+    val zone = remember { TimeZone.currentSystemDefault() }
+    val todayDate = remember { Clock.System.now().toLocalDateTime(zone).date }
+    val runNumber = runs.lastOrNull()?.number ?: 0
+
+    if (showCalendar) {
+        PnlCalendarScreen(
+            trades = trades,
+            runStarts = runs.filter { it.number > 0 }.map { it.startedAt },
+            today = todayDate,
+            zone = zone,
+            scopeLabel = if (scoped) "Забег №$runNumber (${if (demoMode) "DEMO" else "REAL"})" else "Вся история",
+            onClose = { showCalendar = false },
+        )
+        return
+    }
+
     val pnlData = equityCurve(trades)
     val totalPnl = trades.sumOf { it.pnl }
     val wins = trades.count { it.isWin }
@@ -1534,6 +1724,14 @@ fun StatsScreen(trades: List<TradeHistoryItem> = emptyList()) {
                     Text("${trades.size} сделок", fontSize = 12.sp, color = Green,
                         modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp))
                 }
+            }
+        }
+
+        // Забег («Новый старт») или вся история
+        if (runStartedAt > 0) {
+            item {
+                RunScopeChips(currentRunOnly, runNumber) { currentRunOnly = it }
+                Spacer(Modifier.height(12.dp))
             }
         }
 
@@ -1582,6 +1780,12 @@ fun StatsScreen(trades: List<TradeHistoryItem> = emptyList()) {
         }
 
         item { Spacer(Modifier.height(12.dp)) }
+
+        // Календарь P&L: кривая выше — сумма нарастающим итогом, календарь — каждый день отдельно.
+        item {
+            PnlCalendarEntryCard(trades, todayDate, zone) { showCalendar = true }
+            Spacer(Modifier.height(12.dp))
+        }
 
         // Сегодня vs. Всё время
         item {
@@ -1671,6 +1875,14 @@ fun StatsScreen(trades: List<TradeHistoryItem> = emptyList()) {
                         LegendDot("LOSS  $losses (${if (trades.isEmpty()) 0 else 100 - winrate}%)", if (trades.isEmpty()) TextSecondary else Red)
                     }
                 }
+            }
+        }
+
+        // Забеги: прошлые итоги рядом — ради этого «Новый старт» и не удаляет сделки.
+        if (runs.isNotEmpty()) {
+            item {
+                Spacer(Modifier.height(12.dp))
+                RunsCard(runs, if (demoMode) "DEMO" else "REAL")
             }
         }
     }
@@ -1940,7 +2152,8 @@ fun BacktestScreen(
     var days by remember { mutableStateOf(initial.days) }
     var cost by remember { mutableStateOf(initial.settings.costPerSidePercent.toFloat()) }
     var oneTrade by remember { mutableStateOf(initial.settings.oneTradePerCoin) }
-    val request = BacktestRequest(source, coins.toInt(), days, BacktestSettings(cost.toDouble(), oneTrade))
+    var reversalExit by remember { mutableStateOf(initial.settings.reversalExit) }
+    val request = BacktestRequest(source, coins.toInt(), days, BacktestSettings(cost.toDouble(), oneTrade, reversalExit))
 
     val fallback = remember { MutableStateFlow<BacktestState>(BacktestState.Idle) }
     val state by (service?.state ?: fallback).collectAsState()
@@ -2021,6 +2234,7 @@ fun BacktestScreen(
                 FormSlider("Издержки на вход и каждый выход", cost, 0f, 5f,
                     "${"%.1f".format(cost)}% за сторону") { cost = it }
                 FormToggle("Одна сделка на монету (как в боте)", oneTrade) { oneTrade = it }
+                FormToggle("Выход по развороту (как тумблер в защите)", reversalExit) { reversalExit = it }
             }
 
             when (val s = state) {
@@ -2253,6 +2467,10 @@ fun StrategyFormScreen(
     var bpMaxBars by remember { mutableStateOf((c?.bpMaxBarsSinceBreakout ?: 20).toString()) }
     var bpPullbackVol by remember { mutableStateOf(c?.bpPullbackVolumeRatio?.toFloat() ?: 0.7f) }
     var bpTriggerVol by remember { mutableStateOf(c?.bpTriggerVolumeMult?.toFloat() ?: 1.2f) }
+
+    // ── Взведённый вход («Пробой + откат», «Мем-плейбук») ──
+    var armedEntry by remember { mutableStateOf(c?.armedEntryEnabled ?: false) }
+    var armedExpiry by remember { mutableStateOf((c?.armedExpiryBars ?: 3).toString()) }
 
     // ── Мем-плейбук ──
     var mpLookback by remember { mutableStateOf((c?.mpLookbackBars ?: 72).toString()) }
@@ -2700,6 +2918,7 @@ fun StrategyFormScreen(
                         "${"%.0f".format(bpPullbackVol * 100)}% объёма импульса") { bpPullbackVol = it }
                     FormSlider("Объём бара-триггера", bpTriggerVol, 1f, 3f,
                         "×${"%.1f".format(bpTriggerVol)} объёма отката") { bpTriggerVol = it }
+                    ArmedEntryFields(armedEntry, armedExpiry, { armedEntry = it }, { armedExpiry = it })
                     Surface(color = Blue.copy(alpha = 0.08f), shape = RoundedCornerShape(8.dp)) {
                         Text(
                             "Бот не покупает сам пробой: он ждёт откат к уровню пробоя на затухающем объёме " +
@@ -2727,6 +2946,7 @@ fun StrategyFormScreen(
                         "${"%.0f".format(mpPullbackVol * 100)}% объёма импульса") { mpPullbackVol = it }
                     FormSlider("Объём бара-триггера", mpTriggerVol, 1f, 3f,
                         "×${"%.1f".format(mpTriggerVol)} объёма отката") { mpTriggerVol = it }
+                    ArmedEntryFields(armedEntry, armedExpiry, { armedEntry = it }, { armedExpiry = it })
                     FormSlider("Ликвидность не меньше", mpLiqToMc, 0f, 20f,
                         "${"%.1f".format(mpLiqToMc)}% капитализации") { mpLiqToMc = it }
                     FormToggle("Только с отозванными mint/freeze authority", mpAuthorities) { mpAuthorities = it }
@@ -3040,6 +3260,8 @@ fun StrategyFormScreen(
                     vbNearHighPct = vbNearHigh.toDouble(),
                     vbVolumeMult = vbVolume.toDouble(),
                     vbMaxExtensionPct = vbMaxExtension.toDouble(),
+                    armedEntryEnabled = armedEntry,
+                    armedExpiryBars = armedExpiry.toIntOrNull()?.coerceIn(1, 50) ?: 3,
                 ))
             },
             modifier = Modifier
@@ -3067,11 +3289,14 @@ fun SettingsScreen(
     shadowMode: Boolean = false,
     demoBalance: Double = 10_000.0,
     signalOnly: Boolean = false,
+    resumeOnLaunch: Boolean = false,
     onDemoModeChange: (Boolean) -> Unit = {},
     onShadowModeChange: (Boolean) -> Unit = {},
     onSignalOnlyChange: (Boolean) -> Unit = {},
+    onResumeOnLaunchChange: (Boolean) -> Unit = {},
     onResetDemo: () -> Unit = {},
     onResetBot: () -> Unit = {},
+    onNewRun: (Double?) -> String = { "" },
     onSave: (DrxSettings) -> Unit
 ) {
     var rpcUrl by remember(settings) { mutableStateOf(settings.rpcUrl) }
@@ -3169,6 +3394,15 @@ fun SettingsScreen(
                             modifier = Modifier.padding(12.dp))
                     }
                 }
+                Spacer(Modifier.height(8.dp))
+                FormToggle("Возобновлять торговлю при запуске приложения", resumeOnLaunch) { onResumeOnLaunchChange(it) }
+                Text(
+                    "Бот вернётся в то состояние, в котором его оставили (работает или на паузе), после " +
+                        "перезапуска приложения или перезагрузки телефона. Сервер возобновляет торговлю всегда. " +
+                        "Не включайте на десктопе, если ту же базу (DB_PATH) использует сервер: на одном счёте " +
+                        "торговали бы два бота.",
+                    fontSize = 11.sp, color = TextSecondary, lineHeight = 16.sp
+                )
             }
 
             // ── Защита сделок ─────────────────────────────────────────────
@@ -3231,6 +3465,8 @@ fun SettingsScreen(
             }
 
             // ── Сброс ─────────────────────────────────────────────────────
+            NewRunSection(demoMode, onNewRun)
+
             FormSection("🚨  Сброс бота") {
                 Text(
                     "Удаляет все сделки, кеш токенов и балансов, сбрасывает демо-счёт. Стратегии и настройки остаются.",
@@ -3336,9 +3572,16 @@ private fun ProtectionSection(p: ProtectionSettings, onChange: (ProtectionSettin
             IntSettingField("Длительность паузы, мин", p.lossStreakPauseMinutes) {
                 onChange(p.copy(lossStreakPauseMinutes = it))
             }
+            DecimalSettingField("Просадка портфеля от пика, %", p.maxDrawdownPct) { onChange(p.copy(maxDrawdownPct = it)) }
+            FormToggle("Останавливать бота при лимите убытка", p.autoStopOnLimit) {
+                onChange(p.copy(autoStopOnLimit = it))
+            }
             Text(
                 "Считаются все стратегии текущего режима (DEMO или REAL) вместе; капитал — свободный баланс " +
-                    "плюс позиции, убыток — закрытые сделки и открытые по последней цене. 0 — лимит выключен.",
+                    "плюс позиции, убыток — закрытые сделки и открытые по последней цене. 0 — лимит выключен. " +
+                    "Просадка — от лучшей точки кривой PnL по сделкам (пополнение кошелька и цена SOL не считаются) " +
+                    "и сама не отпускает. С остановкой при лимите убытка (день, 7 дней, просадка) бот не ждёт " +
+                    "следующего дня, а останавливается целиком — запуск только вручную.",
                 fontSize = 11.sp, color = TextSecondary, lineHeight = 16.sp
             )
         }
@@ -3348,6 +3591,33 @@ private fun ProtectionSection(p: ProtectionSettings, onChange: (ProtectionSettin
             "Продажа не прошла — следующая попытка с бо́льшим slippage (3% → 6% → 12%… до потолка). " +
                 "После $EXIT_BLOCKED_AFTER неудач подряд позиция помечается «продажа заблокирована»: попытки идут " +
                 "с паузой, в Telegram приходит предупреждение.",
+            fontSize = 11.sp, color = TextSecondary, lineHeight = 16.sp
+        )
+        Spacer(Modifier.height(8.dp))
+        FormToggle("Выход по развороту рынка", p.reversalExitEnabled) { onChange(p.copy(reversalExitEnabled = it)) }
+        Text(
+            "Открытая сделка продаётся, не дожидаясь стопа, когда на закрытых барах рабочего ТФ стратегии " +
+                "EMA(21) ушла ниже EMA(50), а после входа сложились нижние максимум и минимум. Проверка — раз " +
+                "на закрытый бар, через 20 с после его закрытия.",
+            fontSize = 11.sp, color = TextSecondary, lineHeight = 16.sp
+        )
+    }
+}
+
+/**
+ * «🎯 Вход по касанию уровня» в форме «Пробоя + отката» и «Мем-плейбука»: всё сошлось, кроме бара-триггера,
+ * — бот следит за ценой и входит, как только она пройдёт максимум прошлого бара (см. StrategyConfig.armedEntryEnabled).
+ */
+@Composable
+private fun ArmedEntryFields(enabled: Boolean, expiry: String, onEnabled: (Boolean) -> Unit, onExpiry: (String) -> Unit) {
+    FormToggle("🎯 Вход по касанию уровня (взвод)", enabled, onEnabled)
+    if (enabled) {
+        FormTextField("Взвод живёт, баров", expiry, isNumber = true, onChange = onExpiry)
+        Text(
+            "Когда не хватает только бара-триггера, бот взводит сетап и проверяет цену каждые 5 с: прошла максимум " +
+                "прошлого бара (не выше чем на 3%) — вход сразу, а не через скан после закрытия бара. Цена у точки " +
+                "слома сетапа или срок вышел — взвод снимается. Сила закрытия и объём триггера при этом не " +
+                "проверяются: бар ещё не закрыт.",
             fontSize = 11.sp, color = TextSecondary, lineHeight = 16.sp
         )
     }

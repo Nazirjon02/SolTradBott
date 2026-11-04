@@ -27,7 +27,7 @@ data class ActivityStats(
  *
  * Запись потокобезопасна (несколько стратегий пишут параллельно) за счёт [update].
  */
-class ActivityLog(private val capacity: Int = 60) {
+class ActivityLog(private val capacity: Int = 60, private val errorCapacity: Int = 100) {
 
     private val _events = MutableStateFlow<List<ActivityEvent>>(emptyList())
     val events: StateFlow<List<ActivityEvent>> = _events.asStateFlow()
@@ -35,9 +35,15 @@ class ActivityLog(private val capacity: Int = 60) {
     private val _stats = MutableStateFlow(ActivityStats())
     val stats: StateFlow<ActivityStats> = _stats.asStateFlow()
 
+    // Ошибки отдельно от ленты: в ленте 60 событий, и за минуту сканирования ошибка из неё уходит.
+    // Окно «N ош.» в шапке показывает их все (последние [errorCapacity]) — новые в конце.
+    private val _errors = MutableStateFlow<List<ActivityEvent>>(emptyList())
+    val errors: StateFlow<List<ActivityEvent>> = _errors.asStateFlow()
+
     fun add(level: ActivityLevel, message: String) {
         val event = ActivityEvent(Clock.System.now().toEpochMilliseconds(), level, message)
         _events.update { (it + event).takeLast(capacity) }
+        if (level == ActivityLevel.ERROR) _errors.update { (it + event).takeLast(errorCapacity) }
     }
 
     fun info(msg: String)    = add(ActivityLevel.INFO, msg)
@@ -51,14 +57,22 @@ class ActivityLog(private val capacity: Int = 60) {
         _stats.update { it.copy(okCount = it.okCount + 1, lastOkAt = now) }
     }
 
-    /** Неудачный запрос — растит счётчик ошибок. */
-    fun requestFailed() {
+    /**
+     * Неудачный запрос — растит счётчик ошибок. С [reason] запрос попадает и в список ошибок (без записи
+     * в ленту); без него — только счётчик: вызывающий сам пишет ошибку в ленту через [error].
+     */
+    fun requestFailed(reason: String? = null) {
         _stats.update { it.copy(errorCount = it.errorCount + 1) }
+        if (reason != null) {
+            val event = ActivityEvent(Clock.System.now().toEpochMilliseconds(), ActivityLevel.ERROR, reason)
+            _errors.update { (it + event).takeLast(errorCapacity) }
+        }
     }
 
     fun clear() {
         _events.update { emptyList() }
         _stats.update { ActivityStats() }
+        _errors.update { emptyList() }
     }
 }
 

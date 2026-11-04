@@ -7,6 +7,7 @@ import kotlinx.datetime.TimeZone
 import kotlinx.datetime.atStartOfDayIn
 import kotlinx.datetime.toLocalDateTime
 import tj.khujand.solana.trading.bot.core.engine.fmtNum
+import tj.khujand.solana.trading.bot.core.engine.runStartedAt
 import tj.khujand.solana.trading.bot.core.strategy.StrategyConfig
 import tj.khujand.solana.trading.bot.data.ProtectionSettings
 import tj.khujand.solana.trading.bot.data.db.DrxDatabase
@@ -40,6 +41,12 @@ class RiskManager(
     private fun baseBalanceUsd(): Double =
         if (isDemo()) accountCache.demoUsd() else accountCache.realUsd()
 
+    /** Начало идущего забега режима («Новый старт»): убытки до него лимиты больше не видят. 0 — вся история. */
+    private fun runStart(): Long = db.runStartedAt(isDemo())
+
+    /** Капитал текущего режима: свободный баланс + открытые позиции по последней цене. */
+    fun equityUsd(): Double = portfolioSnapshot().equityUsd
+
     fun canTrade(config: StrategyConfig): Boolean =
         checkDailyLoss(config) && checkDrawdown(config) && checkMaxPositions(config)
 
@@ -53,7 +60,7 @@ class RiskManager(
 
     private fun checkDailyLoss(config: StrategyConfig): Boolean {
         if (!config.maxDailyLossEnabled) return true // лимит отключён пользователем
-        val todayStart = startOfDayMillis()
+        val todayStart = maxOf(startOfDayMillis(), runStart())
         val todayPnl = db.tradeQueries.getTodayPnl(config.id, todayStart).executeAsOne()
         val balance = baseBalanceUsd().takeIf { it > 0 } ?: 1000.0
         val maxLossAmount = balance * config.maxDailyLoss / 100
@@ -67,7 +74,7 @@ class RiskManager(
      */
     private fun checkDrawdown(config: StrategyConfig): Boolean {
         if (!config.maxDrawdownEnabled) return true // лимит отключён пользователем
-        val windowStart = Clock.System.now().toEpochMilliseconds() - DRAWDOWN_WINDOW_MS
+        val windowStart = maxOf(Clock.System.now().toEpochMilliseconds() - DRAWDOWN_WINDOW_MS, runStart())
         val maxDrawdown = db.tradeQueries.getMaxDrawdown(config.id, windowStart).executeAsOneOrNull() ?: 0.0
         return maxDrawdown > -config.maxDrawdown
     }
@@ -120,6 +127,16 @@ class RiskManager(
         portfolioBlock(protection(), portfolioSnapshot(), newSizeUsd, nowMs())
 
     /**
+     * Причина остановить бота целиком (тумблер «Останавливать бота при лимите убытка»): сработал лимит
+     * убытка портфеля — за день, за 7 дней или просадка от пика. null — останавливать не за что.
+     */
+    fun hardStopReason(): String? {
+        val s = protection()
+        if (!s.portfolioEnabled || !s.autoStopOnLimit) return null
+        return lossLimitReason(s, portfolioSnapshot())
+    }
+
+    /**
      * Занимает слот под вход: проверка лимитов и бронь — под одним локом, а брони считаются открытыми
      * позициями. Иначе стратегии, параллельно входящие в разные монеты, увидели бы один и тот же
      * свободный слот и вошли обе. Слот обязательно отпустить [releaseEntry] — к тому моменту сделка
@@ -160,20 +177,42 @@ class RiskManager(
         }
         // Покупки «в полёте» (журнал REAL): сделки ещё нет, но слот они уже заняли.
         val inFlight = if (demo) 0 else db.txJournalQueries.pendingBuyCount().executeAsOne().toInt()
-        val streakLimit = protection().lossStreakLimit.coerceAtLeast(0).toLong()
+        val settings = protection()
+        val streakLimit = settings.lossStreakLimit.coerceAtLeast(0).toLong()
         val now = nowMs()
+        // «Новый старт»: закрытые до него сделки лимиты убытка не видят; открытые позиции — видят всегда.
+        val runStart = db.runStartedAt(demo)
         return PortfolioSnapshot(
             openPositions = open.size + inFlight,
             exposureUsd = exposure,
             marketValueUsd = marketValue,
             openPnlUsd = openPnl,
             freeBalanceUsd = if (demo) accountCache.demoUsd() else accountCache.realUsd(),
-            realizedTodayUsd = db.tradeQueries.realizedPnlSince(flag, startOfDayMillis()).executeAsOne(),
-            realizedWeekUsd = db.tradeQueries.realizedPnlSince(flag, now - WEEK_MS).executeAsOne(),
+            realizedTodayUsd = db.tradeQueries.realizedPnlSince(flag, maxOf(startOfDayMillis(), runStart)).executeAsOne(),
+            realizedWeekUsd = db.tradeQueries.realizedPnlSince(flag, maxOf(now - WEEK_MS, runStart)).executeAsOne(),
             recentClosed = if (streakLimit == 0L) emptyList()
-            else db.tradeQueries.recentClosed(flag, streakLimit).executeAsList().map { it.pnl to it.closed_at },
+            else db.tradeQueries.recentClosed(flag, streakLimit).executeAsList()
+                .filter { (it.closed_at ?: 0L) >= runStart }.map { it.pnl to it.closed_at },
+            // Кривую читаем, только когда лимит просадки включён: это все закрытые сделки забега.
+            drawdownUsd = if (settings.maxDrawdownPct <= 0.0) 0.0
+            else drawdownFromPeakUsd(db.tradeQueries.closedPnlSince(flag, runStart).executeAsList().map { it.pnl ?: 0.0 }, openPnl),
         )
     }
+}
+
+/**
+ * Просадка кривой PnL портфеля от её пика, USD (≥ 0). Кривая — нарастающий итог закрытых сделок [closedPnls]
+ * (старые первыми), начиная с нуля; текущая точка — итог плюс открытые позиции [openPnlUsd]. Считается по
+ * сделкам, а не по балансу: пополнение кошелька или падение цены SOL просадкой бота не являются.
+ */
+internal fun drawdownFromPeakUsd(closedPnls: List<Double>, openPnlUsd: Double): Double {
+    var cumulative = 0.0
+    var peak = 0.0
+    for (pnl in closedPnls) {
+        cumulative += pnl
+        if (cumulative > peak) peak = cumulative
+    }
+    return (peak - (cumulative + openPnlUsd)).coerceAtLeast(0.0)
 }
 
 /**
@@ -181,6 +220,7 @@ class RiskManager(
  * @param exposureUsd себестоимость остатков открытых позиций; [marketValueUsd] — их стоимость по
  *   последней цене; [openPnlUsd] — нереализованный PnL плюс уже зафиксированные частичные выходы.
  * @param recentClosed последние закрытые сделки (PnL и время закрытия), новые первыми.
+ * @param drawdownUsd просадка кривой PnL от пика (см. [drawdownFromPeakUsd]); 0 — нет или лимит выключен.
  */
 internal data class PortfolioSnapshot(
     val openPositions: Int,
@@ -191,6 +231,7 @@ internal data class PortfolioSnapshot(
     val realizedTodayUsd: Double,
     val realizedWeekUsd: Double,
     val recentClosed: List<Pair<Double?, Long>>,
+    val drawdownUsd: Double = 0.0,
 ) {
     /** Капитал: свободный баланс + позиции по рынку. */
     val equityUsd: Double get() = freeBalanceUsd + marketValueUsd
@@ -208,6 +249,25 @@ internal fun portfolioBlock(s: ProtectionSettings, p: PortfolioSnapshot, newSize
     lossStreakPauseUntil(p.recentClosed, s.lossStreakLimit, s.lossStreakPauseMinutes)?.let { until ->
         if (nowMs < until) return "${s.lossStreakLimit} убыточных сделок подряд — пауза до ${formatLocalTime(until)}"
     }
+    lossLimitReason(s, p)?.let { return it }
+    val equity = p.equityUsd
+    if (equity <= 0.0) return null
+    if (s.maxExposurePct > 0 && newSizeUsd > 0) {
+        val after = p.exposureUsd + newSizeUsd
+        val limit = equity * s.maxExposurePct / 100
+        if (after > limit) {
+            return "в позициях будет ${fmtNum(after)} USD — больше ${fmtNum(s.maxExposurePct)}% капитала (${fmtNum(limit)} USD)"
+        }
+    }
+    return null
+}
+
+/**
+ * Лимиты убытка портфеля — за день, за 7 дней и просадка от пика: причина или null. Только они могут
+ * остановить бота целиком ([ProtectionSettings.autoStopOnLimit]); остальные лимиты портфеля временные.
+ * Капитал неизвестен (0) — проверки пропускаются.
+ */
+internal fun lossLimitReason(s: ProtectionSettings, p: PortfolioSnapshot): String? {
     val equity = p.equityUsd
     if (equity <= 0.0) return null
     val dayPnl = p.realizedTodayUsd + p.openPnlUsd
@@ -218,11 +278,11 @@ internal fun portfolioBlock(s: ProtectionSettings, p: PortfolioSnapshot, newSize
     if (s.maxWeeklyLossPct > 0 && weekPnl <= -equity * s.maxWeeklyLossPct / 100) {
         return "убыток портфеля за 7 дней ${fmtNum(weekPnl)} USD — лимит ${fmtNum(s.maxWeeklyLossPct)}% капитала"
     }
-    if (s.maxExposurePct > 0 && newSizeUsd > 0) {
-        val after = p.exposureUsd + newSizeUsd
-        val limit = equity * s.maxExposurePct / 100
-        if (after > limit) {
-            return "в позициях будет ${fmtNum(after)} USD — больше ${fmtNum(s.maxExposurePct)}% капитала (${fmtNum(limit)} USD)"
+    if (s.maxDrawdownPct > 0 && p.drawdownUsd > 0) {
+        // Капитал на пике = нынешний + то, что отдано с пика (баланс меняют только сделки).
+        val ddPct = p.drawdownUsd / (equity + p.drawdownUsd) * 100
+        if (ddPct >= s.maxDrawdownPct) {
+            return "просадка портфеля от пика ${fmtNum(ddPct)}% (${fmtNum(p.drawdownUsd)} USD) — лимит ${fmtNum(s.maxDrawdownPct)}%"
         }
     }
     return null

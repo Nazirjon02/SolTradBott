@@ -4,6 +4,9 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 import tj.khujand.solana.trading.bot.core.engine.PositionState
+import tj.khujand.solana.trading.bot.core.strategy.DarsStrategy
+import tj.khujand.solana.trading.bot.core.strategy.REVERSAL_EXIT_REASON
+import tj.khujand.solana.trading.bot.core.strategy.ReversalFixtures
 import tj.khujand.solana.trading.bot.core.strategy.StrategyConfig
 import tj.khujand.solana.trading.bot.exchange.dex.Candle
 
@@ -24,6 +27,25 @@ class BacktesterSimulateTest {
 
     private fun trade(sim: Backtester.SimResult, cost: Double = 0.0) =
         Backtester.toTrade(coin, position(), sim, cost, "test")
+
+    @Test
+    fun reversalExitClosesAtBarClose() {
+        val bars = ReversalFixtures.candles(ReversalFixtures.upThenDown())
+        val entry = bars[65] // разворот начинается с бара входа
+        val start = PositionState(
+            entryPrice = entry.open, initialStop = 0.01, stopLoss = 0.01, takeProfit = 100.0, peakPrice = entry.open,
+            tp1Done = false, tp2Done = false, entryLiquidityUsd = 0.0, entryAtrFrac = 0.05, openedAtMs = entry.openTimeMs,
+        )
+        val cfg = StrategyConfig(id = "s")
+        val sim = Backtester.simulate(start, cfg, bars, 65, ReversalFixtures.BAR_MS, reversal = DarsStrategy(cfg))
+        val fill = sim.fills.single()
+        assertEquals(REVERSAL_EXIT_REASON, fill.reason)
+        assertEquals(bars[sim.exitIndex].close, fill.price, 1e-9)
+
+        // Без тумблера та же позиция доживает до конца данных.
+        val plain = Backtester.simulate(start, cfg, bars, 65, ReversalFixtures.BAR_MS)
+        assertEquals("Конец данных", plain.fills.single().reason)
+    }
 
     @Test
     fun stopInsideBarFillsAtStopLevel() {

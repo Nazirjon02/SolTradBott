@@ -64,10 +64,10 @@ class TokenMonitorService : Service() {
                 stopMonitoring()
                 return START_NOT_STICKY
             }
-            null -> {
-                // Перезапуск системой после kill'а процесса (sticky-рестарт): Activity могло
-                // не подниматься, движок стоит. Восстанавливаем то состояние, в котором его
-                // оставил пользователь. DrxApp уже поднял рантайм — get() не null.
+            null, ACTION_RESTORE -> {
+                // Перезапуск системой после kill'а процесса (sticky-рестарт) или запуск после
+                // перезагрузки/открытия приложения (ACTION_RESTORE): движок стоит. Восстанавливаем то
+                // состояние, в котором его оставил пользователь. DrxApp уже поднял рантайм — get() не null.
                 restoreDesiredState()
             }
             else -> {
@@ -141,6 +141,7 @@ class TokenMonitorService : Service() {
     companion object {
         const val ACTION_START = "ACTION_START_MONITORING"
         const val ACTION_STOP = "ACTION_STOP_MONITORING"
+        const val ACTION_RESTORE = "ACTION_RESTORE_TRADING"
         private const val CHANNEL_SERVICE_ID = "monitor_channel"
         private const val NOTIFICATION_ID = 1
     }

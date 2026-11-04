@@ -16,6 +16,8 @@ fun main() {
             .resolve("soltradbot.db").absolutePath
 
     val runtime = DrxRuntimeHolder.init(dbPath)
+    // Тумблер «Возобновлять торговлю при запуске» в настройках: бот снова в том состоянии, в котором его оставили.
+    if (runtime.takeResumeOnLaunch()) runtime.restoreDesiredState()
 
     Runtime.getRuntime().addShutdownHook(Thread {
         runtime.shutdown()

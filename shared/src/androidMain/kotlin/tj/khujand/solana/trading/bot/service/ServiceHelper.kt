@@ -18,6 +18,18 @@ object ServiceHelper {
         }
     }
 
+    /** Поднять сервис и вернуть движок в сохранённое состояние (RUNNING / PAUSED) — см. [BootReceiver]. */
+    fun restoreTrading(context: Context) {
+        val intent = Intent(context, TokenMonitorService::class.java).apply {
+            action = TokenMonitorService.ACTION_RESTORE
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            context.startForegroundService(intent)
+        } else {
+            context.startService(intent)
+        }
+    }
+
     fun stopMonitoringService(context: Context) {
         val intent = Intent(context, TokenMonitorService::class.java).apply {
             action = TokenMonitorService.ACTION_STOP

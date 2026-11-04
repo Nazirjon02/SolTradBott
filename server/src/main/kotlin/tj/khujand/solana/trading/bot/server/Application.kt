@@ -34,9 +34,11 @@ import tj.khujand.solana.trading.bot.core.engine.ActivityLog
 import tj.khujand.solana.trading.bot.core.engine.BotEngine
 import tj.khujand.solana.trading.bot.core.engine.TradeExecutor
 import tj.khujand.solana.trading.bot.core.engine.TradeMonitor
+import tj.khujand.solana.trading.bot.core.engine.healthReport
 import tj.khujand.solana.trading.bot.core.risk.EntryGuard
 import tj.khujand.solana.trading.bot.core.risk.RiskManager
 import tj.khujand.solana.trading.bot.core.strategy.StrategyManager
+import tj.khujand.solana.trading.bot.core.strategy.WatchBoard
 import tj.khujand.solana.trading.bot.data.BotStatus
 import tj.khujand.solana.trading.bot.data.SettingsStore
 import tj.khujand.solana.trading.bot.data.createDatabaseDriver
@@ -88,13 +90,15 @@ fun main() {
     val tgChatId = settingsStore.getTelegramChatId() ?: config.telegramChatId
     val notifier = if (tgToken.isNotBlank() && tgChatId != 0L) TelegramNotifier(tgToken, tgChatId) else NoopNotifier
 
+    // Доска наблюдения — для Telegram /watch (UI сервера нет).
+    val watchBoard = WatchBoard()
     val strategyManager = StrategyManager(
-        client, riskManager, notifier, db, scanner, executor, activityLog, settingsStore, entryGuard
+        client, riskManager, notifier, db, scanner, executor, activityLog, settingsStore, entryGuard, watchBoard
     )
     val engine = BotEngine(client, strategyManager, notifier, db, accountCache, executor, settingsStore, activityLog)
 
     // Монитор сопровождения позиций: на DEX нет биржевых SL/TP — выходы исполняет бот.
-    val tradeMonitor = TradeMonitor(client, db, executor, notifier, activityLog)
+    val tradeMonitor = TradeMonitor(client, db, executor, notifier, activityLog, protection = settingsStore::getProtection)
     tradeMonitor.start()
 
     val apiKey = resolveApiKey(config.apiKey, settingsStore)
@@ -118,7 +122,7 @@ fun main() {
     // Telegram-управление: long-polling запускается только при заданном токене.
     if (tgToken.isNotBlank()) {
         val telegramBot = TelegramBotController(
-            tgToken, tgChatId, engine, strategyManager, executor, db, tokenCache, settingsStore
+            tgToken, tgChatId, engine, strategyManager, executor, db, tokenCache, settingsStore, riskManager, watchBoard
         )
         scope.launch { telegramBot.startPolling() }
     }
@@ -138,7 +142,18 @@ fun main() {
         }
 
         routing {
-            get("/health") { call.respond(mapOf("status" to "ok", "bot" to "DRX")) }
+            // Для внешнего мониторинга: 503 + список проблем, если бот должен торговать, а не торгует.
+            get("/health") {
+                val report = healthReport(
+                    status = engine.getStatus(),
+                    desiredState = settingsStore.getDesiredState(),
+                    mode = executor.modeLabel(),
+                    lastOkAt = activityLog.stats.value.lastOkAt,
+                    engineStartedAt = engine.startedAt,
+                    nowMs = System.currentTimeMillis(),
+                )
+                call.respond(if (report.problems.isEmpty()) HttpStatusCode.OK else HttpStatusCode.ServiceUnavailable, report)
+            }
 
             authenticate("api-key") {
                 route("/api/v1") {

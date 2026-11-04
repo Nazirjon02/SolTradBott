@@ -189,9 +189,29 @@ class ElliottStrategy(
         candidate: TokenCandidate,
         candles: List<Candle>,
         higherTfCandles: List<Candle>,
-    ): Signal? {
-        val e = evaluateFull(candidate, candles, higherTfCandles).entry ?: return null
-        return Signal(
+    ): Signal? = evaluate(candidate, candles, higherTfCandles).signal
+
+    /** Полный список проверок лучшего сетапа (Эллиотт считает их все) — и для доски, и для графика бота. */
+    override suspend fun evaluate(
+        candidate: TokenCandidate,
+        candles: List<Candle>,
+        higherTfCandles: List<Candle>,
+    ): Evaluation {
+        val ev = evaluateFull(candidate, candles, higherTfCandles)
+        ev.blocker?.let { return Evaluation.stoppedAt(1, ElliottCheck.entries.size, it) }
+        val checks = ev.checks.map { CheckResult(it.check.title, it.passed, it.detail) }
+        val total = checks.size.coerceAtLeast(1)
+        val e = ev.entry
+        if (e == null) {
+            val failed = ev.failed.firstOrNull()
+            return Evaluation(
+                passed = checks.count { it.passed },
+                total = total,
+                missing = failed?.let { "${it.check.title}: ${it.detail}" } ?: "сетапа нет",
+                checks = checks,
+            )
+        }
+        val signal = Signal(
             mint = candidate.mint,
             symbol = candidate.symbol,
             pairAddress = candidate.pairAddress,
@@ -201,6 +221,7 @@ class ElliottStrategy(
             stopLoss = e.stop,
             takeProfit = e.target,
         )
+        return Evaluation.ready(signal, total, checks = checks)
     }
 
     /**

@@ -1,6 +1,7 @@
 package tj.khujand.solana.trading.bot.core.strategy
 
 import tj.khujand.solana.trading.bot.domain.dars.DarsEntryEngine
+import tj.khujand.solana.trading.bot.domain.dars.DarsSignal
 import tj.khujand.solana.trading.bot.exchange.dex.BaseToken
 import tj.khujand.solana.trading.bot.exchange.dex.Candle
 import tj.khujand.solana.trading.bot.exchange.dex.DexClient
@@ -27,7 +28,15 @@ class DarsStrategy(
         candidate: TokenCandidate,
         candles: List<Candle>,
         higherTfCandles: List<Candle>,
-    ): Signal? {
+    ): Signal? = evaluate(candidate, candles, higherTfCandles).signal
+
+    /** Шаги движка ([DarsSignal.DARS_STAGES]) и гейт прибыль/риск последним. */
+    override suspend fun evaluate(
+        candidate: TokenCandidate,
+        candles: List<Candle>,
+        higherTfCandles: List<Candle>,
+    ): Evaluation {
+        val total = DarsSignal.DARS_STAGES + 1
         val pair = TokenPair(
             chainId = "solana",
             dexId = candidate.dexId,
@@ -35,18 +44,22 @@ class DarsStrategy(
             baseToken = BaseToken(candidate.mint, candidate.name, candidate.symbol),
         )
         val result = engine.evaluate(pair, config.toDarsFilterSettings())
-        if (!result.passed) return null
+        if (!result.passed) {
+            // Все сетапы не прошли — причин несколько; на доске хватает двух первых.
+            val why = result.reasons.take(2).joinToString("; ").ifEmpty { "сетапа нет" }
+            return Evaluation.stoppedAt(result.stage.coerceAtLeast(1), total, why)
+        }
 
         val entry = candidate.priceUsd
-        if (entry <= 0) return null
+        if (entry <= 0) return Evaluation.stoppedAt(total, total, "нет цены кандидата")
 
         // Стоп «за структурой» (минимум коррекции) + TP у уровня + гейт риск/прибыль.
         // Без приемлемого R:R вход отклоняем — даже верный по форме сетап не берём в убыток.
         val exits = resolveDarsExits(entry, result.targetFrac, result.stopFrac, config, MIN_RISK_REWARD)
-            ?: return null
+            ?: return Evaluation.stoppedAt(total, total, "цель ближе ${MIN_RISK_REWARD}R риска")
 
         val confidence = (result.score / 100.0).coerceIn(0.0, 1.0)
-        return Signal(
+        val signal = Signal(
             mint = candidate.mint,
             symbol = candidate.symbol,
             pairAddress = candidate.pairAddress,
@@ -56,6 +69,7 @@ class DarsStrategy(
             stopLoss = exits.stopLoss,
             takeProfit = exits.takeProfit,
         )
+        return Evaluation.ready(signal, total)
     }
 
     companion object {

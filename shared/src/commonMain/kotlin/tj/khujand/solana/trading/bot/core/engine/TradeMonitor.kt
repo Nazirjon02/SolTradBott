@@ -11,11 +11,24 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlin.time.Clock
 import tj.khujand.solana.trading.bot.core.TradeNotifier
+import tj.khujand.solana.trading.bot.core.strategy.REVERSAL_CANDLES
+import tj.khujand.solana.trading.bot.core.strategy.REVERSAL_EXIT_REASON
 import tj.khujand.solana.trading.bot.core.strategy.StrategyConfig
+import tj.khujand.solana.trading.bot.core.strategy.closedBarsOnly
+import tj.khujand.solana.trading.bot.core.strategy.createStrategy
 import tj.khujand.solana.trading.bot.core.strategy.toStrategyConfig
+import tj.khujand.solana.trading.bot.data.ProtectionSettings
 import tj.khujand.solana.trading.bot.data.db.DrxDatabase
 import tj.khujand.solana.trading.bot.data.db.Trade as TradeRow
+import tj.khujand.solana.trading.bot.domain.backtest.timeframeMs
+import tj.khujand.solana.trading.bot.exchange.dex.Candle
 import tj.khujand.solana.trading.bot.exchange.dex.DexClient
+
+/**
+ * Сколько ждать после закрытия бара, прежде чем спрашивать свечи для проверки разворота: GeckoTerminal
+ * кладёт бар в историю не мгновенно, а без него проверка увидела бы картину прошлого бара.
+ */
+private const val BAR_SETTLE_MS = 20_000L
 
 /**
  * Монитор сопровождения позиций (роль как у TradeMonitor в MRX, но с важным отличием:
@@ -28,7 +41,8 @@ import tj.khujand.solana.trading.bot.exchange.dex.DexClient
  *  4) partial TP1/TP2 — частичные фиксации (в % или R-лестница, она проверяется до основного TP);
  *  5) break-even — перенос SL в безубыток (по % прибыли или после TP1);
  *  6) trailing stop — подтягивание SL за пиком цены (по %, по ATR — Chandelier, или ступенчатый «по иксам»);
- *  7) time-stop — принудительный выход по времени; «нет нового максимума» — выход, если пик давно не обновлялся.
+ *  7) time-stop — принудительный выход по времени; «нет нового максимума» — выход, если пик давно не обновлялся;
+ *  8) выход по развороту (тумблер в защите сделок) — раз на закрытый бар рабочего ТФ, если выше ничего не сработало.
  *
  * Продажа не прошла — следующая попытка с бо́льшим slippage; с [EXIT_BLOCKED_AFTER] неудач подряд позиция
  * «продажа заблокирована»: попытки идут с паузой, в Telegram — одно предупреждение.
@@ -43,9 +57,21 @@ class TradeMonitor(
     private val notifier: TradeNotifier,
     private val activityLog: ActivityLog = ActivityLog(),
     private val intervalMs: Long = 15_000L,
+    /** Глобальная защита (тумблер «Выход по развороту»); читается на каждой проверке — правка без рестарта. */
+    private val protection: () -> ProtectionSettings = { ProtectionSettings() },
+    /** Свечи пула для проверки разворота (пул, ТФ, сколько); параметром — ради тестов. */
+    private val candleSource: suspend (String, String, Int) -> List<Candle> =
+        { pool, tf, limit -> client.getCandles(pool, tf, limit) },
+    private val nowMs: () -> Long = { Clock.System.now().toEpochMilliseconds() },
 ) {
     private val scope = CoroutineScope(Dispatchers.Default + SupervisorJob())
     private var job: Job? = null
+
+    /**
+     * Сделка → открытие последнего закрытого бара, уже проверенного на разворот: свечи по сделке
+     * запрашиваются раз на бар, а не каждые 15 с (лимит GeckoTerminal ~30 запросов в минуту на весь бот).
+     */
+    private val reversalCheckedBar = mutableMapOf<String, Long>()
 
     fun start() {
         if (job?.isActive == true) return
@@ -82,6 +108,7 @@ class TradeMonitor(
     suspend fun checkOnce() {
         reconcileJournal()
         val open = db.tradeQueries.getOpenTrades().executeAsList()
+        reversalCheckedBar.keys.retainAll(open.mapTo(HashSet()) { it.id })
         if (open.isEmpty()) return
         for (t in open) {
             try {
@@ -119,14 +146,43 @@ class TradeMonitor(
         val price = pair?.priceUsd?.toDoubleOrNull()
             ?: runCatching { client.getTokenPriceUsd(t.mint) }.getOrNull()
             ?: run {
-                activityLog.requestFailed()
+                activityLog.requestFailed("${t.symbol}: цена не получена (DexScreener) — позиция не проверена")
                 return // цены нет — не трогаем позицию (лучше опоздать, чем закрыть вслепую)
             }
         activityLog.requestOk()
         if (price <= 0) return
         // Последняя цена — для лимитов портфеля (нереализованный PnL без лишних запросов).
         db.tradeQueries.updateLastPrice(price, t.id)
-        applyExits(t, config, price, pair?.liquidity?.usd)
+        val exitDue = applyExits(t, config, price, pair?.liquidity?.usd)
+        if (!exitDue && protection().reversalExitEnabled) {
+            // Свежая строка: выходы выше могли сдвинуть стоп, а ручное закрытие — закрыть позицию.
+            val fresh = db.tradeQueries.getById(t.id).executeAsOneOrNull() ?: return
+            if (fresh.status == "OPEN") checkReversal(fresh, config, price)
+        }
+    }
+
+    /**
+     * «Выход по развороту»: рынок пошёл против позиции ([tj.khujand.solana.trading.bot.core.strategy.Strategy.shouldClose])
+     * — продаём остаток, не дожидаясь стопа. Свечи запрашиваются один раз на закрытый бар рабочего ТФ и не
+     * раньше [BAR_SETTLE_MS] после его закрытия; не пришли — этот бар пропускаем, а не долбим API каждые 15 с.
+     */
+    internal suspend fun checkReversal(t: TradeRow, config: StrategyConfig, price: Double) {
+        val now = nowMs()
+        if (now < t.exit_retry_at) return
+        val barMs = timeframeMs(config.timeframe)
+        val currentBarOpen = now / barMs * barMs
+        if (now - currentBarOpen < BAR_SETTLE_MS) return
+        val lastClosedOpen = currentBarOpen - barMs
+        if (reversalCheckedBar[t.id] == lastClosedOpen) return
+        reversalCheckedBar[t.id] = lastClosedOpen
+
+        val candles = closedBarsOnly(candleSource(t.pair_address, config.timeframe, REVERSAL_CANDLES), barMs, now)
+        if (candles.isEmpty()) return
+        val entryBarOpen = t.opened_at / barMs * barMs
+        if (!createStrategy(config, client).shouldClose(candles, entryBarOpen)) return
+
+        activityLog.warn("🔄 ${t.symbol}: разворот против позиции (EMA и структура вниз) — продаю, не дожидаясь стопа")
+        closeFull(t, price, REVERSAL_EXIT_REASON)
     }
 
     /**
@@ -134,8 +190,9 @@ class TradeMonitor(
      * Решение принимает общая чистая [decideExit] (её же использует бэктест), здесь — только
      * запись в БД, исполнение и лента активности.
      * @param liquidity текущая ликвидность пула, null — неизвестна (ликвидность-стоп пропускается).
+     * @return true — правило выхода сработало (исполнено или отложено до повтора продажи).
      */
-    internal suspend fun applyExits(t: TradeRow, config: StrategyConfig, price: Double, liquidity: Double?) {
+    internal suspend fun applyExits(t: TradeRow, config: StrategyConfig, price: Double, liquidity: Double?): Boolean {
         val now = Clock.System.now().toEpochMilliseconds()
         val d = decideExit(t.toPositionState(), config, price, liquidity, now)
 
@@ -147,10 +204,10 @@ class TradeMonitor(
 
         // Продажа уже не прошла несколько раз подряд — до назначенного времени не повторяем (пик и стоп
         // выше всё равно обновлены, решение о выходе пересчитается на следующей попытке).
-        if (d.action != ExitAction.Hold && now < t.exit_retry_at) return
+        if (d.action != ExitAction.Hold && now < t.exit_retry_at) return true
 
         when (val action = d.action) {
-            ExitAction.Hold -> Unit
+            ExitAction.Hold -> return false
             is ExitAction.CloseAll -> closeFull(t, price, action.reason)
             is ExitAction.ClosePart -> {
                 val result = closePartial(t, price, action.portionOfOriginal, action.reason, action.tp1, action.tp2)
@@ -162,21 +219,8 @@ class TradeMonitor(
                 }
             }
         }
+        return true
     }
-
-    private fun TradeRow.toPositionState() = PositionState(
-        entryPrice = entry_price,
-        initialStop = initial_stop,
-        stopLoss = stop_loss,
-        takeProfit = take_profit,
-        peakPrice = peak_price,
-        tp1Done = tp1_done == 1L,
-        tp2Done = tp2_done == 1L,
-        entryLiquidityUsd = entry_liquidity_usd,
-        entryAtrFrac = entry_atr_frac,
-        openedAtMs = opened_at,
-        peakAtMs = peak_at,
-    )
 
     private suspend fun closeFull(t: TradeRow, price: Double, reason: String) {
         val result = executor.closeTrade(t, price, 100.0, reason) ?: run {

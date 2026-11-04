@@ -27,7 +27,12 @@ import tj.khujand.solana.trading.bot.core.engine.EXEC_REAL
 import tj.khujand.solana.trading.bot.core.engine.EXEC_SHADOW
 import tj.khujand.solana.trading.bot.core.engine.EXIT_BLOCKED_AFTER
 import tj.khujand.solana.trading.bot.core.engine.TradeExecutor
+import tj.khujand.solana.trading.bot.core.engine.beginNewRun
+import tj.khujand.solana.trading.bot.core.engine.runSummaries
+import tj.khujand.solana.trading.bot.core.risk.RiskManager
 import tj.khujand.solana.trading.bot.core.strategy.StrategyManager
+import tj.khujand.solana.trading.bot.core.strategy.WatchBoard
+import tj.khujand.solana.trading.bot.core.strategy.WatchStatus
 import tj.khujand.solana.trading.bot.data.BotStatus
 import tj.khujand.solana.trading.bot.data.SettingsStore
 import tj.khujand.solana.trading.bot.data.db.DrxDatabase
@@ -53,15 +58,56 @@ private val BOT_COMMANDS = listOf(
     "stats" to "Статистика",
     "report" to "Отчёт за день",
     "scanner" to "Кандидаты сканера",
+    "watch" to "Доска наблюдения: чего ждут стратегии",
     "strategies" to "Управление стратегиями",
     "mode" to "Режим DEMO / REAL",
     "signalonly" to "Режим «только сигнал»",
+    "settings" to "Защита и автоматика",
+    "runs" to "Забеги: итоги каждого «Нового старта»",
+    "reset" to "Новый старт: итоги и лимиты с нуля (/reset 10000 — и демо-счёт)",
     "pause" to "Пауза",
     "resume" to "Продолжить",
     "stop" to "Остановить бота",
     "closeall" to "Закрыть все позиции",
     "help" to "Помощь по командам",
 )
+
+/**
+ * Переключатель из меню «🛡 Защита» (`set:<key>`): меняет настройку в [store] и возвращает ответ для чата;
+ * null — ключ неизвестен. Действует сразу: защиту и автоматику читают на каждой проверке.
+ */
+internal fun toggleSetting(store: SettingsStore, key: String): String? {
+    val p = store.getProtection()
+    return when (key) {
+        "guard" -> {
+            val v = !p.guardEnabled
+            store.setProtection(p.copy(guardEnabled = v))
+            if (v) "🛡 Проверка монеты включена"
+            else "⚠️ Проверка монеты ВЫКЛЮЧЕНА — бот может купить монету без маршрута продажи или с неотозванной authority"
+        }
+        "portfolio" -> {
+            val v = !p.portfolioEnabled
+            store.setProtection(p.copy(portfolioEnabled = v))
+            if (v) "📊 Лимиты портфеля включены" else "⚠️ Лимиты портфеля ВЫКЛЮЧЕНЫ — стратегии ограничены только своими лимитами"
+        }
+        "autostop" -> {
+            val v = !p.autoStopOnLimit
+            store.setProtection(p.copy(autoStopOnLimit = v))
+            if (v) "🛑 При лимите убытка портфеля бот будет остановлен целиком" else "⏸ При лимите убытка — только пауза входов"
+        }
+        "revexit" -> {
+            val v = !p.reversalExitEnabled
+            store.setProtection(p.copy(reversalExitEnabled = v))
+            if (v) "🔄 Выход по развороту включён" else "⭕ Выход по развороту выключен"
+        }
+        "resume" -> {
+            val v = !store.getResumeOnLaunch()
+            store.setResumeOnLaunch(v)
+            if (v) "▶️ Приложение будет возобновлять торговлю при запуске" else "⭕ Приложение не возобновляет торговлю само"
+        }
+        else -> null
+    }
+}
 
 /**
  * Telegram-бот управления: long-polling, inline-меню, доступ только с allowedChatId.
@@ -81,6 +127,10 @@ class TelegramBotController(
     private val db: DrxDatabase,
     private val tokenCache: TokenCache,
     private val settingsStore: SettingsStore,
+    /** Капитал для «Нового старта» (`/reset`); null — команда недоступна. */
+    private val riskManager: RiskManager? = null,
+    /** Доска наблюдения для `/watch`; null — не ведётся. */
+    private val watchBoard: WatchBoard? = null,
 ) {
     private val apiUrl = "https://api.telegram.org/bot$botToken"
     private val client = HttpClient {
@@ -175,6 +225,8 @@ class TelegramBotController(
                 data.startsWith("strategy:") -> handleStrategyCallback(chatId, data)
                 data.startsWith("mode:") -> handleModeCallback(chatId, data)
                 data.startsWith("signal:") -> handleSignalCallback(chatId, data)
+                data.startsWith("set:") -> handleSettingsCallback(chatId, data.removePrefix("set:"))
+                data.startsWith("run:") -> handleRunCallback(chatId, data.removePrefix("run:"))
             }
         }
     }
@@ -193,6 +245,7 @@ class TelegramBotController(
             "start", "menu" -> sendMainMenu(chatId)
             "help" -> sendHelp(chatId)
             "close" -> handleCloseCommand(chatId, text)
+            "reset" -> sendResetConfirm(chatId, trimmed.substringAfter(' ', "").trim())
             else -> runAction(chatId, cmd)
         }
     }
@@ -237,8 +290,12 @@ class TelegramBotController(
             "strategies" -> sendStrategiesMenu(chatId)
             "report" -> sendDailyReport(chatId)
             "scanner" -> sendScanner(chatId)
+            "watch" -> sendWatchBoard(chatId)
             "mode" -> sendModeMenu(chatId)
             "signalonly" -> sendSignalOnlyMenu(chatId)
+            "settings" -> sendSettingsMenu(chatId)
+            "runs" -> sendRuns(chatId)
+            "reset" -> sendResetConfirm(chatId, "")
             // Неизвестные команды игнорируем — не засоряем чат ответами об ошибке.
         }
     }
@@ -261,8 +318,10 @@ class TelegramBotController(
             row("📊 Статус" to "cmd:status", "💰 Баланс" to "cmd:balance"),
             row("📈 Позиции" to "cmd:positions", "📉 Статистика" to "cmd:stats"),
             row("⚙️ Стратегии" to "cmd:strategies", "📋 Отчёт" to "cmd:report"),
-            row("🔍 Сканер" to "cmd:scanner", "🎮 Режим" to "cmd:mode"),
-            row("📣 Только сигнал" to "cmd:signalonly", "🚨 Закрыть всё" to "cmd:closeall")
+            row("🔍 Сканер" to "cmd:scanner", "👀 Наблюдение" to "cmd:watch"),
+            row("🎮 Режим" to "cmd:mode"),
+            row("📣 Только сигнал" to "cmd:signalonly", "🛡 Защита" to "cmd:settings"),
+            row("🏁 Забеги" to "cmd:runs", "🚨 Закрыть всё" to "cmd:closeall")
         )
         val signalNote = if (strategyManager.signalOnly.value) "\n📣 Режим «только сигнал»: сделки не открываются" else ""
         send(chatId, "🤖 *DRX Bot* — Панель управления\n\nСтатус: ${status.emoji} ${status.name}\nРежим: $mode$signalNote", keyboard)
@@ -450,6 +509,28 @@ class TelegramBotController(
         send(chatId, "🔍 *Кандидаты сканера:*\n\n$text")
     }
 
+    /** 👀 Доска наблюдения: монеты, где сетап собран хотя бы наполовину, — что сошлось и чего не хватает. */
+    private suspend fun sendWatchBoard(chatId: Long) {
+        val items = watchBoard?.items?.value.orEmpty().filter { it.status != WatchStatus.NONE }
+        if (items.isEmpty()) {
+            val why = if (engine.getStatus() == BotStatus.RUNNING) "сетапы пока не складываются" else "бот не запущен — стратегии не сканируют"
+            send(chatId, "👀 На доске наблюдения пусто: $why.")
+            return
+        }
+        val text = items.take(10).joinToString("\n\n") { w ->
+            val icon = when (w.status) {
+                WatchStatus.READY -> "🟢"
+                WatchStatus.NEAR -> "🟡"
+                else -> "⚪"
+            }
+            val distance = w.distancePct?.let { " · до уровня ${if (it > 0) "+" else ""}${fmt(it)}%" } ?: ""
+            "$icon *${w.status.label}* ${w.symbol.escapeMarkdown()} — ${w.strategyName.escapeMarkdown()} (${w.timeframe})\n" +
+                "Условий ${w.passed}/${w.total}$distance" +
+                (w.missing?.let { "\nНе хватает: ${it.escapeMarkdown()}" } ?: "")
+        }
+        send(chatId, "👀 *Доска наблюдения*\n\n$text")
+    }
+
     // ─── Режим DEMO/REAL ─────────────────────────────────────────────────────
 
     private suspend fun sendModeMenu(chatId: Long) {
@@ -535,6 +616,95 @@ class TelegramBotController(
             send(chatId, if (value) "📣 Режим «только сигнал» ВКЛЮЧЁН — сделки не открываются" else "✅ Режим «только сигнал» ВЫКЛЮЧЕН — бот снова торгует")
             sendSignalOnlyMenu(chatId)
         }
+    }
+
+    // ─── Защита и автоматика ─────────────────────────────────────────────────
+
+    /**
+     * Переключатели защиты и автоматики (общие для всех стратегий). Числа лимитов — только показываем:
+     * их удобнее править в настройках приложения, а неверное число из чата легко не заметить.
+     */
+    private suspend fun sendSettingsMenu(chatId: Long) {
+        val p = settingsStore.getProtection()
+        val resume = settingsStore.getResumeOnLaunch()
+        fun on(v: Boolean) = if (v) "✅" else "⭕"
+        fun limit(v: Double, unit: String = "%") = if (v > 0) "${fmt(v)}$unit" else "выкл"
+        val keyboard = keyboard(
+            row("${on(p.guardEnabled)} Проверка монеты" to "set:guard", "${on(p.portfolioEnabled)} Лимиты портфеля" to "set:portfolio"),
+            row("${on(p.autoStopOnLimit)} Стоп бота при лимите убытка" to "set:autostop"),
+            row("${on(p.reversalExitEnabled)} Выход по развороту" to "set:revexit"),
+            row("${on(resume)} Возобновлять при запуске приложения" to "set:resume"),
+            row("↩️ Меню" to "cmd:menu")
+        )
+        send(chatId, """
+            🛡 *Защита и автоматика* (все стратегии)
+
+            ${on(p.guardEnabled)} Проверка монеты перед покупкой — влияние на цену ≤ ${limit(p.maxPriceImpactPct)}, потери туда-обратно ≤ ${limit(p.maxRoundTripLossPct)}
+            ${on(p.portfolioEnabled)} Лимиты портфеля — позиций ≤ ${if (p.maxOpenPositions > 0) p.maxOpenPositions else "∞"}, в позициях ≤ ${limit(p.maxExposurePct)}, убыток день/7 дней ${limit(p.maxDailyLossPct)} / ${limit(p.maxWeeklyLossPct)}, просадка от пика ${limit(p.maxDrawdownPct)}
+            ${on(p.autoStopOnLimit)} Остановка бота при лимите убытка — вместо паузы входов до завтра
+            ${on(p.reversalExitEnabled)} Выход по развороту — продать, не дожидаясь стопа, когда EMA и структура развернулись вниз
+            ${on(resume)} Возобновлять торговлю при запуске приложения (сервер возобновляет всегда)
+
+            Числа лимитов — в настройках приложения.
+        """.trimIndent(), keyboard)
+    }
+
+    private suspend fun handleSettingsCallback(chatId: Long, key: String) {
+        val reply = toggleSetting(settingsStore, key) ?: return
+        send(chatId, reply)
+        sendSettingsMenu(chatId)
+    }
+
+    // ─── Забеги («Новый старт») ──────────────────────────────────────────────
+
+    private suspend fun sendRuns(chatId: Long) {
+        val demo = executor.isDemo()
+        val runs = runSummaries(db, demo).asReversed()
+        val mode = if (demo) "DEMO" else "REAL"
+        val keyboard = keyboard(row("🏁 Новый старт" to "cmd:reset", "↩️ Меню" to "cmd:menu"))
+        if (runs.isEmpty()) {
+            send(chatId, "🏁 *Забеги ($mode)*\n\n«Нового старта» ещё не было — статистика и лимиты считаются за всю историю режима.", keyboard)
+            return
+        }
+        val text = runs.take(10).joinToString("\n\n") { r ->
+            val strategies = if (r.strategies.isEmpty()) "" else "\n🧠 ${r.strategies.take(3).joinToString(", ").escapeMarkdown()}"
+            val note = if (r.note.isBlank()) "" else "\n📝 ${r.note.escapeMarkdown()}"
+            "${if (r.current) "▶️" else "🏁"} ${r.periodLabel()}\n${r.resultLabel()}$strategies$note"
+        }
+        send(chatId, "🏁 *Забеги ($mode)*\n\n$text", keyboard)
+    }
+
+    /** Подтверждение «Нового старта»: сбрасывает итоги и лимиты, поэтому — второй кнопкой. [arg] — новый демо-счёт. */
+    private suspend fun sendResetConfirm(chatId: Long, arg: String) {
+        if (riskManager == null) {
+            send(chatId, "ℹ️ «Новый старт» доступен в приложении: Настройки → 🏁 Новый старт.")
+            return
+        }
+        val demo = executor.isDemo()
+        val amount = arg.replace(',', '.').toDoubleOrNull()?.takeIf { it > 0.0 }
+        if (arg.isNotBlank() && amount == null) {
+            send(chatId, "❓ Не понял сумму «${arg.escapeMarkdown()}». Пример: /reset 10000")
+            return
+        }
+        val balanceNote = when {
+            amount == null -> ""
+            demo -> "\nДемо-счёт будет выставлен в ${fmt(amount)} USD (открытые позиции остаются)."
+            else -> "\nСумма не применяется: в REAL баланс — это кошелёк."
+        }
+        val data = if (demo && amount != null) "run:new:${amount.toLong()}" else "run:new"
+        send(chatId, """
+            🏁 *Новый старт* (${if (demo) "DEMO" else "REAL"})
+
+            Статистика, отчёты и лимиты убытка (день, неделя, просадка, серия убытков) начнут считаться с этого момента. Сделки не удаляются — итоги прошлых забегов останутся в /runs.$balanceNote
+        """.trimIndent(), keyboard(row("✅ Начать" to data, "↩️ Отмена" to "cmd:menu")))
+    }
+
+    private suspend fun handleRunCallback(chatId: Long, data: String) {
+        val risk = riskManager ?: return
+        val parts = data.split(":")
+        if (parts.firstOrNull() != "new") return
+        val balance = parts.getOrNull(1)?.toDoubleOrNull()
+        send(chatId, beginNewRun(db, executor, risk, balance, Clock.System.now().toEpochMilliseconds()))
     }
 
     // ─── Стратегии ───────────────────────────────────────────────────────────

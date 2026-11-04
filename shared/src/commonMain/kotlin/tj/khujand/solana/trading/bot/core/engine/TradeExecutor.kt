@@ -182,7 +182,8 @@ class TradeExecutor(
         accountCache.set(AccountCache.COIN_DEMO, DEMO_START_BALANCE, DEMO_START_BALANCE)
     }
 
-    private fun setDemoBalance(v: Double) = accountCache.set(AccountCache.COIN_DEMO, v, v)
+    /** Выставить демо-счёт (свободные USD) — «Новый старт» с новым балансом. */
+    fun setDemoBalance(v: Double) = accountCache.set(AccountCache.COIN_DEMO, v, v)
 
     // ─── Кошелёк (REAL) ──────────────────────────────────────────────────────
 

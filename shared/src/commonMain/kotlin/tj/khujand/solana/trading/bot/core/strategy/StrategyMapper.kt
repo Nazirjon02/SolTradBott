@@ -118,4 +118,6 @@ fun StrategyRow.toStrategyConfig(): StrategyConfig = StrategyConfig(
     vbNearHighPct = vb_near_high_pct,
     vbVolumeMult = vb_volume_mult,
     vbMaxExtensionPct = vb_max_extension_pct,
+    armedEntryEnabled = armed_entry_enabled == 1L,
+    armedExpiryBars = armed_expiry_bars.toInt(),
 )

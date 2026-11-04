@@ -9,6 +9,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
@@ -26,6 +27,7 @@ import tj.khujand.solana.trading.bot.core.risk.EntryGuard
 import tj.khujand.solana.trading.bot.core.risk.RiskManager
 import tj.khujand.solana.trading.bot.data.SettingsStore
 import tj.khujand.solana.trading.bot.data.db.DrxDatabase
+import tj.khujand.solana.trading.bot.domain.backtest.timeframeMs
 import tj.khujand.solana.trading.bot.exchange.dex.Candle
 import tj.khujand.solana.trading.bot.exchange.dex.DexClient
 import tj.khujand.solana.trading.bot.exchange.dex.TokenCandidate
@@ -50,6 +52,27 @@ private const val MINT_LOCKS_LIMIT = 500
 /** Окно дедупа алертов «только сигнал» по одной монете. */
 private const val SIGNAL_DEDUP_MS = 30 * 60_000L
 
+/** Как часто проверять цену взведённых сетапов (DexScreener держит ~300 запросов в минуту на всё). */
+private const val ARMED_POLL_MS = 5_000L
+
+/** Что делать со взведённым сетапом при цене. */
+enum class ArmedAction { HOLD, FIRE, INVALID, OVERSHOOT }
+
+/**
+ * Решение по взведённому сетапу (чистая функция): цена у точки слома — снять, выше потолка — проскочила
+ * (не догоняем), прошла уровень — входить, иначе ждать.
+ */
+fun armedAction(plan: TriggerPlan, price: Double): ArmedAction = when {
+    price <= plan.invalidationPrice -> ArmedAction.INVALID
+    price > plan.maxEntryPrice -> ArmedAction.OVERSHOOT
+    price >= plan.triggerLevel -> ArmedAction.FIRE
+    else -> ArmedAction.HOLD
+}
+
+/** id «стратегии» ручных сделок: в таблице strategy её нет — монитор ведёт сделку по стопу и тейку из строки. */
+const val MANUAL_STRATEGY_ID = "manual"
+const val MANUAL_STRATEGY_NAME = "Ручная покупка"
+
 /** Чем закончилась попытка входа по сигналу. */
 private enum class EntryOutcome {
     OPENED,
@@ -67,6 +90,7 @@ private enum class EntryOutcome {
  * (DEMO/SHADOW/REAL/только сигнал).
  *
  * @param entryGuard общая проверка монеты перед покупкой; null — без проверки (тесты, старые сборки).
+ * @param watchBoard доска наблюдения: что стратегии видят по каждому кандидату; null — не ведётся.
  */
 class StrategyManager(
     private val client: DexClient,
@@ -78,6 +102,7 @@ class StrategyManager(
     private val activityLog: ActivityLog = ActivityLog(),
     private val settingsStore: SettingsStore? = null,
     private val entryGuard: EntryGuard? = null,
+    private val watchBoard: WatchBoard? = null,
 ) {
     /**
      * Режим «только сигнал» (глобальный переключатель из настроек/Telegram).
@@ -90,6 +115,12 @@ class StrategyManager(
         _signalOnly.value = value
         settingsStore?.setSignalOnly(value)
     }
+
+    /**
+     * Сработал лимит убытка портфеля при тумблере «Останавливать бота» ([RiskManager.hardStopReason]):
+     * движок останавливается целиком. Ставит [tj.khujand.solana.trading.bot.core.engine.BotEngine].
+     */
+    var onHardStop: (suspend (reason: String) -> Unit)? = null
 
     private val activeJobs = mutableMapOf<String, Job>()
     private val mutex = Mutex()
@@ -153,6 +184,16 @@ class StrategyManager(
     }
 
     private suspend fun scanOnce(config: StrategyConfig, strategy: Strategy) {
+        // Лимит убытка портфеля с остановкой бота — раньше кулдауна: стратегия на кулдауне иначе
+        // не заметила бы, что портфель уже потерял больше лимита.
+        if (!_signalOnly.value) {
+            riskManager.hardStopReason()?.let { reason ->
+                activityLog.error("🛑 Лимит убытка портфеля: $reason — бот останавливается")
+                onHardStop?.invoke(reason)
+                return
+            }
+        }
+
         // Кулдаун после последней сделки этой стратегии.
         val last = mutex.withLock { lastTradeAt[config.id] } ?: 0L
         val sinceLast = now() - last
@@ -192,24 +233,38 @@ class StrategyManager(
             db.txJournalQueries.pendingBuyMints().executeAsList()
 
         for (candidate in candidates) {
-            if (candidate.mint in tradedMints) continue
+            if (candidate.mint in tradedMints) {
+                watchBoard?.remove(candidate.mint)
+                continue
+            }
 
             val candles = runCatching {
                 client.getCandles(candidate.pairAddress, config.timeframe, config.darsCandleLimit)
             }.getOrDefault(emptyList())
 
-            val signal = strategy.analyze(candidate, candles, emptyList()) ?: continue
-
+            val evaluation = strategy.evaluate(candidate, candles, emptyList())
+            val signal = evaluation.signal
             // Общий фильтр входа: не покупаем у верха диапазона (спот, только лонг).
             // Опционален и настраивается на стратегии; при выключенном/недостаточных данных — пропускает.
-            if (!config.rangeAllowsEntry(candles, signal.entryPrice)) {
+            val rangeOk = signal == null || config.rangeAllowsEntry(candles, signal.entryPrice)
+            // Самогейтные стратегии (например «Вход по баллу») уже применили СВОЙ порог —
+            // общий порог уверенности к ним не применяем, иначе он молча перебьёт пользовательский.
+            val confidenceOk = signal == null || strategy.selfGated || signal.confidence >= MIN_CONFIDENCE
+            // Не хватает только триггера — взводим вход по касанию уровня (в «только сигнал» не взводим:
+            // взвод — это будущая сделка). Range-фильтр — по уровню, как у обычного входа по цене.
+            val plan = evaluation.trigger?.takeIf {
+                signal == null && config.armedEntryEnabled && !_signalOnly.value &&
+                    config.rangeAllowsEntry(candles, it.triggerLevel)
+            }
+            if (plan != null) arm(config, candidate, plan, atrFraction(candles, config.atrPeriod, plan.triggerLevel))
+            watchBoard?.update(watchItem(config, candidate, candles, evaluation, rangeOk, confidenceOk, plan))
+            if (signal == null) continue
+
+            if (!rangeOk) {
                 activityLog.info("○ ${candidate.symbol}: цена у верха диапазона — пропуск (range-фильтр)")
                 continue
             }
-
-            // Самогейтные стратегии (например «Вход по баллу») уже применили СВОЙ порог —
-            // общий порог уверенности к ним не применяем, иначе он молча перебьёт пользовательский.
-            if (!strategy.selfGated && signal.confidence < MIN_CONFIDENCE) {
+            if (!confidenceOk) {
                 activityLog.info("○ ${candidate.symbol}: уверенность ${(signal.confidence * 100).toInt()}% < 60%")
                 continue
             }
@@ -227,10 +282,12 @@ class StrategyManager(
                 if (alreadyTraded) return@withLock EntryOutcome.SKIPPED
                 if (!riskManager.canTrade(config)) return@withLock EntryOutcome.SKIPPED
                 val fresh = withFreshEntryPrice(signal) ?: return@withLock EntryOutcome.SKIPPED
-                executeSignal(fresh, config, candidate, candles)
+                // ATR входа — для ATR-трейлинга (если включён); по тем же свечам, что видела стратегия.
+                executeSignal(fresh, config, candidate, atrFraction(candles, config.atrPeriod, fresh.entryPrice))
             }
             when (outcome) {
                 EntryOutcome.OPENED -> {
+                    watchBoard?.remove(candidate.mint)
                     mutex.withLock { lastTradeAt[config.id] = now() }
                     return // одна сделка за цикл — дальше кулдаун
                 }
@@ -238,6 +295,254 @@ class StrategyManager(
                 EntryOutcome.SKIPPED -> Unit
             }
         }
+    }
+
+    /** Итог ручной покупки — для экрана «Анализ». */
+    sealed interface ManualResult {
+        data class Opened(val symbol: String, val sizeUsd: Double, val entryPrice: Double) : ManualResult
+        data class Rejected(val reason: String) : ManualResult
+    }
+
+    /**
+     * Ручная покупка из «Анализа»/«Избранного» (порт ручной сделки MRX): те же лимиты портфеля, проверка
+     * монеты и исполнение (DEMO/SHADOW/REAL), что у бота, — человек рядом не должен открыть больше, чем
+     * разрешено боту. Лимиты стратегии и кулдаун не применяются: стратегии у сделки нет. Сделку дальше ведёт
+     * монитор по стопу и тейку из [stopLossPercent]/[takeProfitPercent].
+     *
+     * @param livePrice живая цена (вызывающий спрашивает её прямо перед покупкой); null — цена кандидата.
+     */
+    suspend fun openManual(
+        candidate: TokenCandidate,
+        sizeUsd: Double,
+        stopLossPercent: Double,
+        takeProfitPercent: Double,
+        livePrice: Double?,
+    ): ManualResult {
+        if (sizeUsd <= 0.0) return ManualResult.Rejected("сумма покупки должна быть больше нуля")
+        if (stopLossPercent <= 0.0 || stopLossPercent >= 90.0) return ManualResult.Rejected("стоп — от 0 до 90%")
+        if (takeProfitPercent <= 0.0) return ManualResult.Rejected("тейк должен быть больше нуля")
+        val entry = livePrice?.takeIf { it > 0.0 } ?: candidate.priceUsd
+        if (entry <= 0.0) return ManualResult.Rejected("нет цены монеты")
+        val demoFlag = if (executor.isDemo()) 1L else 0L
+
+        // Тот же лок по mint, что у стратегий: бот и человек не купят монету одновременно.
+        return mintLock(candidate.mint).withLock {
+            val hasOpen = db.tradeQueries.getOpenTradesByMode(demoFlag).executeAsList().any { it.mint == candidate.mint }
+            if (hasOpen || db.txJournalQueries.hasPendingBuy(candidate.mint).executeAsOne() > 0L) {
+                return@withLock ManualResult.Rejected("по монете уже есть открытая позиция или покупка в полёте")
+            }
+            if (executor.isDemo()) {
+                val balance = executor.demoBalanceUsd()
+                if (balance < sizeUsd) return@withLock ManualResult.Rejected("на демо-счёте ${fmtNum(balance)} USD — меньше суммы покупки")
+            } else {
+                executor.refreshRealBalanceIfStale()
+            }
+            val slot = riskManager.reserveEntry(sizeUsd)
+            if (slot is RiskManager.EntrySlot.Denied) return@withLock ManualResult.Rejected("портфель — ${slot.reason}")
+            try {
+                val config = StrategyConfig(
+                    id = MANUAL_STRATEGY_ID,
+                    name = MANUAL_STRATEGY_NAME,
+                    stopLossPercent = stopLossPercent,
+                    takeProfitPercent = takeProfitPercent,
+                )
+                val verdict = entryGuard?.check(candidate.mint, sizeUsd, buySlippageBps(config))
+                if (verdict is EntryGuard.Verdict.Reject) return@withLock ManualResult.Rejected("проверка монеты — ${verdict.reason}")
+                val signal = Signal(
+                    mint = candidate.mint,
+                    symbol = candidate.symbol,
+                    pairAddress = candidate.pairAddress,
+                    confidence = 1.0,
+                    reason = "Ручная покупка: стоп −${fmtNum(stopLossPercent)}%, тейк +${fmtNum(takeProfitPercent)}%",
+                    entryPrice = entry,
+                    stopLoss = config.stopLossPrice(entry),
+                    takeProfit = config.takeProfitPrice(entry),
+                )
+                val buyQuote = (verdict as? EntryGuard.Verdict.Pass)?.buyQuote
+                executor.openTrade(signal, config, sizeUsd, candidate.liquidityUsd, entryAtrFrac = 0.0, buyQuote = buyQuote)
+                    ?: return@withLock ManualResult.Rejected("покупка не исполнена — причина в ленте активности")
+                watchBoard?.remove(candidate.mint)
+                activityLog.success("🛒 ${candidate.symbol}: ручная покупка на $${fmtNum(sizeUsd)}")
+                notifier.sendOpenAlert(
+                    symbol = candidate.symbol,
+                    strategyName = MANUAL_STRATEGY_NAME,
+                    entryPrice = entry,
+                    sizeUsd = kotlin.math.round(sizeUsd * 100) / 100,
+                    stopLoss = signal.stopLoss,
+                    takeProfit = signal.takeProfit,
+                    isDemo = executor.isDemo(),
+                    reason = signal.reason,
+                )
+                ManualResult.Opened(candidate.symbol, sizeUsd, entry)
+            } finally {
+                riskManager.releaseEntry(slot)
+            }
+        }
+    }
+
+    // ─── Взведённые сетапы (порт ArmedSetupManager из MRX, режим POLL) ─────────
+
+    /**
+     * Взведённый сетап: стратегия дождалась всего, кроме бара-триггера, и бот сам следит за ценой — вход по
+     * касанию уровня, а не по скану после закрытия бара.
+     * @param atrFrac ATR входа (доля цены уровня) — для ATR-трейлинга сделки.
+     */
+    data class ArmedSetup(
+        val config: StrategyConfig,
+        val candidate: TokenCandidate,
+        val plan: TriggerPlan,
+        val atrFrac: Double,
+        val armedAt: Long,
+        val expiresAt: Long,
+    )
+
+    private val _armed = MutableStateFlow<Map<String, ArmedSetup>>(emptyMap())
+
+    /** Взведённые сетапы, ключ — «стратегия|mint». */
+    val armed: StateFlow<Map<String, ArmedSetup>> = _armed.asStateFlow()
+
+    private val armedScope = CoroutineScope(Dispatchers.Default + SupervisorJob())
+    private var armedJob: Job? = null
+
+    private fun armedKey(strategyId: String, mint: String) = "$strategyId|$mint"
+
+    /**
+     * Взвести (или обновить) сетап: уровень и стоп — из свежего разбора, срок — от первого взвода, чтобы
+     * сетап, который каждый бар «почти готов», не жил вечно.
+     */
+    private suspend fun arm(config: StrategyConfig, candidate: TokenCandidate, plan: TriggerPlan, atrFrac: Double) {
+        val key = armedKey(config.id, candidate.mint)
+        val now = now()
+        val existing = _armed.value[key]
+        val expiresAt = existing?.expiresAt
+            ?: (now + config.armedExpiryBars.coerceAtLeast(1) * timeframeMs(config.timeframe))
+        _armed.update { it + (key to ArmedSetup(config, candidate, plan, atrFrac, existing?.armedAt ?: now, expiresAt)) }
+        if (existing == null) {
+            activityLog.info("🎯 ${candidate.symbol}: сетап взведён (${config.name}) — вход при пробое ${fmtNum(plan.triggerLevel)}")
+        }
+        mutex.withLock {
+            if (armedJob?.isActive != true) armedJob = armedScope.launch { armedLoop() }
+        }
+    }
+
+    private fun disarm(key: String, note: String?) {
+        _armed.update { it - key }
+        note?.let { activityLog.info(it) }
+    }
+
+    /** Цена по взведённым сетапам раз в [ARMED_POLL_MS]; сетапов не осталось — цикл заканчивается. */
+    private suspend fun armedLoop() {
+        while (true) {
+            val setups = _armed.value.toList()
+            if (setups.isEmpty()) {
+                val done = mutex.withLock { if (_armed.value.isEmpty()) { armedJob = null; true } else false }
+                if (done) return else continue
+            }
+            for ((key, s) in setups) {
+                try {
+                    checkArmed(key, s)
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    activityLog.warn("⚠️ ${s.candidate.symbol}: взвод — ${e.message ?: "ошибка проверки"}")
+                }
+            }
+            delay(ARMED_POLL_MS)
+        }
+    }
+
+    private suspend fun checkArmed(key: String, s: ArmedSetup) {
+        val symbol = s.candidate.symbol
+        if (now() >= s.expiresAt) {
+            disarm(key, "○ $symbol: взвод снят — за ${s.config.armedExpiryBars} бар(а) пробоя не было")
+            return
+        }
+        val price = client.getTokenPriceUsd(s.candidate.mint)?.takeIf { it > 0.0 } ?: return // цены нет — ждём
+        when (armedAction(s.plan, price)) {
+            ArmedAction.HOLD -> Unit
+            ArmedAction.INVALID -> disarm(key, "○ $symbol: взвод снят — цена ${fmtNum(price)} у точки слома ${fmtNum(s.plan.invalidationPrice)}")
+            ArmedAction.OVERSHOOT -> disarm(key, "○ $symbol: взвод снят — цена проскочила уровень (${fmtNum(price)} > ${fmtNum(s.plan.maxEntryPrice)})")
+            ArmedAction.FIRE -> fireArmed(key, s, price)
+        }
+    }
+
+    /** Цена прошла уровень — вход тем же путём, что у сигнала: лимиты, слот портфеля, проверка монеты. */
+    private suspend fun fireArmed(key: String, s: ArmedSetup, price: Double) {
+        val config = s.config
+        val last = mutex.withLock { lastTradeAt[config.id] } ?: 0L
+        if (now() - last < config.cooldownSeconds * 1000L) return // кулдаун стратегии — ждём, пока не истечёт срок
+        if (riskManager.blockReason(config) != null) return
+        val signal = Signal(
+            mint = s.candidate.mint,
+            symbol = s.candidate.symbol,
+            pairAddress = s.candidate.pairAddress,
+            confidence = s.plan.confidence,
+            reason = "${config.name}: взвод — ${s.plan.reason}",
+            entryPrice = price,
+            stopLoss = s.plan.stopPrice,
+            takeProfit = config.takeProfitPrice(price),
+        )
+        val demoFlag = if (executor.isDemo()) 1L else 0L
+        val outcome = mintLock(s.candidate.mint).withLock {
+            val alreadyTraded = db.tradeQueries.hasTradedMint(s.candidate.mint, demoFlag).executeAsOne() > 0L ||
+                db.txJournalQueries.hasPendingBuy(s.candidate.mint).executeAsOne() > 0L
+            if (alreadyTraded || !riskManager.canTrade(config)) return@withLock EntryOutcome.SKIPPED
+            activityLog.success("🎯 ${s.candidate.symbol}: цена ${fmtNum(price)} прошла уровень ${fmtNum(s.plan.triggerLevel)} — вход")
+            executeSignal(signal, config, s.candidate, s.atrFrac)
+        }
+        when (outcome) {
+            EntryOutcome.OPENED -> {
+                disarm(key, null)
+                watchBoard?.remove(s.candidate.mint)
+                mutex.withLock { lastTradeAt[config.id] = now() }
+            }
+            // Портфель не пускает — ждём слота, пока не истечёт срок взвода.
+            EntryOutcome.PORTFOLIO_BLOCKED -> Unit
+            EntryOutcome.SKIPPED -> disarm(key, "○ ${s.candidate.symbol}: взведённый вход не состоялся")
+        }
+    }
+
+    /** Строка доски наблюдения по разбору кандидата (цена — закрытие последней свечи, она свежее кеша сканера). */
+    private fun watchItem(
+        config: StrategyConfig,
+        candidate: TokenCandidate,
+        candles: List<Candle>,
+        evaluation: Evaluation,
+        rangeOk: Boolean,
+        confidenceOk: Boolean,
+        armedPlan: TriggerPlan? = null,
+    ): WatchItem {
+        val price = candles.lastOrNull()?.close?.takeIf { it > 0.0 } ?: candidate.priceUsd
+        if (armedPlan != null) {
+            return WatchItem(
+                mint = candidate.mint, symbol = candidate.symbol, pairAddress = candidate.pairAddress,
+                strategyId = config.id, strategyName = config.name, timeframe = config.timeframe, price = price,
+                entryLevel = armedPlan.triggerLevel, passed = evaluation.passed, total = evaluation.total,
+                missing = "🎯 взведён: вход при пробое ${fmtNum(armedPlan.triggerLevel)} (не выше ${fmtNum(armedPlan.maxEntryPrice)})",
+                status = WatchStatus.READY, updatedAt = now(),
+            )
+        }
+        val missing = when {
+            evaluation.signal == null -> evaluation.missing
+            !rangeOk -> "цена у верха диапазона (range-фильтр)"
+            !confidenceOk -> "уверенность ${((evaluation.signal.confidence) * 100).toInt()}% < ${(MIN_CONFIDENCE * 100).toInt()}%"
+            else -> null
+        }
+        return WatchItem(
+            mint = candidate.mint,
+            symbol = candidate.symbol,
+            pairAddress = candidate.pairAddress,
+            strategyId = config.id,
+            strategyName = config.name,
+            timeframe = config.timeframe,
+            price = price,
+            entryLevel = evaluation.entryLevel,
+            passed = evaluation.passed,
+            total = evaluation.total,
+            missing = missing,
+            status = watchStatus(evaluation, price, accepted = rangeOk && confidenceOk),
+            updatedAt = now(),
+        )
     }
 
     /**
@@ -275,12 +580,13 @@ class StrategyManager(
     /**
      * Вход по сигналу: размер → слот портфеля (лимиты всех стратегий вместе) → проверка монеты (authority,
      * Token-2022, влияние на цену, обратная продажа) → исполнение по котировке из проверки.
+     * @param atrFrac ATR входа как доля цены — для ATR-трейлинга.
      */
     private suspend fun executeSignal(
         signal: Signal,
         config: StrategyConfig,
         candidate: TokenCandidate,
-        candles: List<Candle>,
+        atrFrac: Double,
     ): EntryOutcome {
         val sizeUsd = riskManager.calculatePositionSizeUsd(
             config, signal.entryPrice, signal.stopLoss, candidate.liquidityUsd,
@@ -306,8 +612,6 @@ class StrategyManager(
             activityLog.success(
                 "⚡ ${signal.symbol}: сигнал BUY (${(signal.confidence * 100).toInt()}%) — открываю на $${fmtNum(sizeUsd)}$check"
             )
-            // ATR входа — для ATR-трейлинга (если включён); считаем по тем же свечам, что видела стратегия.
-            val atrFrac = atrFraction(candles, config.atrPeriod, signal.entryPrice)
             val tradeId = executor.openTrade(signal, config, sizeUsd, candidate.liquidityUsd, atrFrac, pass?.buyQuote)
                 ?: return EntryOutcome.SKIPPED
             notifier.sendOpenAlert(
@@ -353,6 +657,8 @@ class StrategyManager(
             activeJobs[strategyId]?.cancel()
             activeJobs.remove(strategyId)
         }
+        watchBoard?.clearStrategy(strategyId)
+        _armed.update { map -> map.filterValues { it.config.id != strategyId } }
     }
 
     /** true, если по стратегии сейчас крутится сканер (есть активный job). */
@@ -367,7 +673,11 @@ class StrategyManager(
         mutex.withLock {
             activeJobs.values.forEach { it.cancel() }
             activeJobs.clear()
+            armedJob?.cancel()
+            armedJob = null
         }
+        watchBoard?.clear()
+        _armed.value = emptyMap()
     }
 
     private fun now() = Clock.System.now().toEpochMilliseconds()

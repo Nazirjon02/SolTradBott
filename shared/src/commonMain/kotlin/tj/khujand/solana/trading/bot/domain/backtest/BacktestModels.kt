@@ -30,10 +30,13 @@ data class CoinSeries(
  * Параметры исполнения в бэктесте.
  * @param costPerSidePercent издержки на вход и на каждый выход (комиссия пула + слиппедж), % от цены.
  * @param oneTradePerCoin как в боте: по монете — только одна сделка (иначе — последовательные сделки).
+ * @param reversalExit «выход по развороту» (тумблер защиты сделок): проверка на закрытии каждого бара,
+ *   выход — по закрытию бара (бот продаёт через ~20–35 с после него).
  */
 data class BacktestSettings(
     val costPerSidePercent: Double = 1.0,
     val oneTradePerCoin: Boolean = false,
+    val reversalExit: Boolean = false,
 )
 
 /** Одна фиксация: доля исходной позиции [portion] (0..1) продана по [price]. */

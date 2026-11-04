@@ -25,6 +25,7 @@ class SettingsStore(private val db: DrxDatabase) {
         const val SIGNAL_ONLY      = "bot.signal_only"
         const val PROTECTION       = "risk.protection"
         const val DESIRED_STATE    = "bot.desired_state"
+        const val RESUME_ON_LAUNCH = "bot.resume_on_launch"
         const val RPC_URL          = "solana.rpc_url"
         const val WALLET_SEED      = "wallet.seed_phrase"
         const val AI_API_KEY       = "ai.api_key"
@@ -76,6 +77,12 @@ class SettingsStore(private val db: DrxDatabase) {
     // восстановил торговлю ровно в том состоянии, в котором её оставил пользователь.
     fun getDesiredState(): String?   = get(Keys.DESIRED_STATE)?.takeIf { it.isNotBlank() }
     fun setDesiredState(v: String)   = set(Keys.DESIRED_STATE, v)
+
+    // Возобновлять торговлю при запуске приложения (десктоп, открытие приложения, перезагрузка телефона)
+    // в состоянии из [getDesiredState]. Сервер возобновляет всегда, приложение — только с этим тумблером:
+    // десктоп может делить базу с сервером, и тогда на одном счёте торговали бы два бота.
+    fun getResumeOnLaunch(): Boolean = get(Keys.RESUME_ON_LAUNCH)?.toBooleanStrictOrNull() ?: false
+    fun setResumeOnLaunch(v: Boolean) = set(Keys.RESUME_ON_LAUNCH, v.toString())
 
     // ─── Solana ──────────────────────────────────────────────────────────────
 

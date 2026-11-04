@@ -32,6 +32,28 @@ interface Strategy {
         candles: List<Candle>,
         higherTfCandles: List<Candle>,
     ): Signal?
+
+    /**
+     * Разбор для доски наблюдения: сколько условий сетапа сошлось и какое не сошлось первым. Сигнал в нём —
+     * тот же, что вернул бы [analyze]. По умолчанию — через [analyze] (1 из 1 или 0 из 1); стратегии с
+     * пошаговым детектором переопределяют и сводят [analyze] к этому разбору.
+     */
+    suspend fun evaluate(
+        candidate: TokenCandidate,
+        candles: List<Candle>,
+        higherTfCandles: List<Candle>,
+    ): Evaluation {
+        val signal = analyze(candidate, candles, higherTfCandles)
+        return if (signal != null) Evaluation.ready(signal, total = 1) else Evaluation.stoppedAt(1, 1, "сетапа нет")
+    }
+
+    /**
+     * Закрыть ли открытую сделку по развороту рынка, не дожидаясь стопа или тейка (тумблер «Выход по
+     * развороту» в защите сделок). [closedCandles] — закрытые бары рабочего ТФ монеты, [sinceMs] — открытие
+     * бара входа. По умолчанию — общий детектор [marketReversedAgainstLong]; стратегия может добавить свой.
+     */
+    fun shouldClose(closedCandles: List<Candle>, sinceMs: Long): Boolean =
+        marketReversedAgainstLong(closedCandles, sinceMs)
 }
 
 @Serializable
@@ -246,6 +268,14 @@ data class StrategyConfig(
     val vbNearHighPct: Double = 8.0,
     val vbVolumeMult: Double = 2.5,
     val vbMaxExtensionPct: Double = 15.0,
+
+    // ── Взведённый вход (порт ArmedSetup из MRX; «Пробой + откат» и «Мем-плейбук», по умолчанию выключен) ──
+    // Всё сошлось, кроме бара-триггера, — стратегия взводит сетап: бот следит за ценой каждые несколько секунд
+    // и входит, как только она пройдёт максимум прошлого бара (не дальше 3% над ним), а не по факту скана
+    // после закрытия бара. Цена ушла за точку слома сетапа или прошло armedExpiryBars баров — сетап снимается.
+    // Цена: сила закрытия и объём триггера при этом не проверяются — бар ещё не закрыт.
+    val armedEntryEnabled: Boolean = false,
+    val armedExpiryBars: Int = 3,
 ) {
     fun scanFilters(): ScanFilters = ScanFilters(
         minLiquidityUsd = minLiquidityUsd,

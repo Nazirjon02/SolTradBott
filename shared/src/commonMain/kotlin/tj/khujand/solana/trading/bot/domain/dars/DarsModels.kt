@@ -115,6 +115,11 @@ data class DarsSignal(
      * определить не удалось, тогда стратегия берёт механический стоп-лосс%.
      */
     val stopFrac: Double? = null,
+    /**
+     * Шаг движка (с 1), на котором вход отклонён — для доски наблюдения: свечи, тренд старшего ТФ, ноги,
+     * сопротивление, накопление, сетапы (см. [DARS_STAGES]). 0 — не отклонён или шаг не известен.
+     */
+    val stage: Int = 0,
 ) {
     /** Короткое человекочитаемое описание для логов/Telegram. */
     fun describe(): String = buildString {
@@ -125,6 +130,9 @@ data class DarsSignal(
     }
 
     companion object {
+        /** Шаги [DarsEntryEngine]: свечи, тренд старшего ТФ, ноги, сопротивление, накопление, сетапы. */
+        const val DARS_STAGES = 6
+
         fun reject(vararg reasons: String) = DarsSignal(false, reasons = reasons.toList())
         fun reject(reasons: List<String>) = DarsSignal(false, reasons = reasons)
         fun pass(setup: DarsSetup, direction: TrendDirection, score: Int, vararg reasons: String) =

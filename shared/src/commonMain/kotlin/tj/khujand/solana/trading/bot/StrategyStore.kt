@@ -127,6 +127,11 @@ class StrategyStore(private val db: DrxDatabase) {
             vb_max_extension_pct = cfg.vbMaxExtensionPct,
             id = cfg.id,
         )
+        db.strategyQueries.updateArmedParams(
+            armed_entry_enabled = if (cfg.armedEntryEnabled) 1L else 0L,
+            armed_expiry_bars = cfg.armedExpiryBars.toLong(),
+            id = cfg.id,
+        )
     }
 
     private fun update(cfg: StrategyConfig) = db.strategyQueries.updateStrategy(

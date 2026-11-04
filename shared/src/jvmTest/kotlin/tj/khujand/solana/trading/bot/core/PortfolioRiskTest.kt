@@ -12,6 +12,7 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.runBlocking
 import tj.khujand.solana.trading.bot.core.risk.RiskManager
+import tj.khujand.solana.trading.bot.core.risk.drawdownFromPeakUsd
 import tj.khujand.solana.trading.bot.core.risk.lossStreakPauseUntil
 import tj.khujand.solana.trading.bot.data.ProtectionSettings
 import tj.khujand.solana.trading.bot.data.db.DrxDatabase
@@ -162,6 +163,36 @@ class PortfolioRiskTest {
         db.txJournalQueries.insert("sig", "BUY", "mint", "T", null, "{}", now, now)
         val risk = rm(db, ProtectionSettings(maxOpenPositions = 1), demo = false)
         assertNotNull(risk.portfolioBlockReason(), "покупка «в полёте» уже заняла слот")
+    }
+
+    @Test fun drawdownIsMeasuredFromPeakOfTradeCurve() {
+        // Кривая: +100 (пик 100) → −30 → −40 = 30; открытая позиция −20 → сейчас 10, просадка 90.
+        assertEquals(90.0, drawdownFromPeakUsd(listOf(100.0, -30.0, -40.0), openPnlUsd = -20.0), 1e-9)
+        assertEquals(0.0, drawdownFromPeakUsd(listOf(10.0, 20.0), openPnlUsd = 5.0), 1e-9, "на новом максимуме просадки нет")
+        assertEquals(15.0, drawdownFromPeakUsd(listOf(-5.0, -10.0), openPnlUsd = 0.0), 1e-9, "пик — исходный ноль")
+    }
+
+    @Test fun drawdownLimitBlocksEntriesWhenEnabled() {
+        val db = db()
+        closed(db, "w", pnl = 300.0, closedAt = now - 20 * 24 * 60 * 60_000L)
+        closed(db, "l", pnl = -250.0, closedAt = now - 10 * 24 * 60 * 60_000L)
+        // Капитал сейчас 1000, отдано с пика 250 → просадка 250 / 1250 = 20%. Недельный убыток не задет: оба
+        // закрытия старше 7 дней.
+        assertNull(rm(db).portfolioBlockReason(), "по умолчанию лимит просадки выключен")
+        assertTrue("просадка портфеля" in assertNotNull(rm(db, ProtectionSettings(maxDrawdownPct = 20.0)).portfolioBlockReason()))
+        assertNull(rm(db, ProtectionSettings(maxDrawdownPct = 25.0)).portfolioBlockReason())
+    }
+
+    @Test fun hardStopOnlyForLossLimitsAndOnlyWhenEnabled() {
+        val db = db()
+        closed(db, "l", pnl = -150.0, closedAt = now - 60_000L) // −150 за день при лимите 10% от 1000
+        assertNull(rm(db).hardStopReason(), "без тумблера лимит лишь ставит входы на паузу")
+        assertTrue("за день" in assertNotNull(rm(db, ProtectionSettings(autoStopOnLimit = true)).hardStopReason()))
+
+        val busy = db()
+        listOf("a", "b", "c").forEach { open(busy, it) }
+        assertNotNull(rm(busy, ProtectionSettings(autoStopOnLimit = true)).portfolioBlockReason())
+        assertNull(rm(busy, ProtectionSettings(autoStopOnLimit = true)).hardStopReason(), "лимит позиций — не повод останавливать бота")
     }
 
     @Test fun disabledPortfolioAllowsEverything() = runBlocking {

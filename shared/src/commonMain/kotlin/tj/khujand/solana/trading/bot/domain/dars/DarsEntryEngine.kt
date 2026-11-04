@@ -25,7 +25,7 @@ class DarsEntryEngine(
 
     suspend fun evaluate(token: TokenPair, settings: FilterSettings): DarsSignal {
         val pool = token.pairAddress
-        if (pool.isNullOrBlank()) return DarsSignal.reject("нет адреса пула")
+        if (pool.isNullOrBlank()) return DarsSignal.reject("нет адреса пула").copy(stage = 1)
         val cfg = configFrom(settings)
 
         return try {
@@ -33,14 +33,14 @@ class DarsEntryEngine(
         } catch (e: CancellationException) {
             throw e // отмена стратегии — не «ошибка анализа»
         } catch (e: Exception) {
-            DarsSignal.reject("ошибка анализа Dars: ${e.message}")
+            DarsSignal.reject("ошибка анализа Dars: ${e.message}").copy(stage = 1)
         }
     }
 
     private suspend fun evaluateInternal(pool: String, cfg: DarsConfig): DarsSignal {
         // Рабочий ТФ — на нём ищем точку входа.
         val etf = candleSource(pool, cfg.entryTf, cfg.entryTfAggregate, cfg.candleLimit)
-        if (etf.size < 12) return DarsSignal.reject("мало свечей рабочего ТФ (${etf.size})")
+        if (etf.size < 12) return DarsSignal.reject("мало свечей рабочего ТФ (${etf.size})").copy(stage = 1)
 
         // Старший ТФ тянем ОДИН раз — он нужен и для тренда, и для уровней (Урок 2).
         val needHtf = cfg.useTrendLevels || cfg.requireHtfTrend
@@ -51,18 +51,18 @@ class DarsEntryEngine(
             !needHtf -> TrendDirection.UP
             htf.size < 6 -> {
                 // Нет данных старшего ТФ → тренд неизвестен. Fail-closed: не торгуем вслепую.
-                if (cfg.failClosed) return DarsSignal.reject("мало свечей старшего ТФ (${htf.size}) — тренд неизвестен")
+                if (cfg.failClosed) return DarsSignal.reject("мало свечей старшего ТФ (${htf.size}) — тренд неизвестен").copy(stage = 2)
                 TrendDirection.UP
             }
             else -> TrendAnalyzer.trend(htf, cfg.swingPivotPct)
         }
 
         if (cfg.useTrendLevels && cfg.requireHtfTrend && trend != TrendDirection.UP) {
-            return DarsSignal.reject("тренд старшего ТФ не восходящий ($trend) — лонг запрещён")
+            return DarsSignal.reject("тренд старшего ТФ не восходящий ($trend) — лонг запрещён").copy(stage = 2)
         }
 
         val legs = LegSegmenter.segment(etf, cfg.swingPivotPct)
-        if (legs.size < cfg.minLegs) return DarsSignal.reject("мало ног на рабочем ТФ (${legs.size}<${cfg.minLegs})")
+        if (legs.size < cfg.minLegs) return DarsSignal.reject("мало ног на рабочем ТФ (${legs.size}<${cfg.minLegs})").copy(stage = 3)
 
         // Уровни поддержки/сопротивления считаем на СТАРШЕМ ТФ (Урок 2). Если старшего ТФ нет
         // (отключён или мало данных) — на рабочем, чтобы TP/фильтры не остались пустыми.
@@ -76,14 +76,14 @@ class DarsEntryEngine(
             if (res != null && price > 0) {
                 val distPct = (res.price - price) / price * 100.0
                 if (distPct <= cfg.resistanceProximityPct) {
-                    return DarsSignal.reject("цена у сопротивления (${distPct.format1()}% до уровня)")
+                    return DarsSignal.reject("цена у сопротивления (${distPct.format1()}% до уровня)").copy(stage = 4)
                 }
             }
         }
 
         // Урок 4 п.2: после резкого движения (нож вверх/вниз) ждём накопления, только потом вход.
         if (AccumulationGate.blocksEntry(etf)) {
-            return DarsSignal.reject("резкое движение недавно — ждём накопления (Урок 4)")
+            return DarsSignal.reject("резкое движение недавно — ждём накопления (Урок 4)").copy(stage = 5)
         }
 
         // Перебор сетапов по приоритету; собираем причины отказа.
@@ -105,7 +105,7 @@ class DarsEntryEngine(
             rejects += r.reasons.map { "треуг.: $it" }
         }
 
-        return DarsSignal(false, trend, null, 0, rejects.ifEmpty { listOf("ни один сетап не включён") })
+        return DarsSignal(false, trend, null, 0, rejects.ifEmpty { listOf("ни один сетап не включён") }, stage = 6)
     }
 
     private fun configFrom(s: FilterSettings) = DarsConfig.from(s)

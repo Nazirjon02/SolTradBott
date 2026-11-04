@@ -44,19 +44,30 @@ class BreakoutPullbackStrategy(
         candidate: TokenCandidate,
         candles: List<Candle>,
         higherTfCandles: List<Candle>,
-    ): Signal? {
+    ): Signal? = evaluate(candidate, candles, higherTfCandles).signal
+
+    override suspend fun evaluate(
+        candidate: TokenCandidate,
+        candles: List<Candle>,
+        higherTfCandles: List<Candle>,
+    ): Evaluation {
         val entry = candidate.priceUsd
-        if (entry <= 0.0) return null
+        if (entry <= 0.0) return Evaluation.stoppedAt(1, STAGES, "нет цены кандидата")
 
-        val setup = BreakoutPullbackDetector.detect(candles, config) as? BreakoutPullbackResult.Setup ?: return null
-
-        if (config.bpRequireHtfTrend) {
-            val htf = higherTfCandles.ifEmpty { htfSource(candidate.pairAddress, config.bpHigherTf, HTF_LIMIT) }
-            if (htf.size < MIN_HTF_BARS) return null // тренд неизвестен — не торгуем вслепую
-            if (TrendAnalyzer.trend(htf, HTF_PIVOT_PCT) != TrendDirection.UP) return null
+        val setup = when (val r = BreakoutPullbackDetector.detect(candles, config)) {
+            is BreakoutPullbackResult.Reject -> {
+                val base = Evaluation.stoppedAt(r.stage, STAGES, r.reason, r.level)
+                val plan = r.arm?.takeIf { config.armedEntryEnabled } ?: return base
+                // Взводим, как и входим, только по восходящему тренду старшего ТФ.
+                if (htfRejection(candidate, higherTfCandles) != null) return base
+                return base.copy(trigger = plan)
+            }
+            is BreakoutPullbackResult.Setup -> r
         }
 
-        return Signal(
+        htfRejection(candidate, higherTfCandles)?.let { return Evaluation.stoppedAt(STAGES, STAGES, it) }
+
+        val signal = Signal(
             mint = candidate.mint,
             symbol = candidate.symbol,
             pairAddress = candidate.pairAddress,
@@ -66,18 +77,42 @@ class BreakoutPullbackStrategy(
             stopLoss = entry * (1 - setup.stopFrac),
             takeProfit = config.takeProfitPrice(entry),
         )
+        return Evaluation.ready(signal, STAGES, entryLevel = setup.pivot)
+    }
+
+    /** Причина отказа по тренду старшего ТФ (тренд неизвестен — не торгуем вслепую) или null. */
+    private suspend fun htfRejection(candidate: TokenCandidate, higherTfCandles: List<Candle>): String? {
+        if (!config.bpRequireHtfTrend) return null
+        val htf = higherTfCandles.ifEmpty { htfSource(candidate.pairAddress, config.bpHigherTf, HTF_LIMIT) }
+        if (htf.size < MIN_HTF_BARS) return "мало свечей старшего ТФ (${htf.size})"
+        val trend = TrendAnalyzer.trend(htf, HTF_PIVOT_PCT)
+        return if (trend != TrendDirection.UP) "тренд ${config.bpHigherTf} не восходящий ($trend)" else null
     }
 
     private companion object {
         const val HTF_LIMIT = 100
         const val MIN_HTF_BARS = 6
         const val HTF_PIVOT_PCT = 1.0
+
+        /** Шаги детектора ([BreakoutPullbackDetector.STAGES]) и тренд старшего ТФ последним. */
+        const val STAGES = BreakoutPullbackDetector.STAGES + 1
     }
 }
 
 /** Результат поиска сетапа: найден (с параметрами входа) или отклонён с причиной. */
 sealed interface BreakoutPullbackResult {
-    data class Reject(val reason: String) : BreakoutPullbackResult
+    /**
+     * @param stage шаг детектора (с 1, см. [BreakoutPullbackDetector.STAGES]), на котором сетап не сложился.
+     * @param level уровень, у которого ждём входа: до триггера — уровень пробоя (ретест), потом — максимум
+     *   прошлого бара (триггер выше него).
+     */
+    data class Reject(
+        val reason: String,
+        val stage: Int = 1,
+        val level: Double? = null,
+        /** Не хватает только триггера — план входа по касанию максимума прошлого бара. */
+        val arm: TriggerPlan? = null,
+    ) : BreakoutPullbackResult
 
     /**
      * @param stopFrac расстояние до стопа как доля цены триггера.
@@ -96,6 +131,12 @@ sealed interface BreakoutPullbackResult {
 
 /** Чистый детектор сетапа по свечам рабочего ТФ (без сети) — покрывается тестами. */
 object BreakoutPullbackDetector {
+
+    /**
+     * Шаги детектора по порядку (для доски наблюдения): история, пробой на объёме, откат, ретест уровня,
+     * высохший объём, триггер, объём триггера, стоп и запас хода.
+     */
+    const val STAGES = 8
 
     /** Минимум баров отката после пика (не считая триггер): один бар — это ещё не откат. */
     private const val MIN_PULLBACK_BARS = 2
@@ -116,6 +157,11 @@ object BreakoutPullbackDetector {
     private const val MAX_VOL_RATIO = 99.0
 
     fun detect(candles: List<Candle>, config: StrategyConfig): BreakoutPullbackResult {
+        // Шаг и уровень — для доски наблюдения: на чём остановились и у какого уровня ждём входа.
+        var stage = 1
+        var level: Double? = null
+        fun reject(reason: String) = BreakoutPullbackResult.Reject(reason, stage, level)
+
         val lookback = config.bpBreakoutLookback.coerceAtLeast(5)
         val n = candles.size
         val minBars = lookback + MIN_PULLBACK_BARS + 3
@@ -125,6 +171,7 @@ object BreakoutPullbackDetector {
         val prev = candles[n - 2]
 
         // 1. Последний пробой на объёме: после него должно остаться место для отката.
+        stage = 2
         val lastBreakoutIdx = n - 2 - MIN_PULLBACK_BARS
         val firstBreakoutIdx = maxOf(lookback, n - 1 - config.bpMaxBarsSinceBreakout)
         val b = (lastBreakoutIdx downTo firstBreakoutIdx).firstOrNull {
@@ -136,8 +183,10 @@ object BreakoutPullbackDetector {
         var b0 = b
         while (b0 - 1 >= lookback && closesAbovePivot(candles, b0 - 1, lookback)) b0--
         val pivot = maxHigh(candles, b0 - lookback, b0 - 1)
+        level = pivot
 
         // 2. Пик после начала пробоя и откат от него (бар-триггер в откат не входит).
+        stage = 3
         val h = (b0..n - 2).maxBy { candles[it].high }
         val peak = candles[h].high
         val impulse = candles.subList(b0, h + 1)
@@ -145,16 +194,17 @@ object BreakoutPullbackDetector {
         if (pullback.size < MIN_PULLBACK_BARS) return reject("отката ещё нет (${pullback.size} бар после пика)")
         val pullbackLow = pullback.minOf { it.low }
 
+        // 3. Ретест удержал уровень пробоя; глубже — пробой ложный (цена вернулась в базу).
+        stage = 4
         val atr = Indicators.atr(candles, config.atrPeriod).lastOrNull()
             ?: return reject("мало свечей для ATR")
         if (atr <= 0.0) return reject("нулевой ATR")
-
-        // 3. Ретест удержал уровень пробоя; глубже — пробой ложный (цена вернулась в базу).
         if (pullbackLow < pivot - RETEST_ATR_TOLERANCE * atr) {
             return reject("откат ушёл под уровень пробоя — пробой ложный")
         }
 
         // 4. Объём «высыхает» в откате, и нет всплеска продаж против нас.
+        stage = 5
         val impulseVol = impulse.map { it.volume }.average()
         val pullbackVol = pullback.map { it.volume }.average()
         if (impulseVol <= 0.0) return reject("нет объёма в импульсе")
@@ -168,8 +218,22 @@ object BreakoutPullbackDetector {
         }
 
         // 5. Бар-триггер: разворот вверх с сильным закрытием и возвратом объёма.
-        if (!trigger.isBullish || trigger.close <= prev.high) return reject("нет триггера: цена не выше максимума прошлого бара")
+        stage = 6
+        level = prev.high
+        if (!trigger.isBullish || trigger.close <= prev.high) {
+            // Всё, кроме триггера, сошлось — план взведённого входа: купить, когда цена пройдёт максимум
+            // прошлого бара. Стоп и запас хода — те же проверки, что у готового сетапа, но от уровня.
+            val structureLow = minOf(pullbackLow, trigger.low)
+            val plan = armPlan(
+                level = prev.high, stop = structureLow - STOP_ATR_BUFFER * atr, peak = peak,
+                invalidation = pivot - RETEST_ATR_TOLERANCE * atr, config = config,
+                confidence = 0.6 + 0.15 * (1 - dryRatio / config.bpPullbackVolumeRatio).coerceIn(0.0, 1.0),
+                what = "пробой максимума прошлого бара после отката к уровню ${fmtPrice(pivot)}",
+            )
+            return reject("нет триггера: цена не выше максимума прошлого бара").copy(arm = plan)
+        }
         if (trigger.closePosition < STRONG_CLOSE_POS) return reject("слабое закрытие триггера")
+        stage = 7
         // Откат без объёма вовсе (бывает на тонких пулах) — любой объём триггера считаем всплеском.
         val triggerVolRatio = when {
             pullbackVol > 0.0 -> trigger.volume / pullbackVol
@@ -181,6 +245,7 @@ object BreakoutPullbackDetector {
         }
 
         // 6. Стоп под структурой и запас хода до пика.
+        stage = 8
         val entry = trigger.close
         val stop = pullbackLow - STOP_ATR_BUFFER * atr
         if (stop <= 0.0 || stop >= entry) return reject("некорректный стоп")
@@ -227,9 +292,40 @@ object BreakoutPullbackDetector {
 
     private fun avgVolume(c: List<Candle>, from: Int, to: Int): Double = (from..to).map { c[it].volume }.average()
 
-    private fun reject(reason: String) = BreakoutPullbackResult.Reject(reason)
-
     private fun pct(frac: Double): String = fmt(frac * 100)
 
     private fun fmt(v: Double): String = (kotlin.math.round(v * 10) / 10.0).toString()
+
+    private fun fmtPrice(v: Double): String = tj.khujand.solana.trading.bot.domain.dars.MarketAnalysis.fmtPrice(v)
+}
+
+/**
+ * План взведённого входа от уровня [level] (общий для «Пробоя + отката» и «Мем-плейбука»): стоп [stop] под
+ * структурой, запас хода до [peak] ≥ 1R, стоп не дальше Stop Loss конфига. Не проходит — null (не взводим).
+ * Потолок цены входа — [MAX_ENTRY_PRICE_DRIFT] над уровнем, как разбег цены у обычного входа.
+ */
+internal fun armPlan(
+    level: Double,
+    stop: Double,
+    peak: Double,
+    invalidation: Double,
+    config: StrategyConfig,
+    confidence: Double,
+    what: String,
+): TriggerPlan? {
+    if (level <= 0.0 || stop <= 0.0 || stop >= level) return null
+    val risk = level - stop
+    val stopFrac = risk / level
+    if (stopFrac * 100 > config.stopLossPercent) return null
+    val roomR = (peak - level) / risk
+    if (roomR < 1.0) return null
+    fun fmt(v: Double) = (kotlin.math.round(v * 10) / 10.0).toString()
+    return TriggerPlan(
+        triggerLevel = level,
+        maxEntryPrice = level * (1 + MAX_ENTRY_PRICE_DRIFT),
+        invalidationPrice = invalidation,
+        stopPrice = stop,
+        confidence = confidence.coerceIn(0.6, 0.9),
+        reason = "$what, стоп −${fmt(stopFrac * 100)}%, до пика ${fmt(roomR)}R",
+    )
 }

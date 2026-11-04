@@ -13,10 +13,13 @@ import tj.khujand.solana.trading.bot.core.strategy.ElliottStrategy
 import tj.khujand.solana.trading.bot.core.strategy.MAX_ENTRY_PRICE_DRIFT
 import tj.khujand.solana.trading.bot.core.strategy.MIN_CONFIDENCE
 import tj.khujand.solana.trading.bot.core.strategy.MemePlaybookStrategy
+import tj.khujand.solana.trading.bot.core.strategy.REVERSAL_CANDLES
+import tj.khujand.solana.trading.bot.core.strategy.REVERSAL_EXIT_REASON
 import tj.khujand.solana.trading.bot.core.strategy.ScoreStrategy
 import tj.khujand.solana.trading.bot.core.strategy.Strategy
 import tj.khujand.solana.trading.bot.core.strategy.StrategyConfig
 import tj.khujand.solana.trading.bot.core.strategy.StrategyType
+import tj.khujand.solana.trading.bot.core.strategy.TriggerPlan
 import tj.khujand.solana.trading.bot.core.strategy.VolumeBreakoutStrategy
 import tj.khujand.solana.trading.bot.core.strategy.rangeAllowsEntry
 import tj.khujand.solana.trading.bot.domain.dars.DarsEntryEngine
@@ -153,12 +156,42 @@ object Backtester {
             slices.higher = s.higherTf.subList(maxOf(0, htfClosed - window), htfClosed)
 
             val candidate = candidateAt(s.coin, candles, i, tfMs, barCloseMs)
-            val signal = if (passesScanFilters(config, candidate)) strategy.analyze(candidate, slices.entry, emptyList()) else null
+            val evaluation = if (passesScanFilters(config, candidate)) strategy.evaluate(candidate, slices.entry, emptyList()) else null
+            val signal = evaluation?.signal
             val accepted = signal != null &&
                 (strategy.selfGated || signal.confidence >= MIN_CONFIDENCE) &&
                 config.rangeAllowsEntry(slices.entry, signal.entryPrice)
             if (signal == null || !accepted) {
-                i++
+                // Взведённый вход: не хватает только триггера — следующие бары ждём касания уровня (как бот).
+                val plan = evaluation?.trigger?.takeIf {
+                    signal == null && config.armedEntryEnabled && config.rangeAllowsEntry(slices.entry, it.triggerLevel)
+                }
+                val fill = plan?.let { armedFill(it, candles, i + 1, config.armedExpiryBars) }
+                if (plan == null || fill == null) {
+                    i++
+                    continue
+                }
+                val start = PositionState(
+                    entryPrice = fill.price,
+                    initialStop = plan.stopPrice,
+                    stopLoss = plan.stopPrice,
+                    takeProfit = config.takeProfitPrice(fill.price),
+                    peakPrice = fill.price,
+                    tp1Done = false,
+                    tp2Done = false,
+                    entryLiquidityUsd = 0.0,
+                    entryAtrFrac = atrFraction(slices.entry, config.atrPeriod, fill.price),
+                    openedAtMs = candles[fill.index].openTimeMs,
+                    peakAtMs = candles[fill.index].openTimeMs,
+                )
+                val sim = if (fill.stoppedInBar) {
+                    SimResult(listOf(BacktestFill(candles[fill.index].openTimeMs + tfMs / 2, plan.stopPrice, 1.0, "Stop Loss")), fill.index)
+                } else {
+                    simulate(start, config, candles, fill.index + 1, tfMs, reversal = strategy.takeIf { settings.reversalExit })
+                }
+                trades += toTrade(s.coin, start, sim, costFrac, "взвод: ${plan.reason}")
+                if (settings.oneTradePerCoin) break
+                i = sim.exitIndex + 1
                 continue
             }
 
@@ -190,7 +223,7 @@ object Backtester {
                 openedAtMs = next.openTimeMs,
                 peakAtMs = next.openTimeMs,
             )
-            val sim = simulate(start, config, candles, i + 1, tfMs)
+            val sim = simulate(start, config, candles, i + 1, tfMs, reversal = strategy.takeIf { settings.reversalExit })
             trades += toTrade(s.coin, start, sim, costFrac, signal.reason)
             if (settings.oneTradePerCoin) break
             i = sim.exitIndex + 1
@@ -202,9 +235,40 @@ object Backtester {
     internal data class SimResult(val fills: List<BacktestFill>, val exitIndex: Int)
 
     /**
+     * Вход взведённого сетапа: свеча [index], цена [price]; [stoppedInBar] — после входа та же свеча дошла
+     * до стопа (медвежья: открытие → максимум → минимум).
+     */
+    internal data class ArmedFill(val index: Int, val price: Double, val stoppedInBar: Boolean)
+
+    /**
+     * Где сработал бы взведённый вход среди свечей с [from] в течение [expiryBars] баров: путь цены внутри
+     * свечи — как в [simulate]. Точка слома раньше уровня — взвод снят; гэп над уровнем — вход по открытию;
+     * дальше потолка цены — не догоняем. null — входа не было.
+     */
+    internal fun armedFill(plan: TriggerPlan, candles: List<Candle>, from: Int, expiryBars: Int): ArmedFill? {
+        val until = minOf(candles.size, from + expiryBars.coerceAtLeast(1))
+        for (j in from until until) {
+            val bar = candles[j]
+            val path = if (bar.isBullish) listOf(bar.open, bar.low, bar.high, bar.close)
+            else listOf(bar.open, bar.high, bar.low, bar.close)
+            for ((k, price) in path.withIndex()) {
+                if (price <= plan.invalidationPrice) return null
+                if (price >= plan.triggerLevel) {
+                    val fill = if (k == 0) price else plan.triggerLevel
+                    if (fill > plan.maxEntryPrice) return null
+                    val stopped = path.drop(k + 1).any { it <= plan.stopPrice }
+                    return ArmedFill(j, fill, stopped)
+                }
+            }
+        }
+        return null
+    }
+
+    /**
      * Сопровождение позиции по свечам начиная с [fromIndex] (свеча входа: вход по её открытию).
      * Каждая точка пути цены прогоняется через [decideExit]; несколько действий на одной цене
      * (TP1 и сразу TP2) исполняются подряд.
+     * @param reversal стратегия для «выхода по развороту» ([Strategy.shouldClose] на закрытии бара); null — выключен.
      */
     internal fun simulate(
         start: PositionState,
@@ -212,6 +276,7 @@ object Backtester {
         candles: List<Candle>,
         fromIndex: Int,
         tfMs: Long,
+        reversal: Strategy? = null,
     ): SimResult {
         var p = start
         var remaining = 1.0
@@ -249,6 +314,14 @@ object Backtester {
                             if (stopAfter != null && stopAfter > p.stopLoss) p = p.copy(stopLoss = stopAfter)
                         }
                     }
+                }
+            }
+            // Бар закрылся, а позиция жива — проверка разворота по закрытым барам (как в TradeMonitor).
+            if (reversal != null) {
+                val closed = candles.subList(maxOf(0, j - REVERSAL_CANDLES + 1), j + 1)
+                if (reversal.shouldClose(closed, start.openedAtMs)) {
+                    fills += BacktestFill(bar.openTimeMs + tfMs - 1, bar.close, remaining, REVERSAL_EXIT_REASON)
+                    return SimResult(fills, j)
                 }
             }
         }

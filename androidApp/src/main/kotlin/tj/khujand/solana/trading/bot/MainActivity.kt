@@ -9,6 +9,7 @@ import android.provider.Settings
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import tj.khujand.solana.trading.bot.service.ServiceHelper
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -18,6 +19,10 @@ class MainActivity : ComponentActivity() {
         requestBatteryOptimizationExemption()
         // Рантайм уже поднят в DrxApp.onCreate (init идемпотентен — вернёт тот же экземпляр).
         val runtime = DrxRuntimeHolder.get() ?: DrxRuntimeHolder.init("soltradbot.db")
+        // Тумблер «Возобновлять торговлю при запуске»: процесс поднялся заново (после перезагрузки или
+        // выгрузки системой) — возвращаем бота в то состояние, в котором его оставили. Activity на экране —
+        // foreground-сервис запускать можно.
+        if (runtime.takeResumeOnLaunch()) runCatching { ServiceHelper.restoreTrading(this) }
         setContent { App(runtime) }
     }
 

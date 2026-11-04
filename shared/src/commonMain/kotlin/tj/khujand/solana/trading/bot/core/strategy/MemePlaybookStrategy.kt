@@ -50,26 +50,40 @@ class MemePlaybookStrategy(
         candidate: TokenCandidate,
         candles: List<Candle>,
         higherTfCandles: List<Candle>,
-    ): Signal? {
-        val entry = candidate.priceUsd
-        if (entry <= 0.0) return null
-        if (!liquidityDeepEnough(candidate, config.mpMinLiqToMcPct)) return null
+    ): Signal? = evaluate(candidate, candles, higherTfCandles).signal
 
-        val setup = MemeFibDetector.detect(candles, config) as? MemeFibResult.Setup ?: return null
+    /** Шаги: ликвидность к капитализации, шаги детектора ([MemeFibDetector.STAGES]), on-chain проверки. */
+    override suspend fun evaluate(
+        candidate: TokenCandidate,
+        candles: List<Candle>,
+        higherTfCandles: List<Candle>,
+    ): Evaluation {
+        val total = MemeFibDetector.STAGES + 2
+        val entry = candidate.priceUsd
+        if (entry <= 0.0) return Evaluation.stoppedAt(1, total, "нет цены кандидата")
+        if (!liquidityDeepEnough(candidate, config.mpMinLiqToMcPct)) {
+            val liqPct = if (candidate.marketCap > 0) candidate.liquidityUsd / candidate.marketCap * 100 else 0.0
+            return Evaluation.stoppedAt(1, total, "ликвидность ${fmt1(liqPct)}% капитализации < ${fmt1(config.mpMinLiqToMcPct)}%")
+        }
+
+        val setup = when (val r = MemeFibDetector.detect(candles, config)) {
+            is MemeFibResult.Reject -> {
+                val base = Evaluation.stoppedAt(r.stage + 1, total, r.reason, r.level)
+                val plan = r.arm?.takeIf { config.armedEntryEnabled } ?: return base
+                // Взводим, как и входим, только монету, прошедшую on-chain проверки.
+                return if (onChainVerdict(candidate) == "") base.copy(trigger = plan) else base
+            }
+            is MemeFibResult.Setup -> r
+        }
 
         // Проверки по сети — только для найденного сетапа. Непустая строка — причина отказа.
-        val rejection = if (checkVerdicts.containsKey(candidate.mint)) {
-            checkVerdicts[candidate.mint]
-        } else {
-            val verdict = onChainRejection(candidate) ?: return null // нет данных — нет входа
-            val reason = verdict.ifEmpty { null }
-            if (checkVerdicts.size >= VERDICT_CACHE_LIMIT) checkVerdicts.clear()
-            checkVerdicts[candidate.mint] = reason
-            reason
+        when (val verdict = onChainVerdict(candidate)) {
+            null -> return Evaluation.stoppedAt(total, total, "authority/копикат не проверить — нет ответа сети")
+            "" -> Unit
+            else -> return Evaluation.stoppedAt(total, total, verdict)
         }
-        if (rejection != null) return null
 
-        return Signal(
+        val signal = Signal(
             mint = candidate.mint,
             symbol = candidate.symbol,
             pairAddress = candidate.pairAddress,
@@ -79,6 +93,21 @@ class MemePlaybookStrategy(
             stopLoss = entry * (1 - setup.stopFrac),
             takeProfit = config.takeProfitPrice(entry),
         )
+        return Evaluation.ready(signal, total)
+    }
+
+    private fun fmt1(v: Double): String = (kotlin.math.round(v * 10) / 10.0).toString()
+
+    /**
+     * Итог on-chain проверок с кешем по mint: "" — пройдены, непустая строка — причина отказа, null — данных нет
+     * (сеть), решение не принимаем и не запоминаем.
+     */
+    private suspend fun onChainVerdict(candidate: TokenCandidate): String? {
+        if (checkVerdicts.containsKey(candidate.mint)) return checkVerdicts[candidate.mint] ?: ""
+        val verdict = onChainRejection(candidate) ?: return null
+        if (checkVerdicts.size >= VERDICT_CACHE_LIMIT) checkVerdicts.clear()
+        checkVerdicts[candidate.mint] = verdict.ifEmpty { null }
+        return verdict
     }
 
     /**
@@ -135,7 +164,18 @@ private fun createdMs(value: Long?): Long? = when {
 
 /** Результат поиска сетапа «Мем-плейбука»: найден (с параметрами входа) или отклонён с причиной. */
 sealed interface MemeFibResult {
-    data class Reject(val reason: String) : MemeFibResult
+    /**
+     * @param stage шаг детектора (с 1, см. [MemeFibDetector.STAGES]), на котором сетап не сложился.
+     * @param level уровень, у которого ждём входа: до зоны — её верх (откат mpFibMin), в зоне — максимум
+     *   прошлого бара (триггер выше него).
+     */
+    data class Reject(
+        val reason: String,
+        val stage: Int = 1,
+        val level: Double? = null,
+        /** Не хватает только триггера — план входа по касанию максимума прошлого бара. */
+        val arm: TriggerPlan? = null,
+    ) : MemeFibResult
 
     /**
      * @param depth глубина отката как доля импульса (0.5 = откатили половину).
@@ -155,6 +195,12 @@ sealed interface MemeFibResult {
 
 /** Чистый детектор сетапа «импульс → откат по Фибоначчи → триггер» по свечам рабочего ТФ (без сети). */
 object MemeFibDetector {
+
+    /**
+     * Шаги детектора по порядку (для доски наблюдения): история, импульс, глубина отката, высохший
+     * объём, триггер, объём триггера, стоп и запас хода.
+     */
+    const val STAGES = 7
 
     /** Минимум баров отката после пика (не считая триггер): один бар — это ещё не откат. */
     private const val MIN_PULLBACK_BARS = 2
@@ -179,6 +225,11 @@ object MemeFibDetector {
     private const val MAX_VOL_RATIO = 99.0
 
     fun detect(candles: List<Candle>, config: StrategyConfig): MemeFibResult {
+        // Шаг и уровень — для доски наблюдения: на чём остановились и у какого уровня ждём входа.
+        var stage = 1
+        var level: Double? = null
+        fun reject(reason: String) = MemeFibResult.Reject(reason, stage, level)
+
         val n = candles.size
         val minBars = maxOf(config.atrPeriod + 2, MIN_PULLBACK_BARS + 4)
         if (n < minBars) return reject("мало свечей ($n<$minBars)")
@@ -190,6 +241,7 @@ object MemeFibDetector {
         val prev = candles[n - 2]
 
         // 1. Импульс: максимум окна (без бара-триггера) и минимум ДО него.
+        stage = 2
         val start = maxOf(0, n - 1 - config.mpLookbackBars.coerceAtLeast(10))
         val h = (start..n - 2).maxBy { candles[it].high }
         val pullbackBars = n - 2 - h
@@ -206,6 +258,8 @@ object MemeFibDetector {
         val range = high - low
 
         // 2. Глубина отката: в зоне [fibMin; fibMax). Триггер тоже не должен проколоть fibMax.
+        stage = 3
+        level = high - fibMin * range
         val pullback = candles.subList(h + 1, n - 1)
         val pullbackLow = pullback.minOf { it.low }
         val depth = (high - pullbackLow) / range
@@ -214,6 +268,8 @@ object MemeFibDetector {
         if (depth < fibMin) return reject("откат ${fmt2(depth)} мельче ${fmt2(fibMin)} — ещё не в зоне")
 
         // 3. Объём «высыхает» в откате, и нет всплеска продаж против нас.
+        stage = 4
+        level = prev.high
         val impulse = candles.subList(l, h + 1)
         val impulseVol = impulse.map { it.volume }.average()
         val pullbackVol = pullback.map { it.volume }.average()
@@ -228,8 +284,26 @@ object MemeFibDetector {
         }
 
         // 4. Бар-триггер: разворот вверх с сильным закрытием и возвратом объёма.
-        if (!trigger.isBullish || trigger.close <= prev.high) return reject("нет триггера: цена не выше максимума прошлого бара")
+        stage = 5
+        if (!trigger.isBullish || trigger.close <= prev.high) {
+            // Всё, кроме триггера, сошлось — план взведённого входа (стоп и запас хода — от уровня).
+            val atr = Indicators.atr(candles, config.atrPeriod).lastOrNull() ?: 0.0
+            val structureLow = minOf(pullbackLow, trigger.low)
+            val fibFloor = high - fibMax * range
+            val plan = if (atr <= 0.0) null else armPlan(
+                level = prev.high,
+                stop = maxOf(structureLow - STOP_ATR_BUFFER * atr, fibFloor - FIB_STOP_ATR_BUFFER * atr),
+                peak = high,
+                invalidation = fibFloor,
+                config = config,
+                confidence = 0.6 + (if (depth in GOLDEN_MIN..GOLDEN_MAX) 0.1 else 0.0) +
+                    0.1 * (1 - dryRatio / config.mpPullbackVolumeRatio).coerceIn(0.0, 1.0),
+                what = "пробой максимума прошлого бара в зоне отката ${fmt2(depth)}",
+            )
+            return reject("нет триггера: цена не выше максимума прошлого бара").copy(arm = plan)
+        }
         if (trigger.closePosition < STRONG_CLOSE_POS) return reject("слабое закрытие триггера")
+        stage = 6
         val triggerVolRatio = when {
             pullbackVol > 0.0 -> trigger.volume / pullbackVol
             trigger.volume > 0.0 -> MAX_VOL_RATIO
@@ -240,6 +314,7 @@ object MemeFibDetector {
         }
 
         // 5. Стоп под минимумом отката, но не глубже уровня слома (fibMax); запас хода до максимума импульса.
+        stage = 7
         val atr = Indicators.atr(candles, config.atrPeriod).lastOrNull() ?: return reject("мало свечей для ATR")
         val entry = trigger.close
         val stop = maxOf(pullbackLow - STOP_ATR_BUFFER * atr, high - fibMax * range - FIB_STOP_ATR_BUFFER * atr)
@@ -272,8 +347,6 @@ object MemeFibDetector {
                 "стоп −${pct(stopFrac)}% под минимумом отката, до максимума ${fmt(roomR)}R",
         )
     }
-
-    private fun reject(reason: String) = MemeFibResult.Reject(reason)
 
     private fun pct(frac: Double): String = fmt(frac * 100)
 

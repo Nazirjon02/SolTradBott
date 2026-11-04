@@ -25,10 +25,18 @@ import kotlinx.serialization.Serializable
  * @param maxWeeklyLossPct то же за последние 7 дней.
  * @param lossStreakLimit столько убыточных сделок подряд — и новые входы на паузе…
  * @param lossStreakPauseMinutes …столько минут от последнего убытка.
+ * @param maxDrawdownPct просадка портфеля от пика, % капитала на пике: кривая — нарастающий итог закрытых
+ *   сделок плюс открытые по последней цене (по сделкам, а не по балансу: пополнение кошелька и цена SOL —
+ *   не просадка). Сама не отпускает. По умолчанию выключена (0).
+ * @param autoStopOnLimit лимит убытка портфеля (день, неделя, просадка) не ставит входы на паузу, а
+ *   останавливает бота целиком: дальше — только ручной запуск. По умолчанию выключен.
  *
  * Выход:
  * @param maxSellSlippagePct потолок slippage продажи: после каждой неудачной попытки slippage растёт
  *   (3% → 6% → 12% …), но не выше этого значения.
+ * @param reversalExitEnabled «выход по развороту»: открытая сделка продаётся, не дожидаясь стопа, когда на
+ *   закрытых барах рабочего ТФ стратегии EMA(21) ушла под EMA(50) и после входа сложились нижние максимум и
+ *   минимум (см. [tj.khujand.solana.trading.bot.core.strategy.marketReversedAgainstLong]). По умолчанию выключен.
  */
 @Serializable
 data class ProtectionSettings(
@@ -45,6 +53,9 @@ data class ProtectionSettings(
     val maxWeeklyLossPct: Double = 20.0,
     val lossStreakLimit: Int = 3,
     val lossStreakPauseMinutes: Int = 30,
+    val maxDrawdownPct: Double = 0.0,
+    val autoStopOnLimit: Boolean = false,
 
     val maxSellSlippagePct: Double = 15.0,
+    val reversalExitEnabled: Boolean = false,
 )

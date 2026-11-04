@@ -9,6 +9,8 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlin.time.Clock
 import kotlinx.datetime.TimeZone
 import kotlinx.datetime.atStartOfDayIn
@@ -47,6 +49,27 @@ class BotEngine(
     val status: StateFlow<BotStatus> = _status.asStateFlow()
     private var startTime: Long = 0L
 
+    /** Когда движок последний раз запущен (мс); 0 — ещё не запускался. Для `/health`. */
+    val startedAt: Long get() = startTime
+
+    // Остановка по лимиту убытка идёт из цикла стратегии, а stop() гасит и циклы стратегий, и детей
+    // [scope] — поэтому отдельный scope, который stop() не отменяет. Лок — несколько стратегий могут
+    // увидеть лимит в одну секунду, остановка и сообщение нужны один раз.
+    private val controlScope = CoroutineScope(Dispatchers.Default + SupervisorJob())
+    private val limitStopLock = Mutex()
+
+    init {
+        strategyManager.onHardStop = { reason -> controlScope.launch { stopByLossLimit(reason) } }
+    }
+
+    private suspend fun stopByLossLimit(reason: String) = limitStopLock.withLock {
+        if (_status.value != BotStatus.RUNNING) return@withLock
+        stop(
+            note = "🛑 DRX Bot остановлен: $reason.\nОткрытые позиции сопровождаются. Запуск — только вручную " +
+                "(/start или «🟢 Старт»), когда разберётесь с причиной."
+        )
+    }
+
     suspend fun start() {
         if (_status.value == BotStatus.RUNNING) return
         _status.value = BotStatus.RUNNING
@@ -73,13 +96,14 @@ class BotEngine(
         }
     }
 
-    suspend fun stop() {
+    /** @param note сообщение в Telegram вместо обычного «остановлен» (остановка по лимиту убытка). */
+    suspend fun stop(note: String? = null) {
         strategyManager.stopAll()
         scope.coroutineContext.cancelChildren()
         _status.value = BotStatus.STOPPED
         settingsStore.setDesiredState(BotStatus.STOPPED.name)
         activityLog.info("🔴 Движок остановлен")
-        notifier.send("🔴 DRX Bot остановлен")
+        notifier.send(note ?: "🔴 DRX Bot остановлен")
     }
 
     /**
@@ -89,6 +113,7 @@ class BotEngine(
     fun shutdown() {
         CoroutineScope(Dispatchers.Default).launch { strategyManager.stopAll() }
         scope.cancel()
+        controlScope.cancel()
         _status.value = BotStatus.STOPPED
     }
 
@@ -160,10 +185,15 @@ class BotEngine(
         activityLog.info("🔄 «${s.name}»: новые параметры применены, сканер перезапущен")
     }
 
+    /**
+     * Итоги текущего режима (DEMO/REAL) с начала идущего забега («Новый старт»), без него — за всю историю
+     * режима. «Сегодня» — с начала дня или забега, что позже.
+     */
     suspend fun getStats(): BotStats {
-        val all = db.tradeQueries.getStats().executeAsOne()
-        val todayStart = startOfDayMillis()
-        val today = db.tradeQueries.getTodayStats(todayStart).executeAsOne()
+        val flag = if (executor.isDemo()) 1L else 0L
+        val runStart = db.runStartedAt(executor.isDemo())
+        val all = db.tradeQueries.getStatsByModeSince(flag, runStart).executeAsOne()
+        val today = db.tradeQueries.getStatsByModeSince(flag, maxOf(startOfDayMillis(), runStart)).executeAsOne()
         val uptime = if (startTime > 0) formatUptime(Clock.System.now().toEpochMilliseconds() - startTime) else "—"
         return BotStats(
             totalTrades = all.total_trades,
