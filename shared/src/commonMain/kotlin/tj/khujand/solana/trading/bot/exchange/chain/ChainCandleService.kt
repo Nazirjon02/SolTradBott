@@ -289,6 +289,24 @@ class ChainCandleService(
         return writeReport()
     }
 
+    // ─── Входы для тестов (без сети) ─────────────────────────────────────────
+
+    /** Пул как будто разобран и допущен, запрос подписки ушёл с номером [reqId]. */
+    internal suspend fun testAddPool(pool: ChainPool, symbol: String, reqId: Long) = lock.withLock {
+        val st = PoolState(pool, symbol)
+        st.admitted = true
+        st.reqId = reqId
+        pendingSubs[reqId] = pool.address
+        pools[pool.address] = st
+    }
+
+    /** Сообщение узла — как из WebSocket. */
+    internal suspend fun testMessage(text: String) = onMessage(text, text.encodeToByteArray().size)
+
+    internal fun testSolPrice(usd: Double) {
+        solUsd = usd
+    }
+
     // ─── Цена SOL ────────────────────────────────────────────────────────────
 
     private suspend fun priceLoop() {
@@ -491,9 +509,15 @@ class ChainCandleService(
             // Время блока из событий PumpSwap — опора часов для всех пулов, в том числе чужих в этой транзакции.
             decoded.swaps.firstNotNullOfOrNull { it.blockTimeSec }?.let { clock.anchor(slot, it) }
             var accepted = 0
+            val ammV4Swaps = decoded.swaps.count { it.dex == ChainDex.RAYDIUM_AMM_V4 }
             for (swap in decoded.swaps) {
                 if (swap.dex != st.meta.dex) continue
-                if (swap.dex == ChainDex.RAYDIUM_AMM_V4 && !ammV4Match(swap, st.reserve0, st.reserve1)) continue
+                if (swap.dex == ChainDex.RAYDIUM_AMM_V4) {
+                    // Резервы известны — привязка по ним; не известны (хранилища не прочитались) — только
+                    // единственный своп AMM v4 в транзакции, дальше резервы берутся из него.
+                    val known = st.reserve0 > 0 && st.reserve1 > 0
+                    if (if (known) !ammV4Match(swap, st.reserve0, st.reserve1) else ammV4Swaps != 1) continue
+                }
                 val exact = swap.blockTimeSec
                 val timeMs = exact?.times(1000) ?: clock.estimateMs(slot) ?: (now - RECEIVE_LAG_MS)
                 val order = slot * 100_000L + (arrival++ % 100_000L)

@@ -18,8 +18,10 @@ import tj.khujand.solana.trading.bot.exchange.dex.GeckoTerminalApi
  * ничего не делает.
  *
  * ```
- * CHAIN_SHADOW_MINUTES=240 CHAIN_OUT=/путь/к/папке ./gradlew :shared:jvmTest --tests "*ChainShadowRunTest*"
+ * CHAIN_SHADOW_MINUTES=240 CHAIN_OUT=/путь/к/папке ./gradlew :shared:jvmTest --tests "*ChainShadowRunTest*" --rerun
  * ```
+ * `--rerun` обязателен: переменные окружения не входят во входы задачи, и без него Gradle достанет прошлый
+ * (пустой) результат из кеша сборки, ничего не запустив.
  * Переменные: CHAIN_RPC_URL — узел (по умолчанию публичный mainnet; адрес Helius с ключом в отчёт не
  * пишется), CHAIN_DB — база бота (читается копия файла: живую базу бот пишет без WAL, лишняя блокировка ему
  * ни к чему), CHAIN_DAILY_LIMIT — лимит кредитов в сутки (как в приложении, по умолчанию 25 000).
