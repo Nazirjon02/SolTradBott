@@ -77,6 +77,31 @@ fun ChainCandlesSection() {
     val st by service.status.collectAsState()
     var enabled by remember { mutableStateOf(store.getChainCandlesEnabled()) }
     var limit by remember { mutableStateOf(store.getChainCreditLimit().toString()) }
+    ChainCandlesSectionContent(
+        status = st,
+        enabled = enabled,
+        limit = limit,
+        onToggle = { v ->
+            enabled = v
+            store.setChainCandlesEnabled(v)
+            if (v) service.start() else service.stop()
+        },
+        onLimit = { v ->
+            limit = v
+            v.toIntOrNull()?.takeIf { it > 0 }?.let(store::setChainCreditLimit)
+        },
+    )
+}
+
+/** Содержимое раздела — от состояния, без рантайма (рисуется и в тестах). */
+@Composable
+internal fun ChainCandlesSectionContent(
+    status: ChainCandleStatus,
+    enabled: Boolean,
+    limit: String,
+    onToggle: (Boolean) -> Unit,
+    onLimit: (String) -> Unit,
+) {
     FormSection("⛓  Свечи из блокчейна · прототип") {
         Text(
             "Теневой режим: свечи 1m/5m строятся из сделок в блокчейне (PumpSwap, Raydium) и раз в час " +
@@ -84,21 +109,14 @@ fun ChainCandlesSection() {
             fontSize = 11.sp, color = TextSecondary, lineHeight = 16.sp,
         )
         Spacer(Modifier.height(4.dp))
-        FormToggle("Строить свечи из блокчейна", enabled) { v ->
-            enabled = v
-            store.setChainCandlesEnabled(v)
-            if (v) service.start() else service.stop()
-        }
+        FormToggle("Строить свечи из блокчейна", enabled, onToggle)
         if (enabled) {
-            val (text, color) = chainStatusText(st)
+            val (text, color) = chainStatusText(status)
             Surface(color = color.copy(alpha = 0.12f), shape = RoundedCornerShape(8.dp), modifier = Modifier.fillMaxWidth()) {
                 Text(text, fontSize = 12.sp, color = color, lineHeight = 17.sp, modifier = Modifier.padding(12.dp))
             }
         }
-        FormTextField("Лимит кредитов Helius в сутки", limit, isNumber = true) { v ->
-            limit = v
-            v.toIntOrNull()?.takeIf { it > 0 }?.let(store::setChainCreditLimit)
-        }
+        FormTextField("Лимит кредитов Helius в сутки", limit, isNumber = true, onChange = onLimit)
         Text(
             "Узел — «Solana RPC URL» в разделе кошелька: https://mainnet.helius-rpc.com/?api-key=… (новый адрес " +
                 "подхватывается при следующем включении). Бесплатный Helius — 1 млн кредитов в месяц, WebSocket — " +

@@ -181,6 +181,7 @@ class ChainCandleService(
     @Volatile private var lastError: String? = null
     @Volatile private var session: DefaultClientWebSocketSession? = null
     @Volatile private var scope: CoroutineScope? = null
+    @Volatile private var accountsPerCall = MAX_ACCOUNTS_PER_CALL
     private var wsClient: HttpClient? = null
     private var rpcClient: HttpClient? = null
 
@@ -348,13 +349,14 @@ class ChainCandleService(
     }
 
     private suspend fun send(text: String) {
-        val s = session ?: return
+        val s = session ?: return onDiagnostic("не отправлено (нет соединения): ${text.take(60)}")
         try {
             s.send(Frame.Text(text))
         } catch (e: CancellationException) {
             throw e
-        } catch (_: Exception) {
+        } catch (e: Exception) {
             // Соединение рвётся — подписка восстановится после переподключения.
+            onDiagnostic("ошибка отправки: ${e::class.simpleName}: ${hideApiKey(e.message)}")
         }
     }
 
@@ -567,7 +569,7 @@ class ChainCandleService(
             unknown.filter { it.dexId.lowercase() in SUPPORTED_DEX_IDS }
         }
         for (chunk in fresh.chunked(MAX_ACCOUNTS_PER_CALL)) {
-            val accounts = getMultipleAccounts(client, url, chunk.map { it.address }) ?: return
+            val accounts = fetchAccounts(client, url, chunk.map { it.address }) ?: return
             val partials = HashMap<String, PoolLayouts.Partial>()
             val out = HashMap<String, PoolResolution>()
             for (w in chunk) {
@@ -581,8 +583,7 @@ class ChainCandleService(
                 }
             }
             val needs = partials.values.flatMap { it.needs() }.distinct()
-            val extra = HashMap<String, RawAccount>()
-            for (n in needs.chunked(MAX_ACCOUNTS_PER_CALL)) extra += getMultipleAccounts(client, url, n) ?: return
+            val extra = if (needs.isEmpty()) emptyMap() else fetchAccounts(client, url, needs) ?: return
             for (w in chunk) {
                 val p = partials[w.address] ?: continue
                 out[w.address] = PoolLayouts.finish(p, w.mint, extra)
@@ -591,7 +592,30 @@ class ChainCandleService(
         }
     }
 
-    private suspend fun getMultipleAccounts(client: HttpClient, url: String, addrs: List<String>): Map<String, RawAccount>? {
+    /**
+     * Аккаунты пачками. Узлы по-разному ограничивают размер пачки (Helius — 100 адресов, PublicNode — меньше
+     * 20, отвечает 403): на отказ пачка делится пополам, пока не станет [MIN_ACCOUNTS_PER_CALL].
+     * @return null — узел не ответил (попробуем при следующем обновлении списка).
+     */
+    private suspend fun fetchAccounts(client: HttpClient, url: String, addrs: List<String>): Map<String, RawAccount>? {
+        val out = HashMap<String, RawAccount>()
+        var i = 0
+        while (i < addrs.size) {
+            val n = accountsPerCall
+            val chunk = addrs.subList(i, minOf(addrs.size, i + n))
+            val code = getMultipleAccounts(client, url, chunk, out)
+            when {
+                code == 200 -> i += chunk.size
+                code in BATCH_REJECT_CODES && n > MIN_ACCOUNTS_PER_CALL -> accountsPerCall = maxOf(MIN_ACCOUNTS_PER_CALL, n / 2)
+                else -> return null
+            }
+        }
+        if (lastError?.startsWith("getMultipleAccounts") == true) lastError = null
+        return out
+    }
+
+    /** Один вызов getMultipleAccounts: аккаунты — в [out]; возвращает HTTP-код (0 — сеть). */
+    private suspend fun getMultipleAccounts(client: HttpClient, url: String, addrs: List<String>, out: MutableMap<String, RawAccount>): Int {
         val body = buildString {
             append("""{"jsonrpc":"2.0","id":1,"method":"getMultipleAccounts","params":[[""")
             addrs.forEachIndexed { i, a -> if (i > 0) append(','); append('"').append(a).append('"') }
@@ -603,17 +627,18 @@ class ChainCandleService(
                 contentType(ContentType.Application.Json)
                 setBody(body)
             }
-            if (resp.status.value != 200) {
-                lastError = "getMultipleAccounts: HTTP ${resp.status.value}"
-                null
+            val code = resp.status.value
+            if (code != 200) {
+                lastError = "getMultipleAccounts: HTTP $code (пачка ${addrs.size})"
             } else {
-                PoolLayouts.parseMultipleAccounts(addrs, json.parseToJsonElement(resp.bodyAsText()))
+                out += PoolLayouts.parseMultipleAccounts(addrs, json.parseToJsonElement(resp.bodyAsText()))
             }
+            code
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
             lastError = "getMultipleAccounts: ${hideApiKey(e.message)}"
-            null
+            0
         }
     }
 
@@ -679,6 +704,7 @@ class ChainCandleService(
             }
         }
         if (stoppedNow) onEvent("⛓ Лимит кредитов Helius на сутки исчерпан — подписки сняты до 00:00 UTC")
+        if (out.isNotEmpty()) onDiagnostic("бюджет: отправляю ${out.size} запросов подписки/отписки")
         out.forEach { send(it) }
     }
 
@@ -850,6 +876,10 @@ class ChainCandleService(
         private const val MANAGER_TICK_MS = 10_000L
         private const val WATCHLIST_EVERY_MS = 60_000L
         private const val MAX_ACCOUNTS_PER_CALL = 100
+        private const val MIN_ACCOUNTS_PER_CALL = 5
+
+        /** Так узлы отвечают на слишком большую пачку адресов (PublicNode — 403). */
+        private val BATCH_REJECT_CODES = setOf(400, 403, 413)
         private const val MAX_RESOLVED = 2_000
 
         /** Выбывший из списка наблюдения пул живёт столько — для сверки его последних баров. */
