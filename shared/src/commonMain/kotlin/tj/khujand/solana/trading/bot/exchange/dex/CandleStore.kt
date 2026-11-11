@@ -39,11 +39,13 @@ sealed interface CandleFetch {
 
 /**
  * Состояние источника свечей — для ленты активности, настроек и `/health`.
- * @param usingKey запросы идут с ключом API (лимит выше).
+ * @param usingKey ключ API задан и в работе (бэктест, «Анализ» и график идут с ним; торговля — всегда без ключа).
  * @param keyRejected сервер отклонил ключ — работаем без него.
  * @param keyExhaustedUntilMs ключ несколько раз подряд упёрся в лимит — похоже, кончилась месячная квота: до этого
  *   момента запросы идут без ключа; 0 — не упирался.
  * @param rateLimitHits сколько раз сервер отказал по лимиту с начала работы.
+ * @param keyUsedToday запросов с ключом за текущие сутки (UTC) из дневного лимита [keyDailyAllowance];
+ *   [keyUsedMonth] — за месяц из [keyMonthlyQuota]; [keyNextDayMs] — когда начнутся новые сутки (см. [KeyBudget]).
  */
 data class CandleFeedStatus(
     val usingKey: Boolean = false,
@@ -52,6 +54,11 @@ data class CandleFeedStatus(
     val rateLimitHits: Int = 0,
     val lastRateLimitAtMs: Long = 0L,
     val lastOkAtMs: Long = 0L,
+    val keyUsedToday: Int = 0,
+    val keyDailyAllowance: Int = 0,
+    val keyUsedMonth: Int = 0,
+    val keyMonthlyQuota: Int = 0,
+    val keyNextDayMs: Long = 0L,
 )
 
 /**
@@ -65,7 +72,8 @@ data class CandleFeedStatus(
  *    отдельно: OHLCV складывается точно, а запрос на 15m у пула, который и так обновляется раз в 5 минут, —
  *    лишний. Младший устарел или неглубок — обновляется он (тот же один запрос, но с нужной глубиной);
  *  - запросы идут через [RequestLimiter] — по очереди и не чаще лимита; отказ 429 ставит на паузу всех,
- *    а не превращается в «свечей нет»;
+ *    а не превращается в «свечей нет». Очередь и ключ выбирает [route] по тому, кто просит ([RequestLane]):
+ *    торговля — бесплатно без ключа, человек (бэктест, «Анализ», график) — с ключом, пока позволяет его лимит;
  *  - пока свежих данных нет (лимит, сбой сети), отдаются прежние закрытые бары, но не старше
  *    [MAX_STALE_BARS] баров: по более старой картине входить нельзя.
  *
@@ -73,15 +81,15 @@ data class CandleFeedStatus(
  * [SETTLE_MS]: CDN держит копию ответа до минуты, а источник дописывает только что закрывшийся бар ещё
  * несколько секунд.
  *
- * Режим [get] `live` (график сделки): свежесть [LIVE_TTL_MS] и незакрытый бар в конце — только когда лимит
- * это позволяет ([liveAllowed], то есть с ключом API); иначе тот же ответ, что у стратегий.
+ * Режим [get] `live` (график сделки): свежесть [LIVE_TTL_MS] и незакрытый бар в конце — только когда запрос
+ * идёт с ключом; иначе тот же ответ, что у стратегий.
  *
- * Сеть — за [fetch], часы — параметром: логика покрыта тестами без сети и ожидания.
+ * Сеть — за [fetch] (третий параметр — идёт ли запрос с ключом), выбор пути — за [route], часы — параметром:
+ * логика покрыта тестами без сети и ожидания.
  */
 class CandleStore(
-    private val fetch: suspend (key: CandleKey, limit: Int) -> CandleFetch,
-    private val limiter: RequestLimiter,
-    private val liveAllowed: () -> Boolean = { false },
+    private val fetch: suspend (key: CandleKey, limit: Int, keyed: Boolean) -> CandleFetch,
+    private val route: (lane: RequestLane) -> RequestRoute,
     private val onUnauthorized: () -> Unit = {},
     private val nowMs: () -> Long = { Clock.System.now().toEpochMilliseconds() },
 ) {
@@ -113,27 +121,43 @@ class CandleStore(
         _status.update { it.copy(usingKey = usingKey, keyRejected = keyRejected, keyExhaustedUntilMs = keyExhaustedUntilMs) }
     }
 
+    /** Расход ключа за сутки и месяц — для настроек и ленты. */
+    fun setKeyBudget(v: KeyBudgetView) {
+        _status.update {
+            it.copy(
+                keyUsedToday = v.usedToday,
+                keyDailyAllowance = v.allowanceToday,
+                keyUsedMonth = v.usedMonth,
+                keyMonthlyQuota = v.monthlyQuota,
+                keyNextDayMs = v.nextDayMs,
+            )
+        }
+    }
+
     /**
      * Последние [limit] свечей. Пусто — данных нет (пул неизвестен, лимит исчерпан, а прежние бары устарели).
-     * @param live график: с незакрытым баром и свежестью [LIVE_TTL_MS], если лимит это позволяет.
+     * @param live график: с незакрытым баром и свежестью [LIVE_TTL_MS], если запрос идёт с ключом.
      * @param maxWaitMs сколько можно ждать очереди к API; не дождались — прежние бары или пусто.
+     * @param lane кто просит: торговля идёт без ключа, человек — с ключом, пока его хватает.
      */
     suspend fun get(
         key: CandleKey,
         limit: Int,
         live: Boolean = false,
         maxWaitMs: Long = DEFAULT_MAX_WAIT_MS,
+        lane: RequestLane = RequestLane.TRADING,
     ): List<Candle> {
         if (key.pool.isBlank() || limit <= 0) return emptyList()
         val want = limit.coerceAtMost(MAX_FETCH_LIMIT)
-        val liveMode = live && liveAllowed()
+        val path = route(lane)
+        val liveMode = live && path.keyed
         cached(key, want, liveMode)?.let { return it }
         if (!liveMode) {
             derived(key, want, allowStale = false)?.let { return it }
             // Младший ТФ этого пула уже кто-то смотрит, но запись устарела или неглубока: обновляем её — это тот
             // же один запрос, что и за старшим ТФ, но младший нужен и своим стратегиям, — и собираем старший из неё.
             baseFor(key, want)?.let { (base, baseLimit) ->
-                get(base, baseLimit, live = false, maxWaitMs = maxWaitMs)
+                get(base, baseLimit, live = false, maxWaitMs = maxWaitMs, lane = lane)
                 derived(key, want, allowStale = true)?.let { return it }
             }
         }
@@ -141,7 +165,7 @@ class CandleStore(
             // Пока ждали замок, эти же свечи мог обновить соседний запрос.
             cached(key, want, liveMode)
                 ?: (if (liveMode) null else derived(key, want, allowStale = false))
-                ?: refresh(key, want, liveMode, maxWaitMs)
+                ?: refresh(key, want, liveMode, maxWaitMs, path)
         }
     }
 
@@ -194,13 +218,19 @@ class CandleStore(
         return null
     }
 
-    private suspend fun refresh(key: CandleKey, limit: Int, liveMode: Boolean, maxWaitMs: Long): List<Candle> {
+    private suspend fun refresh(
+        key: CandleKey,
+        limit: Int,
+        liveMode: Boolean,
+        maxWaitMs: Long,
+        path: RequestRoute,
+    ): List<Candle> {
         val old = guard.withLock { entries[key] }
-        if (!limiter.acquire(maxWaitMs)) return stale(old, key.barMs, limit)
+        if (!path.limiter.acquire(maxWaitMs)) return stale(old, key.barMs, limit)
         // Берём с запасом: стратегии, монитор и график просят разное число свечей одного пула, а старший ТФ
         // собирается из этой же записи — однажды углублённая, она такой и остаётся.
         val fetchLimit = maxOf(limit, old?.limit ?: 0, MIN_FETCH_LIMIT).coerceAtMost(MAX_FETCH_LIMIT)
-        return when (val r = fetch(key, fetchLimit)) {
+        return when (val r = fetch(key, fetchLimit, path.keyed)) {
             is CandleFetch.Ok -> {
                 val now = nowMs()
                 val asOf = now - r.ageMs.coerceAtLeast(0L)
@@ -214,7 +244,8 @@ class CandleStore(
             }
             is CandleFetch.RateLimited -> {
                 val now = nowMs()
-                limiter.pauseUntil(now + (r.retryAfterMs ?: RATE_LIMIT_PAUSE_MS).coerceIn(MIN_PAUSE_MS, MAX_PAUSE_MS))
+                // Пауза — только у той очереди, которой отказали: у запросов с ключом и без ключа разные лимиты.
+                path.limiter.pauseUntil(now + (r.retryAfterMs ?: RATE_LIMIT_PAUSE_MS).coerceIn(MIN_PAUSE_MS, MAX_PAUSE_MS))
                 _status.update { it.copy(rateLimitHits = it.rateLimitHits + 1, lastRateLimitAtMs = now) }
                 stale(old, key.barMs, limit)
             }

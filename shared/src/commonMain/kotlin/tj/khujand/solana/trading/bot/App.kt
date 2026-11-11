@@ -103,6 +103,7 @@ import tj.khujand.solana.trading.bot.domain.backtest.BacktestSettings
 import tj.khujand.solana.trading.bot.domain.backtest.BacktestState
 import tj.khujand.solana.trading.bot.domain.backtest.BacktestStats
 import tj.khujand.solana.trading.bot.domain.backtest.backtestHigherTf
+import tj.khujand.solana.trading.bot.exchange.dex.DEFAULT_KEY_MONTHLY_QUOTA
 import tj.khujand.solana.trading.bot.exchange.dex.GeckoTerminalApi
 import tj.khujand.solana.trading.bot.exchange.dex.GtPoolList
 import tj.khujand.solana.trading.bot.data.AccountBalance
@@ -179,6 +180,7 @@ fun DrxApp(runtime: DrxRuntime? = null) {
                     telegramChatId = s.getTelegramChatId()?.toString() ?: "",
                     protection = s.getProtection(),
                     coinGeckoKey = s.getCoinGeckoKey() ?: "",
+                    coinGeckoQuota = s.getCoinGeckoQuota(),
                 )
             } ?: DrxSettings()
         )
@@ -408,6 +410,7 @@ fun DrxApp(runtime: DrxRuntime? = null) {
                                 // Защиту читают на каждой проверке — действует со следующего входа/выхода.
                                 setProtection(newSettings.protection)
                                 setCoinGeckoKey(newSettings.coinGeckoKey.trim())
+                                setCoinGeckoQuota(newSettings.coinGeckoQuota)
                             }
                             // Ключ свечей применяется сразу: следующий запрос уйдёт уже с ним.
                             GeckoTerminalApi.setApiKey(newSettings.coinGeckoKey)
@@ -458,6 +461,8 @@ data class DrxSettings(
     val protection: ProtectionSettings = ProtectionSettings(),
     /** Demo-ключ CoinGecko для свечей; пусто — без ключа (GeckoTerminal пускает считаные запросы в минуту). */
     val coinGeckoKey: String = "",
+    /** Месячная квота ключа CoinGecko: из неё считается дневной лимит (см. [GeckoTerminalApi]). */
+    val coinGeckoQuota: Int = DEFAULT_KEY_MONTHLY_QUOTA,
 )
 
 // ─── Bottom nav ───────────────────────────────────────────────────────────────
@@ -3317,6 +3322,7 @@ fun SettingsScreen(
     var telegramChatId by remember(settings) { mutableStateOf(settings.telegramChatId) }
     var protection by remember(settings) { mutableStateOf(settings.protection) }
     var coinGeckoKey by remember(settings) { mutableStateOf(settings.coinGeckoKey) }
+    var coinGeckoQuota by remember(settings) { mutableStateOf(settings.coinGeckoQuota.toString()) }
     var saved by remember { mutableStateOf(false) }
     var confirmReset by remember { mutableStateOf(false) }
 
@@ -3467,7 +3473,12 @@ fun SettingsScreen(
             }
 
             // ── Данные рынка ──────────────────────────────────────────────
-            MarketDataSection(coinGeckoKey) { coinGeckoKey = it; saved = false }
+            MarketDataSection(
+                key = coinGeckoKey,
+                quota = coinGeckoQuota,
+                onKey = { coinGeckoKey = it; saved = false },
+                onQuota = { coinGeckoQuota = it; saved = false },
+            )
 
             // ── Telegram ──────────────────────────────────────────────────
             FormSection("📲  Telegram") {
@@ -3532,6 +3543,7 @@ fun SettingsScreen(
                     telegramChatId = telegramChatId,
                     protection = protection,
                     coinGeckoKey = coinGeckoKey,
+                    coinGeckoQuota = coinGeckoQuota.trim().toIntOrNull()?.takeIf { it > 0 } ?: DEFAULT_KEY_MONTHLY_QUOTA,
                 ))
                 saved = true
             },
@@ -3548,31 +3560,40 @@ fun SettingsScreen(
 }
 
 /**
- * «Данные рынка» — ключ CoinGecko для свечей. Без него GeckoTerminal пускает считаные запросы в минуту
- * (см. [GeckoTerminalApi]), и разбор монет идёт по очереди; строка состояния показывает, с ключом ли бот сейчас.
- * Сохраняется общей кнопкой настроек.
+ * «Данные рынка» — ключ CoinGecko и его расход. Торговля всегда идёт без ключа (бесплатно, без месячного предела);
+ * ключ тратят только бэктест, «Анализ» и график — не больше дневного лимита, чтобы квоты хватило до конца месяца
+ * (см. [GeckoTerminalApi], [tj.khujand.solana.trading.bot.exchange.dex.KeyBudget]). Сохраняется общей кнопкой.
  */
 @Composable
-private fun MarketDataSection(key: String, onKey: (String) -> Unit) {
+private fun MarketDataSection(key: String, quota: String, onKey: (String) -> Unit, onQuota: (String) -> Unit) {
+    // Новые сутки могли начаться, пока экран был закрыт, — пересчитываем расход при открытии.
+    LaunchedEffect(Unit) { GeckoTerminalApi.refreshKeyBudget() }
     val feed by GeckoTerminalApi.status.collectAsState()
     FormSection("📡  Данные рынка") {
+        val usage = "сегодня ${feed.keyUsedToday} из ${feed.keyDailyAllowance}, за месяц ${feed.keyUsedMonth} " +
+            "из ${feed.keyMonthlyQuota}"
         val (text, color) = when {
-            feed.keyRejected -> "⚠️  Ключ отклонён сервером — запросы идут без ключа. Проверьте ключ и сохраните заново." to Red
-            feed.keyExhaustedUntilMs > 0L -> "⏸  Ключ упирается в лимит — похоже, кончилась месячная квота. Свечи идут " +
-                "без ключа (бесплатно, но медленнее), ключ бот попробует снова ${formatLocalTime(feed.keyExhaustedUntilMs)}." to Amber
-            feed.usingKey -> "✅  Свечи идут с ключом CoinGecko — до 60 запросов в минуту. У бесплатного ключа 10 000 " +
-                "запросов в месяц — это один-два дня работы бота; когда кончатся, он сам продолжит без ключа." to Green
-            else -> "Без ключа GeckoTerminal даёт около 4 запросов свечей в минуту без месячного предела: монеты " +
-                "разбираются по очереди, на ТФ 1m — с отставанием." to Amber
+            feed.keyRejected -> "⚠️  Ключ отклонён сервером — всё идёт без ключа. Проверьте ключ и сохраните заново." to Red
+            feed.keyExhaustedUntilMs > 0L -> "⏸  Ключ упирается в лимит — похоже, кончилась месячная квота. Бэктест и " +
+                "«Анализ» идут без ключа (медленнее), ключ бот попробует снова ${formatLocalTime(feed.keyExhaustedUntilMs)}." to Amber
+            feed.usingKey && feed.keyDailyAllowance > 0 && feed.keyUsedToday >= feed.keyDailyAllowance ->
+                "⏸  Дневной лимит ключа потрачен ($usage). До ${formatLocalTime(feed.keyNextDayMs)} бэктест и «Анализ» " +
+                    "идут без ключа — медленнее, но работают." to Amber
+            feed.usingKey -> "✅  Торговля идёт без ключа — бесплатно. Ключ тратят только бэктест, «Анализ» и график: " +
+                "$usage. Новый дневной лимит — ${formatLocalTime(feed.keyNextDayMs)}." to Green
+            else -> "Без ключа GeckoTerminal даёт около 4 запросов свечей в минуту без месячного предела — торговле " +
+                "этого хватает. Ключ ускорит бэктест, «Анализ» и график." to Amber
         }
         Surface(color = color.copy(alpha = 0.12f), shape = RoundedCornerShape(8.dp), modifier = Modifier.fillMaxWidth()) {
             Text(text, fontSize = 12.sp, color = color, modifier = Modifier.padding(12.dp))
         }
         Spacer(Modifier.height(4.dp))
         FormTextField("Ключ CoinGecko (Demo API)", key) { onKey(it) }
+        FormTextField("Месячная квота ключа, запросов", quota, isNumber = true) { onQuota(it) }
         Text(
-            "Бесплатный ключ: coingecko.com → Developer Dashboard → Add New Key (план Demo). " +
-                "Применяется сразу после сохранения.",
+            "Бесплатный ключ: coingecko.com → Developer Dashboard → Add New Key (план Demo, 10 000 запросов в месяц). " +
+                "Дневной лимит = остаток квоты ÷ дней до конца месяца: не потратили сегодня — завтра можно больше. " +
+                "Сутки считаются по UTC. Применяется сразу после сохранения.",
             fontSize = 11.sp, color = TextSecondary, lineHeight = 16.sp
         )
     }

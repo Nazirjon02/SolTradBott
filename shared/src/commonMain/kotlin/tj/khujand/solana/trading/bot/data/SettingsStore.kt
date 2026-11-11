@@ -4,6 +4,8 @@ import kotlin.time.Clock
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import tj.khujand.solana.trading.bot.data.db.DrxDatabase
+import tj.khujand.solana.trading.bot.exchange.dex.DEFAULT_KEY_MONTHLY_QUOTA
+import tj.khujand.solana.trading.bot.exchange.dex.KeyUsage
 
 /**
  * Типизированная обёртка над таблицей `settings` (key/value).
@@ -30,6 +32,8 @@ class SettingsStore(private val db: DrxDatabase) {
         const val WALLET_SEED      = "wallet.seed_phrase"
         const val AI_API_KEY       = "ai.api_key"
         const val COINGECKO_KEY    = "data.coingecko_key"
+        const val COINGECKO_QUOTA  = "data.coingecko_quota"
+        const val COINGECKO_USAGE  = "data.coingecko_usage"
         const val ANALYSIS_FAVORITES = "analysis.favorites"
     }
 
@@ -101,6 +105,17 @@ class SettingsStore(private val db: DrxDatabase) {
     // (см. GeckoTerminalApi). Пусто — работаем без ключа.
     fun getCoinGeckoKey(): String?   = get(Keys.COINGECKO_KEY)?.takeIf { it.isNotBlank() }
     fun setCoinGeckoKey(v: String)   = set(Keys.COINGECKO_KEY, v)
+
+    // Месячная квота ключа (у бесплатного Demo — 10 000): из неё считается дневной лимит. Платный план — своё число.
+    fun getCoinGeckoQuota(): Int     = get(Keys.COINGECKO_QUOTA)?.toIntOrNull()?.takeIf { it > 0 } ?: DEFAULT_KEY_MONTHLY_QUOTA
+    fun setCoinGeckoQuota(v: Int)    = set(Keys.COINGECKO_QUOTA, v.toString())
+
+    // Сколько запросов с ключом потрачено за сутки и месяц — переживает перезапуск (см. KeyBudget).
+    fun getCoinGeckoUsage(): KeyUsage? =
+        get(Keys.COINGECKO_USAGE)?.takeIf { it.isNotBlank() }
+            ?.let { runCatching { json.decodeFromString<KeyUsage>(it) }.getOrNull() }
+
+    fun setCoinGeckoUsage(v: KeyUsage) = set(Keys.COINGECKO_USAGE, json.encodeToString(v))
 
     // ─── AI-анализатор (опциональный фильтр confidence) ──────────────────────
 

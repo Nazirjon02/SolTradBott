@@ -20,8 +20,11 @@ class CandleFeedNotesTest {
     }
 
     @Test
-    fun workingKeyNeedsNoNotes() {
-        assertTrue(notes.onStatus(CandleFeedStatus(usingKey = true)).isEmpty())
+    fun workingKeyIsExplainedOnce() {
+        val first = notes.onStatus(CandleFeedStatus(usingKey = true)).single()
+        assertEquals(ActivityLevel.INFO, first.first)
+        assertTrue(first.second.contains("торговля идёт без ключа"), first.second)
+        assertTrue(notes.onStatus(CandleFeedStatus(usingKey = true, lastOkAtMs = now)).isEmpty())
     }
 
     @Test
@@ -58,9 +61,24 @@ class CandleFeedNotesTest {
     }
 
     @Test
-    fun withoutKeyTheRefusalNoteSuggestsTheKey() {
+    fun refusalNoteDoesNotPromiseTheKeyFixesTrading() {
         notes.onStatus(CandleFeedStatus())
         val note = notes.onStatus(CandleFeedStatus(rateLimitHits = 1)).single().second
-        assertTrue(note.contains("ключ CoinGecko"), note)
+        assertTrue(note.contains("без ключа"), note)
+        assertTrue(!note.contains("поднимает лимит"), "торговля всегда без ключа — ключ её не ускорит: $note")
+    }
+
+    @Test
+    fun spentDailyAllowanceIsNotedOncePerDay() {
+        val day1 = CandleFeedStatus(usingKey = true, keyDailyAllowance = 500, keyNextDayMs = 86_400_000L)
+        notes.onStatus(day1.copy(keyUsedToday = 499))
+        val spent = notes.onStatus(day1.copy(keyUsedToday = 500)).single()
+        assertEquals(ActivityLevel.INFO, spent.first)
+        assertTrue(spent.second.contains("дневной лимит"), spent.second)
+        assertTrue(notes.onStatus(day1.copy(keyUsedToday = 500, lastOkAtMs = now)).isEmpty())
+
+        val day2 = day1.copy(keyNextDayMs = 2 * 86_400_000L, keyUsedToday = 0)
+        assertTrue(notes.onStatus(day2).isEmpty())
+        assertEquals(1, notes.onStatus(day2.copy(keyUsedToday = 500)).size, "на следующие сутки — снова одно сообщение")
     }
 }

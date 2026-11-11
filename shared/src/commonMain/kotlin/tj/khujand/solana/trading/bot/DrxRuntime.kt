@@ -26,6 +26,8 @@ import tj.khujand.solana.trading.bot.exchange.dex.AccountCache
 import tj.khujand.solana.trading.bot.exchange.dex.DexClient
 import tj.khujand.solana.trading.bot.exchange.dex.GeckoTerminalApi
 import tj.khujand.solana.trading.bot.exchange.dex.JupiterSwapQuotes
+import tj.khujand.solana.trading.bot.exchange.dex.KeyBudget
+import tj.khujand.solana.trading.bot.exchange.dex.RequestLane
 import tj.khujand.solana.trading.bot.exchange.dex.TokenCache
 import tj.khujand.solana.trading.bot.exchange.dex.TokenScanner
 import tj.khujand.solana.trading.bot.exchange.dex.toTokenCandidate
@@ -59,8 +61,9 @@ class DrxRuntime(val db: DrxDatabase) {
         },
         // Скан запускает человек и смотрит на прогресс: пусть монеты дождутся очереди к GeckoTerminal,
         // а не отвалятся с «мало свечей», как только очередь стала длиннее обычного ожидания стратегии.
+        // Разбор запускает человек — свечи идут с ключом CoinGecko, пока хватает его дневного лимита.
         candleSource = { pool, tf, agg, limit ->
-            GeckoTerminalApi.getCandles(pool, tf, agg, limit, maxWaitMs = ANALYSIS_MAX_WAIT_MS)
+            GeckoTerminalApi.getCandles(pool, tf, agg, limit, maxWaitMs = ANALYSIS_MAX_WAIT_MS, lane = RequestLane.USER)
         },
     )
 
@@ -96,6 +99,14 @@ class DrxRuntime(val db: DrxDatabase) {
 
     init {
         // Ключ — до первого запроса свечей и до наблюдателя: он сообщает в ленту, с ключом ли работаем.
+        // Счёт расхода ключа живёт в настройках — перезапуск не обнуляет дневной лимит.
+        GeckoTerminalApi.setKeyBudget(
+            KeyBudget(
+                monthlyQuota = settingsStore::getCoinGeckoQuota,
+                load = settingsStore::getCoinGeckoUsage,
+                save = settingsStore::setCoinGeckoUsage,
+            )
+        )
         GeckoTerminalApi.setApiKey(settingsStore.getCoinGeckoKey())
         runtimeScope.watchCandleFeed(GeckoTerminalApi.status, activityLog)
         tradeMonitor.start()

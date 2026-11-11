@@ -25,7 +25,12 @@ class CandleStoreTest {
 
     private val asked = ArrayList<Int>()
     private var answer: (limit: Int) -> CandleFetch = { CandleFetch.Ok(barsUpTo(now)) }
-    private var liveAllowed = false
+
+    /** Ключ в работе и дневной лимит не потрачен — запросы человека идут с ключом. */
+    private var keyAvailable = false
+
+    /** Сколько запросов ушло с ключом. */
+    private var keyedAsked = 0
     private var keyRejections = 0
 
     private fun candle(i: Int) = Candle(i * bar, 1.0, 1.1, 0.9, 1.0 + i * 0.01, 100.0)
@@ -33,10 +38,18 @@ class CandleStoreTest {
     /** Что отдал бы источник в момент [at]: все бары по текущий (незакрытый) включительно. */
     private fun barsUpTo(at: Long): List<Candle> = (0..(at / bar).toInt()).map { candle(it) }
 
+    private fun testLimiter() = RequestLimiter(intervalMs = { 0L }, nowMs = { now }, sleep = { now += it })
+
+    /** Путь как у GeckoTerminalApi: торговля — без ключа, человек — с ключом, если он доступен. */
+    private fun routes(): (RequestLane) -> RequestRoute {
+        val free = RequestRoute(testLimiter(), keyed = false)
+        val keyed = RequestRoute(testLimiter(), keyed = true)
+        return { lane -> if (lane == RequestLane.USER && keyAvailable) keyed else free }
+    }
+
     private fun store() = CandleStore(
-        fetch = { _, limit -> asked += limit; answer(limit) },
-        limiter = RequestLimiter(intervalMs = { 0L }, nowMs = { now }, sleep = { now += it }),
-        liveAllowed = { liveAllowed },
+        fetch = { _, limit, withKey -> asked += limit; if (withKey) keyedAsked++; answer(limit) },
+        route = routes(),
         onUnauthorized = { keyRejections++ },
         nowMs = { now },
     )
@@ -69,8 +82,8 @@ class CandleStoreTest {
     fun concurrentReadersOfOnePoolSpendOneRequest() = runBlocking {
         answer = { CandleFetch.Ok(barsUpTo(now)) }
         val s = CandleStore(
-            fetch = { _, limit -> asked += limit; yield(); answer(limit) },
-            limiter = RequestLimiter(intervalMs = { 0L }, nowMs = { now }, sleep = { now += it }),
+            fetch = { _, limit, _ -> asked += limit; yield(); answer(limit) },
+            route = routes(),
             nowMs = { now },
         )
         val results = listOf(async { s.get(key, 50) }, async { s.get(key, 50) }).awaitAll()
@@ -90,17 +103,34 @@ class CandleStoreTest {
 
     @Test
     fun chartGetsFormingBarOnlyWhenTheLimitAllows() = runBlocking {
-        liveAllowed = true
+        keyAvailable = true
         val s = store()
-        assertEquals(cur, s.get(key, 50, live = true).lastBar(), "с ключом график видит незакрытый бар")
+        val chart = RequestLane.USER
+        assertEquals(cur, s.get(key, 50, live = true, lane = chart).lastBar(), "с ключом график видит незакрытый бар")
         assertEquals(cur - 1, s.get(key, 50).lastBar(), "стратегии из той же записи — только закрытые")
         now += 31_000L
-        s.get(key, 50, live = true)
+        s.get(key, 50, live = true, lane = chart)
         assertEquals(2, asked.size, "график обновляется раз в 30 с")
 
-        liveAllowed = false
+        keyAvailable = false // ключ кончился или дневной лимит потрачен
         now += 31_000L
-        assertEquals(cur - 1, s.get(key, 50, live = true).lastBar(), "без ключа график получает то же, что стратегии")
+        assertEquals(cur - 1, s.get(key, 50, live = true, lane = chart).lastBar(), "без ключа график получает то же, что стратегии")
+        assertEquals(2, asked.size)
+    }
+
+    @Test
+    fun tradingNeverSpendsTheKey() = runBlocking {
+        keyAvailable = true
+        val s = store()
+        s.get(key, 50) // стратегия
+        assertEquals(0, keyedAsked, "торговля идёт без ключа, даже когда ключ есть")
+
+        val other = CandleKey("solana", "POOL2", "minute", 5)
+        s.get(other, 50, lane = RequestLane.USER) // «Анализ» или бэктест
+        assertEquals(1, keyedAsked, "запрос человека — с ключом")
+
+        // Свечи, загруженные с ключом, достаются и стратегиям — без нового запроса.
+        s.get(other, 50)
         assertEquals(2, asked.size)
     }
 
@@ -227,12 +257,12 @@ class CandleStoreTest {
         fold15((firstBar..(now / bar).toInt()).map { rich(it) }).filter { it.openTimeMs + 3 * bar + CandleStore.SETTLE_MS <= now }
 
     private fun tfStore() = CandleStore(
-        fetch = { k, limit ->
+        fetch = { k, limit, _ ->
             fetchedTf += k.aggregate to limit
             val fives = (firstBar..(now / bar).toInt()).map { rich(it) }
             CandleFetch.Ok((if (k.aggregate == 5) fives else fold15(fives)).takeLast(limit))
         },
-        limiter = RequestLimiter(intervalMs = { 0L }, nowMs = { now }, sleep = { now += it }),
+        route = routes(),
         nowMs = { now },
     )
 

@@ -172,7 +172,7 @@ SOLANA_RPC_URL=          # RPC-эндпоинт (дефолт mainnet-beta)
 DEMO_MODE=true           # true = paper-trading, REAL только когда уверен
 TG_BOT_TOKEN=            # Telegram-бот
 TG_CHAT_ID=0             # единственный разрешённый chat_id
-COINGECKO_API_KEY=       # бесплатный Demo-ключ CoinGecko для свечей (без него ~4 запроса в минуту)
+COINGECKO_API_KEY=       # бесплатный Demo-ключ CoinGecko: ускоряет бэктест и «Анализ» (торговля идёт без ключа)
 PORT=8080
 SOLTRAD_API_KEY=                 # Bearer для REST; пусто — сервер сгенерирует ключ и напечатает в лог
 DB_PATH=soltradbot.db

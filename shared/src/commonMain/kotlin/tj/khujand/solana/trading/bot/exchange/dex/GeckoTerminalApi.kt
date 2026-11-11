@@ -74,9 +74,13 @@ data class GtPool(
  *
  * Лимиты (проверено 2026-11-11): без ключа — около 5 запросов в минуту на IP, дальше HTTP 429, зато без месячного
  * предела. С бесплатным Demo-ключом CoinGecko те же данные отдаёт `api.coingecko.com/api/v3/onchain` — до 100
- * запросов в минуту, но 10 000 в месяц; кончились — бот сам продолжает без ключа ([KeyQuotaWatch]).
- * Все запросы идут через общую очередь [RequestLimiter]; свечи для стратегий хранит [CandleStore] —
- * закрытые бары, один запрос на бар (см. там же, почему).
+ * запросов в минуту, но 10 000 в месяц: на круглосуточную торговлю это день-два.
+ *
+ * Поэтому две очереди ([RequestLimiter]) с разными лимитами, а кто в какую — решает [RequestLane]:
+ *  - торговля (стратегии, монитор сделок, сканер) — всегда без ключа: бесплатно и без месячного предела;
+ *  - человек (бэктест, «Анализ», график) — с ключом, пока не потрачен дневной лимит [KeyBudget]; потом, до новых
+ *    суток, — тоже без ключа. Квота кончилась раньше расчёта — бот сам продолжает без ключа ([KeyQuotaWatch]).
+ * Свечи для стратегий хранит [CandleStore] — закрытые бары, один запрос на бар (см. там же, почему).
  */
 object GeckoTerminalApi {
 
@@ -105,16 +109,21 @@ object GeckoTerminalApi {
     // Отказы 429 на запросах с ключом: несколько подряд — кончилась месячная квота, дальше без ключа.
     private val quota = KeyQuotaWatch()
 
-    private val limiter = RequestLimiter(intervalMs = { if (activeKey() != null) KEYED_INTERVAL_MS else KEYLESS_INTERVAL_MS })
+    // Дневной лимит ключа; счёт в настройках подключает рантайм ([setKeyBudget]), до того — в памяти.
+    private val budget = MutableStateFlow(KeyBudget())
+
+    // Без ключа (api.geckoterminal.com) и с ключом (api.coingecko.com) — разные сервисы с разными лимитами,
+    // поэтому и очереди разные: бэктест с ключом не ждёт торговлю, торговля не ждёт бэктест.
+    private val freeRoute = RequestRoute(RequestLimiter(intervalMs = { KEYLESS_INTERVAL_MS }), keyed = false)
+    private val keyedRoute = RequestRoute(RequestLimiter(intervalMs = { KEYED_INTERVAL_MS }), keyed = true)
 
     private val store = CandleStore(
         fetch = ::fetchCandles,
-        limiter = limiter,
-        liveAllowed = { activeKey() != null },
+        route = ::routeFor,
         onUnauthorized = ::rejectKey,
     )
 
-    /** Состояние источника: ключ, отказы по лимиту, последний успешный ответ. */
+    /** Состояние источника: ключ, его расход, отказы по лимиту, последний успешный ответ. */
     val status: StateFlow<CandleFeedStatus> get() = store.status
 
     /**
@@ -127,7 +136,23 @@ object GeckoTerminalApi {
         apiKey.value = clean
         quota.reset()
         store.setKeyState(usingKey = clean != null, keyRejected = false)
+        refreshKeyBudget()
     }
+
+    /** Счёт расхода ключа и месячная квота — из настроек; задаётся рантаймом до первого запроса. */
+    fun setKeyBudget(b: KeyBudget) {
+        budget.value = b
+        refreshKeyBudget()
+    }
+
+    /** Обновить расход ключа в [status] (новые сутки, сменилась квота) — например, при открытии настроек. */
+    fun refreshKeyBudget() {
+        store.setKeyBudget(budget.value.view())
+    }
+
+    /** Торговля — всегда без ключа; человек — с ключом, пока ключ в работе и не потрачен дневной лимит. */
+    private fun routeFor(lane: RequestLane): RequestRoute =
+        if (lane == RequestLane.USER && activeKey() != null && budget.value.canSpend()) keyedRoute else freeRoute
 
     /**
      * Ключ, с которым идут запросы, или null. Отклонённый сервером ключ не используем до следующего сохранения,
@@ -149,8 +174,15 @@ object GeckoTerminalApi {
         store.setKeyState(usingKey = false, keyRejected = true)
     }
 
-    /** Итог запроса с ключом: несколько отказов 429 подряд — кончилась квота, дальше без ключа (см. [KeyQuotaWatch]). */
+    /**
+     * Итог запроса с ключом: ответ 200 идёт в дневной счёт ([KeyBudget]); несколько отказов 429 подряд — кончилась
+     * месячная квота, дальше без ключа (см. [KeyQuotaWatch]).
+     */
     private fun onKeyedResponse(code: Int) {
+        if (code == 200) {
+            budget.value.record()
+            refreshKeyBudget()
+        }
         val until = quota.onKeyedResponse(code, Clock.System.now().toEpochMilliseconds()) ?: return
         println("GeckoTerminal: ключ CoinGecko упирается в лимит — похоже, кончилась месячная квота; работаю без ключа")
         store.setKeyState(usingKey = false, keyRejected = false, keyExhaustedUntilMs = until)
@@ -162,8 +194,9 @@ object GeckoTerminalApi {
      * @param timeframe "minute" | "hour" | "day".
      * @param aggregate агрегация внутри ТФ (minute: 1/5/15, hour: 1/4/12, day: 1).
      * @param limit сколько свечей нужно (макс. 1000).
-     * @param live график сделки: с незакрытым баром и обновлением раз в 30 с — только с ключом API.
+     * @param live график сделки: с незакрытым баром и обновлением раз в 30 с — только если запрос идёт с ключом.
      * @param maxWaitMs сколько ждать очереди к API; не дождались — прежние бары или пусто.
+     * @param lane кто просит: торговля (по умолчанию) — без ключа, человек — с ключом, пока его хватает.
      * Пустой список = данных нет.
      */
     suspend fun getCandles(
@@ -173,12 +206,16 @@ object GeckoTerminalApi {
         limit: Int = 200,
         live: Boolean = false,
         maxWaitMs: Long = CandleStore.DEFAULT_MAX_WAIT_MS,
+        lane: RequestLane = RequestLane.TRADING,
         network: String = "solana",
-    ): List<Candle> = store.get(CandleKey(network, poolAddress, timeframe, aggregate), limit, live, maxWaitMs)
+    ): List<Candle> = store.get(CandleKey(network, poolAddress, timeframe, aggregate), limit, live, maxWaitMs, lane)
 
-    /** Запрос к API: с ключом — на CoinGecko, без — на публичный GeckoTerminal. Второе значение — шёл ли ключ. */
-    private suspend fun request(path: String): Pair<HttpResponse, Boolean> {
-        val key = activeKey()
+    /**
+     * Запрос к API: [keyed] — на CoinGecko с ключом, иначе — на публичный GeckoTerminal. Второе значение — шёл ли
+     * ключ на самом деле (пока ждали очереди, ключ могли отклонить или отложить — тогда без ключа).
+     */
+    private suspend fun request(path: String, keyed: Boolean): Pair<HttpResponse, Boolean> {
+        val key = if (keyed) activeKey() else null
         val base = if (key != null) KEYED_BASE else KEYLESS_BASE
         val response = client.get("$base$path") {
             header("Accept", "application/json")
@@ -187,10 +224,11 @@ object GeckoTerminalApi {
         return response to (key != null)
     }
 
-    private suspend fun fetchCandles(key: CandleKey, limit: Int): CandleFetch = try {
+    private suspend fun fetchCandles(key: CandleKey, limit: Int, keyed: Boolean): CandleFetch = try {
         val (resp, withKey) = request(
             "/networks/${key.network}/pools/${key.pool}/ohlcv/${key.timeframe}" +
-                "?aggregate=${key.aggregate}&limit=$limit&currency=usd"
+                "?aggregate=${key.aggregate}&limit=$limit&currency=usd",
+            keyed,
         )
         val code = resp.status.value
         if (withKey) onKeyedResponse(code)
@@ -214,18 +252,19 @@ object GeckoTerminalApi {
         resp.headers[name]?.trim()?.toLongOrNull()?.takeIf { it >= 0 }?.let { it * 1000 }
 
     /**
-     * Запрос вне [CandleStore] (история для бэктеста, списки пулов) — через ту же очередь, чтобы бэктест
-     * не отбирал лимит у работающего бота. Возвращает HTTP-код и тело (тело — только при 200);
+     * Запрос вне [CandleStore] (история для бэктеста, списки пулов) — через очередь своего пути ([lane]), чтобы
+     * бэктест не отбирал лимит у работающего бота. Возвращает HTTP-код и тело (тело — только при 200);
      * 429 — в том числе «очередь слишком длинная», 0 — сетевая ошибка.
      */
-    private suspend fun queued(path: String, maxWaitMs: Long, what: String): Pair<Int, String?> {
-        if (!limiter.acquire(maxWaitMs)) return 429 to null
+    private suspend fun queued(path: String, maxWaitMs: Long, what: String, lane: RequestLane): Pair<Int, String?> {
+        val route = routeFor(lane)
+        if (!route.limiter.acquire(maxWaitMs)) return 429 to null
         return try {
-            val (resp, withKey) = request(path)
+            val (resp, withKey) = request(path, route.keyed)
             val code = resp.status.value
             if (withKey) onKeyedResponse(code)
             when {
-                code == 429 -> limiter.pauseUntil(
+                code == 429 -> route.limiter.pauseUntil(
                     Clock.System.now().toEpochMilliseconds() + (secondsHeader(resp, "Retry-After") ?: CandleStore.RATE_LIMIT_PAUSE_MS)
                 )
                 (code == 401 || code == 403) && withKey -> rejectKey()
@@ -242,6 +281,7 @@ object GeckoTerminalApi {
     /**
      * Одна страница истории свечей БЕЗ кэша — для бэктеста (пагинация назад по времени).
      * @param beforeTimestampSec вернуть свечи строго раньше этого момента (сек), null — самые свежие.
+     * @param lane бэктест передаёт [RequestLane.USER] — история идёт с ключом, пока хватает дневного лимита.
      * @return свечи по возрастанию времени + HTTP-код (429 — превышен лимит, 0 — сетевая ошибка).
      */
     suspend fun getCandlesPage(
@@ -251,12 +291,14 @@ object GeckoTerminalApi {
         limit: Int = 1000,
         beforeTimestampSec: Long? = null,
         network: String = "solana",
+        lane: RequestLane = RequestLane.TRADING,
     ): OhlcvPage {
         val before = beforeTimestampSec?.let { "&before_timestamp=$it" } ?: ""
         val (status, body) = queued(
             "/networks/$network/pools/$poolAddress/ohlcv/$timeframe?aggregate=$aggregate&limit=$limit&currency=usd$before",
             HISTORY_MAX_WAIT_MS,
             "page ($poolAddress/$timeframe)",
+            lane,
         )
         return OhlcvPage(body?.let { parse(it) } ?: emptyList(), status)
     }
@@ -265,6 +307,7 @@ object GeckoTerminalApi {
      * Страница списка пулов сети (trending / new / top по объёму) — монеты для бэктеста и сканера.
      * @param duration окно трендовых пулов: "5m" | "1h" | "6h" | "24h"; null — по умолчанию сервера (24h).
      * @param maxWaitMs сколько ждать очереди к API (сканеру долго ждать незачем — возьмёт список в другой раз).
+     * @param lane сканер — торговля (без ключа), бэктест — [RequestLane.USER].
      * @return пулы + HTTP-код (429 — превышен лимит, 0 — сетевая ошибка).
      */
     suspend fun getPools(
@@ -273,9 +316,10 @@ object GeckoTerminalApi {
         network: String = "solana",
         duration: String? = null,
         maxWaitMs: Long = HISTORY_MAX_WAIT_MS,
+        lane: RequestLane = RequestLane.TRADING,
     ): Pair<List<GtPool>, Int> {
         val window = duration?.takeIf { list == GtPoolList.TRENDING }?.let { "&duration=$it" } ?: ""
-        val (status, body) = queued("/networks/$network/${list.path}?page=$page$window", maxWaitMs, "pools (${list.path})")
+        val (status, body) = queued("/networks/$network/${list.path}?page=$page$window", maxWaitMs, "pools (${list.path})", lane)
         return (body?.let { parsePools(it) } ?: emptyList()) to status
     }
 
