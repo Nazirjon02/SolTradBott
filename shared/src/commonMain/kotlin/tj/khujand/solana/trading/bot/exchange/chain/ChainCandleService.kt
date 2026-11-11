@@ -140,6 +140,7 @@ class ChainCandleService(
         var inWatchlist = true
         var subId: Long? = null
         var reqId: Long? = null
+        var subAttempts = 0
         var reserve0 = meta.reserve0
         var reserve1 = meta.reserve1
         var trades = 0L
@@ -159,6 +160,7 @@ class ChainCandleService(
     private val resolved = HashMap<String, PoolResolution>()
     private val banned = HashMap<String, Pair<Long, SkipReason>>()
     private val pendingSubs = HashMap<Long, String>()
+    private val pendingSentAt = HashMap<Long, Long>()
     private val subToPool = HashMap<Long, String>()
     private val geckoJobs = ArrayList<GeckoJob>()
     private val results = HashMap<String, ReconcileResult>()
@@ -382,10 +384,25 @@ class ChainCandleService(
     private suspend fun resubscribeAll() {
         val out = lock.withLock {
             pendingSubs.clear()
+            pendingSentAt.clear()
             subToPool.clear()
-            pools.values.filter { it.admitted }.map { subscribeRequest(it) }
+            pools.values.filter { it.admitted }.map {
+                it.subAttempts = 0
+                subscribeRequest(it)
+            }
         }
-        out.forEach { send(it) }
+        sendPaced(out)
+    }
+
+    /**
+     * Запросы — с шагом [SEND_SPACING_MS]: у бесплатного Helius 10 запросов в секунду, а PublicNode пачку
+     * подписок молча теряет.
+     */
+    private suspend fun sendPaced(messages: List<String>) {
+        for ((i, m) in messages.withIndex()) {
+            if (i > 0) delay(SEND_SPACING_MS)
+            send(m)
+        }
     }
 
     /** Под [lock]. */
@@ -393,14 +410,46 @@ class ChainCandleService(
         val id = nextId++
         st.reqId = id
         st.subId = null
+        st.subAttempts++
         pendingSubs[id] = st.meta.address
+        pendingSentAt[id] = nowMs()
         return """{"jsonrpc":"2.0","id":$id,"method":"logsSubscribe","params":[{"mentions":["${st.meta.address}"]},{"commitment":"confirmed"}]}"""
+    }
+
+    /**
+     * Узел не ответил на подписку за [SUBSCRIBE_RETRY_MS] — просим ещё раз; после [MAX_SUBSCRIBE_ATTEMPTS] попыток
+     * пул откладывается на час: неподтверждённая подписка занимает место в бюджете, не давая данных.
+     */
+    private suspend fun retryUnanswered(now: Long) {
+        val out = ArrayList<String>()
+        lock.withLock {
+            val stale = pendingSentAt.filterValues { now - it > SUBSCRIBE_RETRY_MS }.keys.toList()
+            for (id in stale) {
+                pendingSentAt.remove(id)
+                val pool = pendingSubs.remove(id) ?: continue
+                val st = pools[pool] ?: continue
+                if (st.reqId != id || !st.admitted) continue
+                if (st.subAttempts >= MAX_SUBSCRIBE_ATTEMPTS) {
+                    st.admitted = false
+                    st.reqId = null
+                    st.subAttempts = 0
+                    banned[pool] = (now + RETRY_FAILED_MS) to SkipReason.SUBSCRIBE_FAILED
+                } else {
+                    out += subscribeRequest(st)
+                }
+            }
+        }
+        if (out.isNotEmpty()) onDiagnostic("повтор подписки без ответа: ${out.size}")
+        sendPaced(out)
     }
 
     /** Под [lock]: снять подписку (если была) и закрыть покрытие. */
     private fun unsubscribeRequest(st: PoolState, now: Long): String? {
         st.admitted = false
-        st.reqId?.let { pendingSubs.remove(it) }
+        st.reqId?.let {
+            pendingSubs.remove(it)
+            pendingSentAt.remove(it)
+        }
         st.reqId = null
         val sub = st.subId ?: return null
         st.subId = null
@@ -424,6 +473,7 @@ class ChainCandleService(
                 st.coverage.close(end)
             }
             pendingSubs.clear()
+            pendingSentAt.clear()
             subToPool.clear()
         }
     }
@@ -460,6 +510,7 @@ class ChainCandleService(
     private suspend fun onResponse(root: JsonObject, bytes: Int, now: Long) = lock.withLock {
         usage.onMessage(bytes)
         val id = root["id"]?.jsonPrimitive?.longOrNull ?: return@withLock
+        pendingSentAt.remove(id)
         val pool = pendingSubs.remove(id) ?: return@withLock
         val st = pools[pool] ?: return@withLock
         if (st.reqId != id) return@withLock
@@ -471,6 +522,7 @@ class ChainCandleService(
             return@withLock
         }
         st.subId = sub
+        st.subAttempts = 0
         subToPool[sub] = pool
         st.rate.start(now)
         if (st.coverage.openSince() == null) {
@@ -690,7 +742,7 @@ class ChainCandleService(
             }
             pools.values.removeAll { !it.inWatchlist && now - it.leftAtMs > keepLeftMs }
         }
-        out.forEach { send(it) }
+        sendPaced(out)
     }
 
     private suspend fun applyBudget(now: Long) {
@@ -729,20 +781,30 @@ class ChainCandleService(
         }
         if (stoppedNow) onEvent("⛓ Лимит кредитов Helius на сутки исчерпан — подписки сняты до 00:00 UTC")
         if (out.isNotEmpty()) onDiagnostic("бюджет: отправляю ${out.size} запросов подписки/отписки")
-        out.forEach { send(it) }
+        sendPaced(out)
     }
 
-    /** Соединение живо по пингам, но уведомления перестали приходить — переподключаемся. */
+    /**
+     * Соединение живо по пингам, но молчит — переподключаемся: уведомления перестали приходить при многих
+     * подписках, или узел не ответил на запросы подписки (PublicNode так «забывает» соединение, простоявшее
+     * без подписок, — и не закрывает его).
+     */
     private suspend fun watchdog(now: Long) {
         val s = session ?: return
-        val subscribed = lock.withLock { subToPool.size }
-        if (subscribed >= WATCHDOG_MIN_SUBS && now - lastMessageAt > WATCHDOG_SILENCE_MS) {
-            try {
-                s.close(CloseReason(CloseReason.Codes.NORMAL, "silence"))
-            } catch (e: CancellationException) {
-                throw e
-            } catch (_: Exception) {
-            }
+        val (subscribed, pending) = lock.withLock { subToPool.size to pendingSubs.size }
+        val silent = now - lastMessageAt
+        val reason = when {
+            subscribed >= WATCHDOG_MIN_SUBS && silent > WATCHDOG_SILENCE_MS -> "уведомлений нет ${silent / 1000} с"
+            // Ждём ответов на подписку, а не приходит вообще ничего — соединение мёртвое.
+            pending > 0 && silent > SUBSCRIBE_TIMEOUT_MS -> "нет ответа на $pending подписок, тишина ${silent / 1000} с"
+            else -> return retryUnanswered(now)
+        }
+        onDiagnostic("сторож: $reason — переподключаюсь")
+        try {
+            s.close(CloseReason(CloseReason.Codes.NORMAL, "silence"))
+        } catch (e: CancellationException) {
+            throw e
+        } catch (_: Exception) {
         }
     }
 
@@ -912,6 +974,16 @@ class ChainCandleService(
         private const val RETRY_OVER_BUDGET_MS = 60 * 60_000L
         private const val WATCHDOG_MIN_SUBS = 5
         private const val WATCHDOG_SILENCE_MS = 120_000L
+
+        /** Ответ на logsSubscribe приходит за доли секунды; нет ответа дольше — соединение мёртвое. */
+        private const val SUBSCRIBE_TIMEOUT_MS = 30_000L
+
+        /** Нет ответа на подписку столько — запрос повторяется (узел мог его потерять). */
+        private const val SUBSCRIBE_RETRY_MS = 20_000L
+        private const val MAX_SUBSCRIBE_ATTEMPTS = 3
+
+        /** Шаг между запросами в соединение. */
+        private const val SEND_SPACING_MS = 200L
 
         /** GeckoTerminal дописывает бар не сразу (и CDN держит копию до минуты). */
         private const val GECKO_SETTLE_MS = 90_000L
