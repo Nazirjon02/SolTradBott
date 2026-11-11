@@ -206,7 +206,9 @@ object CreditBudget {
             if ((known && c.creditsPerDay > perPool) || burst) drop[c.pool] = Reason.EXPENSIVE
         }
         val kept = costs.filter { it.pool !in drop }
-        fun estimate(c: PoolCost) = if (c.measuredMs >= PROBE_MS) c.creditsPerDay else maxOf(c.creditsPerDay, UNKNOWN_POOL_CREDITS)
+        // Скорость молодой подписки по короткому окну скачет (одна крупная транзакция — и прогноз в разы
+        // выше): до конца замера пул считается средним, а по-настоящему дорогой ловит правило «взрыва» выше.
+        fun estimate(c: PoolCost) = if (c.measuredMs >= PROBE_MS) c.creditsPerDay else UNKNOWN_POOL_CREDITS
         var total = kept.sumOf { estimate(it) }
         // На остаток суток: потраченное + скорость × оставшееся время не должно превысить лимит.
         val remainingDay = msLeftToday.coerceAtLeast(0L).toDouble() / DAY_MS

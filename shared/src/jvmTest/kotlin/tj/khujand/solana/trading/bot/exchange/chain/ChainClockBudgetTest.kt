@@ -88,6 +88,16 @@ class ChainClockBudgetTest {
     }
 
     @Test
+    fun `молодая подписка со всплеском по короткому окну не снимается как не влезающая`() {
+        // 20 с замера, 95 КБ (одна-две крупные транзакции): по окну — тысячи кредитов в сутки, по факту — пул
+        // средний. До минуты замера он считается средним и не вытесняет других.
+        val young = cost("ape", 8_000.0, measuredMs = 20_000L, bytes = 95_000L)
+        val others = (1..12).map { cost("p$it", 900.0) }
+        val d = CreditBudget.decide(others + young, dailyLimit = 25_000, usedToday = 0.0, msLeftToday = DAY_MS)
+        assertTrue(d.drop.isEmpty(), "сняты: ${d.drop}")
+    }
+
+    @Test
     fun `сумма не влезает — снимаются самые дорогие, лимит суток — снимается всё`() {
         val many = (1..10).map { cost("p$it", 2_500.0 + it * 100) } // каждый < 20% лимита, вместе ~30 тыс.
         val d = CreditBudget.decide(many, dailyLimit = 25_000, usedToday = 0.0, msLeftToday = DAY_MS)
