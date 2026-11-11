@@ -7,8 +7,8 @@ import io.ktor.client.request.header
 import io.ktor.client.statement.HttpResponse
 import io.ktor.client.statement.bodyAsText
 import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.sync.Mutex
-import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
 import kotlin.time.Clock
 import kotlin.time.Instant
 import kotlinx.serialization.json.Json
@@ -70,14 +70,27 @@ data class GtPool(
 )
 
 /**
- * Источник свечей OHLCV — GeckoTerminal (бесплатно, без ключа).
- * Ktor-клиент + ленивый разбор JSON.
+ * Источник свечей OHLCV и списков пулов — GeckoTerminal.
  *
- * Rate limit ~30 req/min, поэтому есть in-memory кэш по ключу пул+ТФ+агрегат с TTL.
+ * Лимиты (проверено 2026-11-11): без ключа — около 5 запросов в минуту на IP, дальше HTTP 429. С бесплатным
+ * Demo-ключом CoinGecko те же данные отдаёт `api.coingecko.com/api/v3/onchain` — до 100 запросов в минуту.
+ * Все запросы идут через общую очередь [RequestLimiter]; свечи для стратегий хранит [CandleStore] —
+ * закрытые бары, один запрос на бар (см. там же, почему).
  */
 object GeckoTerminalApi {
 
-    private const val BASE = "https://api.geckoterminal.com/api/v2"
+    private const val KEYLESS_BASE = "https://api.geckoterminal.com/api/v2"
+    private const val KEYED_BASE = "https://api.coingecko.com/api/v3/onchain"
+    private const val KEY_HEADER = "x-cg-demo-api-key"
+
+    /** Без ключа — 4 запроса в минуту: чуть ниже порога, который сервер к тому же двигает под нагрузкой. */
+    private const val KEYLESS_INTERVAL_MS = 15_000L
+
+    /** С ключом — 60 в минуту при лимите 100: запас на бэктест и второе приложение с тем же ключом. */
+    private const val KEYED_INTERVAL_MS = 1_000L
+
+    /** Бэктест и списки пулов могут ждать очереди долго: их никто не торопит, а пропуск страницы ломает историю. */
+    private const val HISTORY_MAX_WAIT_MS = 120_000L
 
     private val json = Json { ignoreUnknownKeys = true; isLenient = true }
 
@@ -85,60 +98,116 @@ object GeckoTerminalApi {
         install(HttpTimeout) { requestTimeoutMillis = 10_000 }
     }
 
-    private data class CacheEntry(val candles: List<Candle>, val expiresAtMs: Long)
+    // StateFlow — потокобезопасная ячейка: ключ читают параллельные запросы, меняют настройки.
+    private val apiKey = MutableStateFlow<String?>(null)
 
-    private val cache = mutableMapOf<String, CacheEntry>()
-    private val mutex = Mutex()
+    private val limiter = RequestLimiter(intervalMs = { if (activeKey() != null) KEYED_INTERVAL_MS else KEYLESS_INTERVAL_MS })
+
+    private val store = CandleStore(
+        fetch = ::fetchCandles,
+        limiter = limiter,
+        liveAllowed = { activeKey() != null },
+        onUnauthorized = ::rejectKey,
+    )
+
+    /** Состояние источника: ключ, отказы по лимиту, последний успешный ответ. */
+    val status: StateFlow<CandleFeedStatus> get() = store.status
 
     /**
-     * Свечи для пула Solana.
+     * Demo-ключ CoinGecko из настроек; null или пусто — работаем без ключа. Повторное сохранение того же
+     * ключа снимает отметку «отклонён»: пользователь мог его активировать или поправить опечатку.
+     */
+    fun setApiKey(key: String?) {
+        val clean = key?.trim()?.takeIf { it.isNotEmpty() }
+        apiKey.value = clean
+        store.setKeyState(usingKey = clean != null, keyRejected = false)
+    }
+
+    /** Ключ, с которым идут запросы; отклонённый сервером ключ не используем до следующего сохранения. */
+    private fun activeKey(): String? = apiKey.value?.takeUnless { store.status.value.keyRejected }
+
+    private fun rejectKey() {
+        println("GeckoTerminal: ключ CoinGecko отклонён — работаю без ключа")
+        store.setKeyState(usingKey = false, keyRejected = true)
+    }
+
+    /**
+     * Свечи пула Solana — закрытые бары по возрастанию времени (см. [CandleStore]).
      * @param poolAddress адрес пула (на Solana = DexScreener pairAddress).
      * @param timeframe "minute" | "hour" | "day".
      * @param aggregate агрегация внутри ТФ (minute: 1/5/15, hour: 1/4/12, day: 1).
-     * @param limit сколько свечей запросить (макс. 1000).
-     * @param ttlMs время жизни кэша.
-     * Возвращает свечи, отсортированные по возрастанию времени. Пустой список = данных нет.
+     * @param limit сколько свечей нужно (макс. 1000).
+     * @param live график сделки: с незакрытым баром и обновлением раз в 30 с — только с ключом API.
+     * @param maxWaitMs сколько ждать очереди к API; не дождались — прежние бары или пусто.
+     * Пустой список = данных нет.
      */
     suspend fun getCandles(
         poolAddress: String,
         timeframe: String,
         aggregate: Int = 1,
         limit: Int = 200,
-        ttlMs: Long = 30_000L,
+        live: Boolean = false,
+        maxWaitMs: Long = CandleStore.DEFAULT_MAX_WAIT_MS,
         network: String = "solana",
-    ): List<Candle> {
-        if (poolAddress.isBlank()) return emptyList()
-        val key = "$network|$poolAddress|$timeframe|$aggregate|$limit"
-        val now = Clock.System.now().toEpochMilliseconds()
+    ): List<Candle> = store.get(CandleKey(network, poolAddress, timeframe, aggregate), limit, live, maxWaitMs)
 
-        mutex.withLock {
-            cache[key]?.let { if (it.expiresAtMs > now) return it.candles }
+    /** Запрос к API: с ключом — на CoinGecko, без — на публичный GeckoTerminal. Второе значение — шёл ли ключ. */
+    private suspend fun request(path: String): Pair<HttpResponse, Boolean> {
+        val key = activeKey()
+        val base = if (key != null) KEYED_BASE else KEYLESS_BASE
+        val response = client.get("$base$path") {
+            header("Accept", "application/json")
+            if (key != null) header(KEY_HEADER, key)
         }
-
-        val candles = fetch(network, poolAddress, timeframe, aggregate, limit)
-        if (candles.isNotEmpty()) {
-            mutex.withLock { cache[key] = CacheEntry(candles, now + ttlMs) }
-        }
-        return candles
+        return response to (key != null)
     }
 
-    private suspend fun fetch(
-        network: String,
-        pool: String,
-        timeframe: String,
-        aggregate: Int,
-        limit: Int,
-    ): List<Candle> {
+    private suspend fun fetchCandles(key: CandleKey, limit: Int): CandleFetch = try {
+        val (resp, withKey) = request(
+            "/networks/${key.network}/pools/${key.pool}/ohlcv/${key.timeframe}" +
+                "?aggregate=${key.aggregate}&limit=$limit&currency=usd"
+        )
+        when (val code = resp.status.value) {
+            200 -> CandleFetch.Ok(parse(resp.bodyAsText()), ageMs = secondsHeader(resp, "Age") ?: 0L)
+            // Пул ещё не проиндексирован — это «свечей нет», а не сбой: перепроверим позже, а не каждый цикл.
+            404 -> CandleFetch.Ok(emptyList())
+            429 -> CandleFetch.RateLimited(secondsHeader(resp, "Retry-After"))
+            401, 403 -> if (withKey) CandleFetch.Unauthorized else CandleFetch.Failed("HTTP $code")
+            else -> CandleFetch.Failed("HTTP $code")
+        }
+    } catch (e: CancellationException) {
+        throw e
+    } catch (e: Exception) {
+        println("GeckoTerminal error (${key.pool}/${key.timeframe}): ${e.message}")
+        CandleFetch.Failed(e.message ?: "ошибка сети")
+    }
+
+    /** Заголовок с числом секунд (Age, Retry-After) в миллисекундах; null — заголовка нет или он не число. */
+    private fun secondsHeader(resp: HttpResponse, name: String): Long? =
+        resp.headers[name]?.trim()?.toLongOrNull()?.takeIf { it >= 0 }?.let { it * 1000 }
+
+    /**
+     * Запрос вне [CandleStore] (история для бэктеста, списки пулов) — через ту же очередь, чтобы бэктест
+     * не отбирал лимит у работающего бота. Возвращает HTTP-код и тело (тело — только при 200);
+     * 429 — в том числе «очередь слишком длинная», 0 — сетевая ошибка.
+     */
+    private suspend fun queued(path: String, maxWaitMs: Long, what: String): Pair<Int, String?> {
+        if (!limiter.acquire(maxWaitMs)) return 429 to null
         return try {
-            val url = "$BASE/networks/$network/pools/$pool/ohlcv/$timeframe" +
-                "?aggregate=$aggregate&limit=$limit&currency=usd"
-            val resp: HttpResponse = client.get(url) { header("Accept", "application/json") }
-            parse(resp.bodyAsText())
+            val (resp, withKey) = request(path)
+            val code = resp.status.value
+            when {
+                code == 429 -> limiter.pauseUntil(
+                    Clock.System.now().toEpochMilliseconds() + (secondsHeader(resp, "Retry-After") ?: CandleStore.RATE_LIMIT_PAUSE_MS)
+                )
+                (code == 401 || code == 403) && withKey -> rejectKey()
+            }
+            code to (if (code == 200) resp.bodyAsText() else null)
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
-            println("GeckoTerminal error ($pool/$timeframe): ${e.message}")
-            emptyList()
+            println("GeckoTerminal $what error: ${e.message}")
+            0 to null
         }
     }
 
@@ -154,34 +223,32 @@ object GeckoTerminalApi {
         limit: Int = 1000,
         beforeTimestampSec: Long? = null,
         network: String = "solana",
-    ): OhlcvPage = try {
+    ): OhlcvPage {
         val before = beforeTimestampSec?.let { "&before_timestamp=$it" } ?: ""
-        val url = "$BASE/networks/$network/pools/$poolAddress/ohlcv/$timeframe" +
-            "?aggregate=$aggregate&limit=$limit&currency=usd$before"
-        val resp: HttpResponse = client.get(url) { header("Accept", "application/json") }
-        val status = resp.status.value
-        OhlcvPage(if (status == 200) parse(resp.bodyAsText()) else emptyList(), status)
-    } catch (e: CancellationException) {
-        throw e
-    } catch (e: Exception) {
-        println("GeckoTerminal page error ($poolAddress/$timeframe): ${e.message}")
-        OhlcvPage(emptyList(), 0)
+        val (status, body) = queued(
+            "/networks/$network/pools/$poolAddress/ohlcv/$timeframe?aggregate=$aggregate&limit=$limit&currency=usd$before",
+            HISTORY_MAX_WAIT_MS,
+            "page ($poolAddress/$timeframe)",
+        )
+        return OhlcvPage(body?.let { parse(it) } ?: emptyList(), status)
     }
 
     /**
-     * Страница списка пулов сети (trending / new / top по объёму) — источник монет для бэктеста.
+     * Страница списка пулов сети (trending / new / top по объёму) — монеты для бэктеста и сканера.
+     * @param duration окно трендовых пулов: "5m" | "1h" | "6h" | "24h"; null — по умолчанию сервера (24h).
+     * @param maxWaitMs сколько ждать очереди к API (сканеру долго ждать незачем — возьмёт список в другой раз).
      * @return пулы + HTTP-код (429 — превышен лимит, 0 — сетевая ошибка).
      */
-    suspend fun getPools(list: GtPoolList, page: Int, network: String = "solana"): Pair<List<GtPool>, Int> = try {
-        val url = "$BASE/networks/$network/${list.path}?page=$page"
-        val resp: HttpResponse = client.get(url) { header("Accept", "application/json") }
-        val status = resp.status.value
-        (if (status == 200) parsePools(resp.bodyAsText()) else emptyList()) to status
-    } catch (e: CancellationException) {
-        throw e
-    } catch (e: Exception) {
-        println("GeckoTerminal pools error (${list.path}): ${e.message}")
-        emptyList<GtPool>() to 0
+    suspend fun getPools(
+        list: GtPoolList,
+        page: Int,
+        network: String = "solana",
+        duration: String? = null,
+        maxWaitMs: Long = HISTORY_MAX_WAIT_MS,
+    ): Pair<List<GtPool>, Int> {
+        val window = duration?.takeIf { list == GtPoolList.TRENDING }?.let { "&duration=$it" } ?: ""
+        val (status, body) = queued("/networks/$network/${list.path}?page=$page$window", maxWaitMs, "pools (${list.path})")
+        return (body?.let { parsePools(it) } ?: emptyList()) to status
     }
 
     private fun parsePools(body: String): List<GtPool> = runCatching {

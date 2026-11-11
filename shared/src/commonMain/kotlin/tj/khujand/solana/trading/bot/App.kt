@@ -103,6 +103,7 @@ import tj.khujand.solana.trading.bot.domain.backtest.BacktestSettings
 import tj.khujand.solana.trading.bot.domain.backtest.BacktestState
 import tj.khujand.solana.trading.bot.domain.backtest.BacktestStats
 import tj.khujand.solana.trading.bot.domain.backtest.backtestHigherTf
+import tj.khujand.solana.trading.bot.exchange.dex.GeckoTerminalApi
 import tj.khujand.solana.trading.bot.exchange.dex.GtPoolList
 import tj.khujand.solana.trading.bot.data.AccountBalance
 import tj.khujand.solana.trading.bot.data.BotStatus
@@ -177,6 +178,7 @@ fun DrxApp(runtime: DrxRuntime? = null) {
                     telegramToken = s.getTelegramToken() ?: "",
                     telegramChatId = s.getTelegramChatId()?.toString() ?: "",
                     protection = s.getProtection(),
+                    coinGeckoKey = s.getCoinGeckoKey() ?: "",
                 )
             } ?: DrxSettings()
         )
@@ -405,7 +407,10 @@ fun DrxApp(runtime: DrxRuntime? = null) {
                                 setTelegramChatId(newSettings.telegramChatId.trim().toLongOrNull() ?: 0L)
                                 // Защиту читают на каждой проверке — действует со следующего входа/выхода.
                                 setProtection(newSettings.protection)
+                                setCoinGeckoKey(newSettings.coinGeckoKey.trim())
                             }
+                            // Ключ свечей применяется сразу: следующий запрос уйдёт уже с ним.
+                            GeckoTerminalApi.setApiKey(newSettings.coinGeckoKey)
                             // Новый токен/чат применяем к живому notifier движка сразу.
                             runtime?.notifier?.updateCredentials(
                                 newSettings.telegramToken.trim(),
@@ -451,6 +456,8 @@ data class DrxSettings(
     val telegramToken: String = "",
     val telegramChatId: String = "",
     val protection: ProtectionSettings = ProtectionSettings(),
+    /** Demo-ключ CoinGecko для свечей; пусто — без ключа (GeckoTerminal пускает считаные запросы в минуту). */
+    val coinGeckoKey: String = "",
 )
 
 // ─── Bottom nav ───────────────────────────────────────────────────────────────
@@ -2213,7 +2220,11 @@ fun BacktestScreen(
                     "✓ История уже загружена — прогон мгновенный."
                 } else {
                     val req = service?.estimatedRequests(config, request) ?: 0
-                    "≈ $req запросов к GeckoTerminal (лимит ~30 в минуту) — загрузка ~${(req * 2.5 / 60).toInt() + 1} мин. " +
+                    // С ключом CoinGecko запрос идёт раз в ~2.5 с (пауза загрузчика), без ключа — раз в 15 с (очередь API).
+                    val withKey = GeckoTerminalApi.status.value.usingKey
+                    val minutes = (req * (if (withKey) 2.5 else 15.0) / 60).toInt() + 1
+                    "≈ $req запросов к GeckoTerminal — загрузка ~$minutes мин" +
+                        (if (withKey) ". " else " (без ключа CoinGecko — 4 запроса в минуту; с ключом из «Настроек» быстрее). ") +
                         "Потом историю можно прогонять сколько угодно раз."
                 }
                 Text(hint, fontSize = 11.sp, color = if (cached) Green else TextSecondary, lineHeight = 16.sp)
@@ -3305,6 +3316,7 @@ fun SettingsScreen(
     var telegramToken by remember(settings) { mutableStateOf(settings.telegramToken) }
     var telegramChatId by remember(settings) { mutableStateOf(settings.telegramChatId) }
     var protection by remember(settings) { mutableStateOf(settings.protection) }
+    var coinGeckoKey by remember(settings) { mutableStateOf(settings.coinGeckoKey) }
     var saved by remember { mutableStateOf(false) }
     var confirmReset by remember { mutableStateOf(false) }
 
@@ -3454,6 +3466,9 @@ fun SettingsScreen(
                     fontSize = 11.sp, color = TextSecondary)
             }
 
+            // ── Данные рынка ──────────────────────────────────────────────
+            MarketDataSection(coinGeckoKey) { coinGeckoKey = it; saved = false }
+
             // ── Telegram ──────────────────────────────────────────────────
             FormSection("📲  Telegram") {
                 FormTextField("Bot Token", telegramToken) { telegramToken = it; saved = false }
@@ -3516,6 +3531,7 @@ fun SettingsScreen(
                     telegramToken = telegramToken,
                     telegramChatId = telegramChatId,
                     protection = protection,
+                    coinGeckoKey = coinGeckoKey,
                 ))
                 saved = true
             },
@@ -3528,6 +3544,34 @@ fun SettingsScreen(
         ) {
             Text("💾  Сохранить настройки", fontWeight = FontWeight.Bold, color = Color.Black, fontSize = 16.sp)
         }
+    }
+}
+
+/**
+ * «Данные рынка» — ключ CoinGecko для свечей. Без него GeckoTerminal пускает считаные запросы в минуту
+ * (см. [GeckoTerminalApi]), и разбор монет идёт по очереди; строка состояния показывает, с ключом ли бот сейчас.
+ * Сохраняется общей кнопкой настроек.
+ */
+@Composable
+private fun MarketDataSection(key: String, onKey: (String) -> Unit) {
+    val feed by GeckoTerminalApi.status.collectAsState()
+    FormSection("📡  Данные рынка") {
+        val (text, color) = when {
+            feed.keyRejected -> "⚠️  Ключ отклонён сервером — запросы идут без ключа. Проверьте ключ и сохраните заново." to Red
+            feed.usingKey -> "✅  Свечи идут с ключом CoinGecko — до 60 запросов в минуту." to Green
+            else -> "Без ключа GeckoTerminal даёт около 4 запросов свечей в минуту: монеты разбираются по очереди, " +
+                "на ТФ 1m — с отставанием." to Amber
+        }
+        Surface(color = color.copy(alpha = 0.12f), shape = RoundedCornerShape(8.dp), modifier = Modifier.fillMaxWidth()) {
+            Text(text, fontSize = 12.sp, color = color, modifier = Modifier.padding(12.dp))
+        }
+        Spacer(Modifier.height(4.dp))
+        FormTextField("Ключ CoinGecko (Demo API)", key) { onKey(it) }
+        Text(
+            "Бесплатный ключ: coingecko.com → Developer Dashboard → Add New Key (план Demo). " +
+                "Применяется сразу после сохранения.",
+            fontSize = 11.sp, color = TextSecondary, lineHeight = 16.sp
+        )
     }
 }
 

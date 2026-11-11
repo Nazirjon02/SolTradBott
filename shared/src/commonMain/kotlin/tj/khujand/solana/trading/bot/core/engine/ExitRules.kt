@@ -37,7 +37,7 @@ internal fun rLadderStep(gainR: Double, tp1Done: Boolean, tp2Done: Boolean, tp1R
 /**
  * Chandelier-стоп (LeBeau) в мультипликативной форме: пик × (1 − mult × ATR%входа).
  * ATR хранится как доля цены на входе, поэтому дистанция растёт вместе с ценой и не требует
- * дополнительных запросов свечей (лимит GeckoTerminal ~30/мин).
+ * дополнительных запросов свечей (лимит GeckoTerminal — считаные запросы в минуту).
  * Нет ATR (старые сделки, мало свечей на входе) → [fallbackFrac] (трейлинг-% конфига).
  */
 internal fun atrTrailStop(peak: Double, atrFrac: Double, mult: Double, fallbackFrac: Double): Double {

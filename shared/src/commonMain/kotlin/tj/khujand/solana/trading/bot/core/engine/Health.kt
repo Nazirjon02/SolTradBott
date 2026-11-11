@@ -2,6 +2,7 @@ package tj.khujand.solana.trading.bot.core.engine
 
 import kotlinx.serialization.Serializable
 import tj.khujand.solana.trading.bot.data.BotStatus
+import tj.khujand.solana.trading.bot.exchange.dex.CandleFeedStatus
 
 /**
  * Столько работающий движок может обходиться без единого успешного ответа DEX-API. Цикл стратегии
@@ -33,6 +34,8 @@ data class HealthReport(
  *
  * @param desiredState в каком состоянии бота оставили (имя [BotStatus], см. SettingsStore.getDesiredState).
  * @param engineStartedAt когда движок последний раз запущен; 0 — не запускался.
+ * @param dataProblems проблемы источников данных (см. [candleFeedProblems]); учитываются только у
+ *   работающего движка — по той же причине, что и свежесть ответов.
  */
 fun healthReport(
     status: BotStatus,
@@ -41,6 +44,7 @@ fun healthReport(
     lastOkAt: Long?,
     engineStartedAt: Long,
     nowMs: Long,
+    dataProblems: List<String> = emptyList(),
 ): HealthReport {
     val problems = buildList {
         if (status == BotStatus.STOPPED &&
@@ -59,6 +63,7 @@ fun healthReport(
                     else "нет успешных ответов DEX-API $minutes мин"
                 )
             }
+            addAll(dataProblems)
         }
     }
     return HealthReport(
@@ -68,4 +73,17 @@ fun healthReport(
         lastOkAgeSeconds = lastOkAt?.let { (nowMs - it) / 1000 },
         problems = problems,
     )
+}
+
+/**
+ * Проблемы источника свечей для `/health` (чистая функция); пусто — всё в порядке.
+ *  - ключ CoinGecko отклонён: бот работает, но на лимите без ключа;
+ *  - свечи не приходят: успешные ответы были, но последние [API_STALE_MS] источник только отказывает по
+ *    лимиту. Единичный отказ проблемой не считается — после него запросы просто ждут паузу.
+ */
+fun candleFeedProblems(s: CandleFeedStatus, nowMs: Long): List<String> = buildList {
+    if (s.keyRejected) add("ключ CoinGecko отклонён — свечи идут без ключа (около 4 запросов в минуту)")
+    val starved = s.lastOkAtMs > 0 && nowMs - s.lastOkAtMs > API_STALE_MS &&
+        s.lastRateLimitAtMs > s.lastOkAtMs && nowMs - s.lastRateLimitAtMs < API_STALE_MS
+    if (starved) add("свечи не приходят ${(nowMs - s.lastOkAtMs) / 60_000} мин: источник отвечает «слишком много запросов»")
 }

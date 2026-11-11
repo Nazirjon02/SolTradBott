@@ -11,6 +11,7 @@ import tj.khujand.solana.trading.bot.core.engine.BotEngine
 import tj.khujand.solana.trading.bot.core.engine.TradeExecutor
 import tj.khujand.solana.trading.bot.core.engine.TradeMonitor
 import tj.khujand.solana.trading.bot.core.engine.beginNewRun
+import tj.khujand.solana.trading.bot.core.engine.watchCandleFeed
 import tj.khujand.solana.trading.bot.core.risk.EntryGuard
 import tj.khujand.solana.trading.bot.core.risk.RiskManager
 import tj.khujand.solana.trading.bot.core.strategy.StrategyManager
@@ -23,6 +24,7 @@ import tj.khujand.solana.trading.bot.domain.backtest.BacktestService
 import tj.khujand.solana.trading.bot.domain.dars.MarketAnalyzerService
 import tj.khujand.solana.trading.bot.exchange.dex.AccountCache
 import tj.khujand.solana.trading.bot.exchange.dex.DexClient
+import tj.khujand.solana.trading.bot.exchange.dex.GeckoTerminalApi
 import tj.khujand.solana.trading.bot.exchange.dex.JupiterSwapQuotes
 import tj.khujand.solana.trading.bot.exchange.dex.TokenCache
 import tj.khujand.solana.trading.bot.exchange.dex.TokenScanner
@@ -54,6 +56,11 @@ class DrxRuntime(val db: DrxDatabase) {
         resolver = { query ->
             client.dexScreener.findSolanaPair(query)
                 ?.toTokenCandidate(Clock.System.now().toEpochMilliseconds())
+        },
+        // Скан запускает человек и смотрит на прогресс: пусть монеты дождутся очереди к GeckoTerminal,
+        // а не отвалятся с «мало свечей», как только очередь стала длиннее обычного ожидания стратегии.
+        candleSource = { pool, tf, agg, limit ->
+            GeckoTerminalApi.getCandles(pool, tf, agg, limit, maxWaitMs = ANALYSIS_MAX_WAIT_MS)
         },
     )
 
@@ -88,6 +95,9 @@ class DrxRuntime(val db: DrxDatabase) {
     private var telegramJob: Job? = null
 
     init {
+        // Ключ — до первого запроса свечей и до наблюдателя: он сообщает в ленту, с ключом ли работаем.
+        GeckoTerminalApi.setApiKey(settingsStore.getCoinGeckoKey())
+        runtimeScope.watchCandleFeed(GeckoTerminalApi.status, activityLog)
         tradeMonitor.start()
         syncTelegramController()
     }
@@ -193,6 +203,9 @@ class DrxRuntime(val db: DrxDatabase) {
         activityLog.clear()
     }
 }
+
+/** Сколько разбор на экране «Анализ» ждёт очереди к GeckoTerminal (без ключа запрос уходит раз в 15 с). */
+private const val ANALYSIS_MAX_WAIT_MS = 3 * 60_000L
 
 /**
  * Возобновлять ли торговлю при запуске приложения: включён тумблер [enabled], движок ещё стоит, а

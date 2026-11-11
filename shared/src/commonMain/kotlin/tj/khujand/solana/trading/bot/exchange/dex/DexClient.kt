@@ -48,16 +48,21 @@ class DexClient(
     // ─── Свечи (OHLCV) ───────────────────────────────────────────────────────
 
     /**
+     * Закрытые бары пула по возрастанию времени: стратегии решают по закрытым свечам, а один ответ
+     * GeckoTerminal служит до закрытия следующего бара (см. [CandleStore]).
      * @param timeframe строка вида "1m", "5m", "15m", "1h", "4h", "1d" —
      * разворачивается в пару (timeframe, aggregate) GeckoTerminal.
+     * @param live график сделки: с незакрытым баром и обновлением раз в 30 с (только с ключом CoinGecko,
+     *   без него — те же закрытые бары).
      */
     suspend fun getCandles(
         poolAddress: String,
         timeframe: String,
         limit: Int = 200,
+        live: Boolean = false,
     ): List<Candle> {
         val (tf, aggregate) = parseTimeframe(timeframe)
-        return GeckoTerminalApi.getCandles(poolAddress, tf, aggregate, limit)
+        return GeckoTerminalApi.getCandles(poolAddress, tf, aggregate, limit, live)
     }
 
     // ─── Кошелёк ─────────────────────────────────────────────────────────────

@@ -3,6 +3,8 @@ package tj.khujand.solana.trading.bot.exchange.dex
 import kotlin.math.abs
 import kotlin.time.Clock
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 
 /**
  * Фильтры сканера — подмножество колонок таблицы strategy.
@@ -17,90 +19,250 @@ data class ScanFilters(
     val maxCandidates: Int = 10,
     /**
      * Master-выключатель фильтров ликвидность/MC/возраст. false → жёсткий отбор не применяется
-     * (стратегия «Вход по баллу» без фильтров). Первичный отбор DexScreener и cap [maxCandidates]
+     * (стратегия «Вход по баллу» без фильтров). Грубый отсев пула ([scanRejection]) и cap [maxCandidates]
      * остаются в силе.
      */
     val filtersEnabled: Boolean = true,
-)
+) {
+    fun passes(c: TokenCandidate): Boolean = !filtersEnabled || (
+        c.liquidityUsd >= minLiquidityUsd &&
+            c.marketCap in minMarketCap..maxMarketCap &&
+            c.tokenAgeMinutes in minTokenAgeMinutes..maxTokenAgeMinutes
+        )
+}
 
 /**
- * Сканер новых мемкоинов (аналог TopSymbolCache-скана в MRX, источник — DexScreener).
+ * Ответ на пакетный запрос пар монет.
+ * @param pairs найденные пары (лучшая пара каждой монеты).
+ * @param answered монеты, по которым источник ответил: если монеты из [answered] нет среди [pairs], пары у
+ *   неё больше нет; монет вне [answered] просто не удалось спросить (сбой сети) — о них ничего не известно.
+ */
+data class PairsResult(val pairs: List<TokenPair>, val answered: Set<String>)
+
+/** Откуда сканер берёт монеты и их метрики. Интерфейс — чтобы тесты подставляли ответы без сети. */
+interface ScanSources {
+    /** Адреса монет (mint), которые источники показывают сейчас. Сбой источника — он просто ничего не даёт. */
+    suspend fun discoverMints(): List<String>
+
+    /** Лучшие пары этих монет со свежими метриками. */
+    suspend fun pairsFor(mints: List<String>): PairsResult
+}
+
+/**
+ * Боевые источники:
+ *  - реклама DexScreener — свежие бусты и профили по очереди (платное размещение: монету продвигают);
+ *  - трендовые пулы GeckoTerminal за час — монеты, которыми торгуют прямо сейчас, без оплаты за показ.
+ * Метрики всех монет — пакетным запросом DexScreener (до 30 адресов за раз).
+ */
+class DexScanSources(private val client: DexClient) : ScanSources {
+    // Меняется только из TokenScanner.scan, а он идёт под замком — гонки нет.
+    private var boostsNext = true
+
+    override suspend fun discoverMints(): List<String> {
+        val found = LinkedHashSet<String>()
+        val boostsFirst = boostsNext
+        boostsNext = !boostsNext
+        val ds = client.dexScreener
+        found += if (boostsFirst) ds.latestBoostMints().ifEmpty { ds.latestProfileMints() }
+        else ds.latestProfileMints().ifEmpty { ds.latestBoostMints() }
+
+        // Очередь к GeckoTerminal общая со свечами: долго ждать не стоит — список возьмём в следующий раз.
+        val (pools, _) = GeckoTerminalApi.getPools(
+            GtPoolList.TRENDING, page = 1, duration = TRENDING_WINDOW, maxWaitMs = TRENDING_MAX_WAIT_MS,
+        )
+        pools.mapNotNullTo(found) { it.baseMint.takeIf { mint -> mint.isNotBlank() } }
+        return found.toList()
+    }
+
+    override suspend fun pairsFor(mints: List<String>): PairsResult = client.dexScreener.getBestPairs("solana", mints)
+
+    private companion object {
+        const val TRENDING_WINDOW = "1h"
+        const val TRENDING_MAX_WAIT_MS = 20_000L
+    }
+}
+
+/**
+ * Сканер монет: общий пул наблюдения для всех стратегий.
  *
- * Пайплайн: DexScreener (boosts/profiles) → фильтры стратегии → скоринг →
- * запись в TokenCache. Стратегии и UI читают кандидатов из кеша.
+ *  - Раз в [DISCOVERY_INTERVAL_MS] источники ([ScanSources]) дают новые монеты; монета остаётся в пуле
+ *    [RETENTION_MS] после того, как источник показал её в последний раз. Раньше пул жил 5 минут и целиком
+ *    менялся при смене источника — «почти готовая» монета пропадала из-под стратегии.
+ *  - Не реже чем раз в [REFRESH_INTERVAL_MS] метрики всего пула (цена, ликвидность, объём) обновляются
+ *    одним-двумя пакетными запросами. Раньше стратегии видели цену до 5 минут давности.
+ *  - Каждая стратегия получает из пула монеты под СВОИ фильтры — лучшие по баллу, не больше
+ *    [ScanFilters.maxCandidates]. Раньше список обрезался по дате создания, а по баллу сортировался уже после.
+ *  - Монета, чей пул осушили или которой больше нет у источника метрик, выбывает сразу ([scanRejection]).
+ *
+ * Пул публикуется в [TokenCache] (UI, Telegram, сервер читают его оттуда) и после перезапуска поднимается из него.
  */
 class TokenScanner(
-    private val client: DexClient,
     private val cache: TokenCache,
+    private val sources: ScanSources,
+    private val nowMs: () -> Long = { Clock.System.now().toEpochMilliseconds() },
 ) {
+    constructor(client: DexClient, cache: TokenCache) : this(cache, DexScanSources(client))
+
+    /** @param lastSeenAt когда источник показывал монету в последний раз — от него идёт срок наблюдения. */
+    private class Member(var candidate: TokenCandidate, var lastSeenAt: Long)
+
+    // Сканируют несколько стратегий параллельно: пул и запросы к источникам — под одним замком.
+    private val lock = Mutex()
+    private val pool = LinkedHashMap<String, Member>()
+    private var lastDiscoveryAt = 0L
+    private var lastRefreshAt = 0L
+    private var restored = false
+
     /**
-     * Скан с фильтрами стратегии. Если кеш свежий — возвращает его без запросов к API.
-     * @param force true = игнорировать TTL кеша и сканировать заново.
+     * Кандидаты под фильтры стратегии, лучшие по баллу первыми.
+     * @param force true — опросить источники сейчас, не дожидаясь срока.
      */
-    suspend fun scan(filters: ScanFilters, force: Boolean = false): List<TokenCandidate> {
-        if (!force) {
-            val cached = cache.fresh()
-            if (cached.isNotEmpty()) return cached.filterBy(filters)
-        }
-
-        val now = Clock.System.now().toEpochMilliseconds()
-
-        // Первичный отбор DexScreener — мягкие пороги, жёсткая фильтрация ниже.
-        val legacySettings = FilterSettings(
-            chains = listOf("solana"),
-            liquidityMinUsd = filters.minLiquidityUsd.coerceAtMost(1_000.0),
-            pairMaxAgeHours = filters.maxTokenAgeMinutes / 60.0,
-            useVolumeH24 = false,
-            useVolumeM5 = false,
-            useMinBuysToSellsRatioM5 = false,
-            useMinPriceChangeM5Pct = false,
-            excludeRugPull = true,
-            maxTokensPerTick = 30,
-        )
-        val pairs = try {
-            client.dexScreener.getNewTokens(legacySettings)
+    suspend fun scan(filters: ScanFilters, force: Boolean = false): List<TokenCandidate> = lock.withLock {
+        val now = nowMs()
+        restoreOnce(now)
+        try {
+            // Пустой пул (источники ничего годного не дали) переспрашиваем чаще обычного, но не на каждый скан:
+            // иначе три стратегии дёргали бы источники каждые десять секунд.
+            val discoveryEvery = if (pool.isEmpty()) DISCOVERY_RETRY_MS else DISCOVERY_INTERVAL_MS
+            when {
+                force || now - lastDiscoveryAt >= discoveryEvery -> discover(now)
+                now - lastRefreshAt >= REFRESH_INTERVAL_MS -> refresh(now, emptyList())
+            }
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
-            println("TokenScanner: ошибка DexScreener — ${e.message}")
-            return cache.fresh().filterBy(filters)
+            // Сбой источника не должен ронять цикл стратегии: работаем с тем, что уже в пуле.
+            println("TokenScanner: ошибка обновления пула — ${e.message}")
         }
+        pool.values.map { it.candidate }
+            .filter(filters::passes)
+            .sortedByDescending { it.score }
+            .take(filters.maxCandidates.coerceAtLeast(1))
+    }
 
-        val candidates = mutableListOf<TokenCandidate>()
-        for (pair in pairs) {
-            // Без даты создания пары возраст не проверить — сканер такие пары пропускает.
-            if (pair.pairCreatedAt == null) continue
-            val c = pair.toTokenCandidate(now) ?: continue
+    /** После перезапуска пул поднимается из БД — список наблюдения не начинается с нуля. */
+    private fun restoreOnce(now: Long) {
+        if (restored) return
+        restored = true
+        cache.all().filter { now - it.scannedAt <= RETENTION_MS }.forEach { pool[it.mint] = Member(it, it.scannedAt) }
+    }
 
-            val passes = !filters.filtersEnabled || (
-                c.liquidityUsd >= filters.minLiquidityUsd &&
-                    c.marketCap in filters.minMarketCap..filters.maxMarketCap &&
-                    c.tokenAgeMinutes in filters.minTokenAgeMinutes..filters.maxTokenAgeMinutes
-                )
-            if (!passes) continue
-
-            candidates += c
-            if (candidates.size >= filters.maxCandidates) break
-        }
-
-        val sorted = candidates.sortedByDescending { it.score }
-        cache.put(sorted)
-        cache.cleanup()
-        return sorted
+    /** Опрос источников: уже известным монетам продлевается срок, новые проходят отсев вместе с обновлением пула. */
+    private suspend fun discover(now: Long) {
+        lastDiscoveryAt = now
+        val found = sources.discoverMints().filter { it !in MAJOR_MINTS }.distinct()
+        found.forEach { pool[it]?.lastSeenAt = now }
+        val fresh = found.filter { it !in pool }
+        val asked = refresh(now, fresh)
+        // Новые монеты были, а источник метрик не ответил ни по одной — попробуем скоро, а не через 5 минут.
+        if (fresh.isNotEmpty() && !asked) lastDiscoveryAt = now - DISCOVERY_INTERVAL_MS + DISCOVERY_RETRY_MS
     }
 
     /**
-     * Кеш token_cache общий для всех стратегий, а наполняет его та, что сканировала первой,
-     * СВОИМИ фильтрами. Поэтому здесь повторно применяем фильтры вызывающей стратегии
-     * (ликвидность, market cap, возраст) к уже накопленным кандидатам.
+     * Свежие метрики пула и новых монет [fresh] одним проходом.
+     * @return false — источник метрик не ответил вовсе (пул остался как был).
      */
-    private fun List<TokenCandidate>.filterBy(f: ScanFilters): List<TokenCandidate> = filter { c ->
-        !f.filtersEnabled || (
-            c.liquidityUsd >= f.minLiquidityUsd &&
-                c.marketCap in f.minMarketCap..f.maxMarketCap &&
-                c.tokenAgeMinutes in f.minTokenAgeMinutes..f.maxTokenAgeMinutes
-            )
+    private suspend fun refresh(now: Long, fresh: List<String>): Boolean {
+        lastRefreshAt = now
+        val mints = pool.keys.toList() + fresh
+        if (mints.isEmpty()) return true
+        val result = sources.pairsFor(mints)
+        if (result.answered.isEmpty()) return false
+
+        // Только пары, где монета — базовая: в выдаче бывают пулы, где она котируемая, и там цена и метрики чужие.
+        val best = HashMap<String, TokenPair>()
+        for (pair in result.pairs) {
+            val mint = pair.baseToken?.address ?: continue
+            if (pair.chainId != "solana") continue
+            val current = best[mint]
+            if (current == null || (pair.liquidity?.usd ?: 0.0) > (current.liquidity?.usd ?: 0.0)) best[mint] = pair
+        }
+
+        val removed = ArrayList<String>()
+        for (mint in mints) {
+            if (mint !in result.answered) continue // не спросили (сбой сети) — монету не трогаем
+            val pair = best[mint]
+            // Без даты создания пары возраст не проверить — такие монеты сканер не берёт.
+            val candidate = pair?.takeIf { it.pairCreatedAt != null && scanRejection(it) == null }?.toTokenCandidate(now)
+            if (candidate == null) {
+                if (pool.remove(mint) != null) removed += mint
+                continue
+            }
+            val member = pool[mint]
+            if (member == null) pool[mint] = Member(candidate, now) else member.candidate = candidate
+        }
+
+        // Срок наблюдения вышел.
+        val expired = pool.filterValues { now - it.lastSeenAt > RETENTION_MS }.keys.toList()
+        expired.forEach { pool.remove(it) }
+        removed += expired
+
+        // Потолок пула: дольше всех не показывавшиеся источником (а среди них — слабейшие по баллу) уходят первыми.
+        if (pool.size > POOL_LIMIT) {
+            val overflow = pool.entries
+                .sortedWith(compareBy<Map.Entry<String, Member>> { it.value.lastSeenAt }.thenBy { it.value.candidate.score })
+                .take(pool.size - POOL_LIMIT)
+                .map { it.key }
+            overflow.forEach { pool.remove(it) }
+            removed += overflow
+        }
+
+        cache.remove(removed)
+        cache.put(pool.values.map { it.candidate })
+        cache.cleanup()
+        return true
     }
+
+    companion object {
+        /** Как часто опрашиваются источники новых монет. */
+        const val DISCOVERY_INTERVAL_MS = 5 * 60_000L
+
+        /** Метрики пула не старше этого: стратегии сканируют раз в ~30 с, со сдвигом друг от друга. */
+        const val REFRESH_INTERVAL_MS = 20_000L
+
+        /** Сколько монета остаётся под наблюдением после последнего показа источником. */
+        const val RETENTION_MS = 2 * 60 * 60_000L
+
+        /** Потолок пула: два пакетных запроса метрик на обновление. */
+        const val POOL_LIMIT = 60
+
+        /** Повтор опроса источников, когда прошлый ничего не дал (пул пуст или метрики не ответили). */
+        private const val DISCOVERY_RETRY_MS = 60_000L
+
+        /** SOL, USDC, USDT — не мемкоины: в трендовых пулах они бывают базовой монетой. */
+        private val MAJOR_MINTS = setOf(
+            "So11111111111111111111111111111111111111112",
+            "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+            "Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB",
+        )
+    }
+}
+
+/** Пул с ликвидностью ниже этого сканеру не нужен: он пуст или уже осушён. */
+internal const val MIN_POOL_LIQUIDITY_USD = 3_000.0
+
+/** Капитализация больше стольких ликвидностей — из пула не выйти без огромного слиппеджа. */
+private const val MAX_FDV_TO_LIQUIDITY = 100.0
+
+/** Продаж за сутки больше покупок во столько раз — монету сливают. */
+private const val MAX_SELLS_TO_BUYS_H24 = 3.0
+
+/**
+ * Грубый отсев пула (чистая функция): причина, по которой монету не стоит показывать стратегиям, или null.
+ *
+ * Объём, во много раз превышающий ликвидность, и ноль покупок за последние 5 минут причиной отказа НЕ
+ * являются. Первое — обычное дело для монеты в первые часы жизни, второе — для монеты в накоплении, которое
+ * стратегии и ищут. Раньше оба правила были, и сканер не показывал ни самые активные монеты, ни самые спокойные.
+ */
+internal fun scanRejection(pair: TokenPair): String? {
+    val liquidity = pair.liquidity?.usd ?: return "нет данных о ликвидности"
+    val valuation = pair.fdv ?: pair.marketCap ?: return "нет данных о капитализации"
+    if (liquidity < MIN_POOL_LIQUIDITY_USD) return "ликвидность пула ниже $${MIN_POOL_LIQUIDITY_USD.toInt()}"
+    if (valuation / liquidity > MAX_FDV_TO_LIQUIDITY) return "капитализация больше ${MAX_FDV_TO_LIQUIDITY.toInt()} ликвидностей"
+    val buys = pair.txns?.h24?.buys ?: 0
+    val sells = pair.txns?.h24?.sells ?: 0
+    if (buys > 0 && sells.toDouble() / buys > MAX_SELLS_TO_BUYS_H24) return "продаж за сутки втрое больше покупок"
+    return null
 }
 
 /**

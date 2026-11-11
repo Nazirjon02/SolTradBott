@@ -391,12 +391,5 @@ object Backtester {
     }
 
     /** Фильтры сканера стратегии (ликвидность / капитализация / возраст), как в TokenScanner. */
-    internal fun passesScanFilters(config: StrategyConfig, c: TokenCandidate): Boolean {
-        val f = config.scanFilters()
-        return !f.filtersEnabled || (
-            c.liquidityUsd >= f.minLiquidityUsd &&
-                c.marketCap in f.minMarketCap..f.maxMarketCap &&
-                c.tokenAgeMinutes in f.minTokenAgeMinutes..f.maxTokenAgeMinutes
-            )
-    }
+    internal fun passesScanFilters(config: StrategyConfig, c: TokenCandidate): Boolean = config.scanFilters().passes(c)
 }

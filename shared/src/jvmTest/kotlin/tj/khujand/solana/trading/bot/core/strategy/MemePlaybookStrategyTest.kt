@@ -48,6 +48,14 @@ class MemePlaybookStrategyTest {
         assertTrue(signal.reason.startsWith("Мем-плейбук"), signal.reason)
     }
 
+    @Test fun entryIsTriggerCloseNotScannerPrice() = runBlocking {
+        // Цена кандидата из сканера отстала от графика: вход и стоп считаются от закрытия триггера (1.60).
+        val signal = strategy().analyze(candidate.copy(priceUsd = 1.30), MemeFixtures.setup(), emptyList())
+        assertNotNull(signal)
+        assertEquals(1.60, signal.entryPrice)
+        assertTrue(signal.stopLoss in 1.25..1.39, "стоп под минимумом отката, а не под ценой сканера: ${signal.stopLoss}")
+    }
+
     @Test fun rejectsLiveMintOrFreezeAuthority() = runBlocking {
         assertNull(strategy(mintInfo = clean.copy(hasMintAuthority = true)).analyze(candidate, MemeFixtures.setup(), emptyList()))
         assertNull(strategy(mintInfo = clean.copy(hasFreezeAuthority = true)).analyze(candidate, MemeFixtures.setup(), emptyList()))

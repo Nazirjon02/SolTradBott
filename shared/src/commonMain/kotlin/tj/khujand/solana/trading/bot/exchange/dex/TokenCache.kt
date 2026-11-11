@@ -27,13 +27,11 @@ data class TokenCandidate(
 )
 
 /**
- * Кеш кандидатов сканера в БД. TTL по умолчанию 5 минут:
- * пока записи свежие — сканер не дёргает DexScreener заново.
+ * Список наблюдения сканера в БД: [TokenScanner] кладёт сюда монеты пула со свежими метриками
+ * ([TokenCandidate.scannedAt] — когда метрики обновлены) и убирает выбывшие. UI, Telegram и сервер
+ * читают [all]; после перезапуска сканер поднимает пул отсюда же.
  */
-class TokenCache(
-    private val db: DrxDatabase,
-    private val ttlMs: Long = 5 * 60_000L,
-) {
+class TokenCache(private val db: DrxDatabase) {
     fun all(): List<TokenCandidate> =
         db.tokenCacheQueries.getAll().executeAsList().map { row ->
             TokenCandidate(
@@ -56,33 +54,37 @@ class TokenCache(
             )
         }
 
-    /** Свежие записи (не старше TTL). Пустой список = кеш протух, нужен рескан. */
-    fun fresh(): List<TokenCandidate> {
-        val cutoff = now() - ttlMs
-        return all().filter { it.scannedAt >= cutoff }
+    /** Записывает (обновляет) монеты одной транзакцией: пул обновляется целиком каждые несколько секунд. */
+    fun put(candidates: List<TokenCandidate>) {
+        if (candidates.isEmpty()) return
+        db.transaction {
+            candidates.forEach { c ->
+                db.tokenCacheQueries.upsert(
+                    mint = c.mint,
+                    symbol = c.symbol,
+                    name = c.name,
+                    pair_address = c.pairAddress,
+                    dex_id = c.dexId,
+                    price_usd = c.priceUsd,
+                    liquidity_usd = c.liquidityUsd,
+                    market_cap = c.marketCap,
+                    volume_h1_usd = c.volumeH1Usd,
+                    buys_h1 = c.buysH1.toLong(),
+                    sells_h1 = c.sellsH1.toLong(),
+                    price_change_m5 = c.priceChangeM5,
+                    price_change_h1 = c.priceChangeH1,
+                    token_age_minutes = c.tokenAgeMinutes,
+                    score = c.score,
+                    scanned_at = c.scannedAt,
+                )
+            }
+        }
     }
 
-    fun put(candidates: List<TokenCandidate>) {
-        candidates.forEach { c ->
-            db.tokenCacheQueries.upsert(
-                mint = c.mint,
-                symbol = c.symbol,
-                name = c.name,
-                pair_address = c.pairAddress,
-                dex_id = c.dexId,
-                price_usd = c.priceUsd,
-                liquidity_usd = c.liquidityUsd,
-                market_cap = c.marketCap,
-                volume_h1_usd = c.volumeH1Usd,
-                buys_h1 = c.buysH1.toLong(),
-                sells_h1 = c.sellsH1.toLong(),
-                price_change_m5 = c.priceChangeM5,
-                price_change_h1 = c.priceChangeH1,
-                token_age_minutes = c.tokenAgeMinutes,
-                score = c.score,
-                scanned_at = c.scannedAt,
-            )
-        }
+    /** Убирает монеты, выбывшие из пула сканера (осушенный пул, вышел срок наблюдения). */
+    fun remove(mints: Collection<String>) {
+        if (mints.isEmpty()) return
+        db.transaction { mints.forEach { db.tokenCacheQueries.deleteByMint(it) } }
     }
 
     /** Чистка протухших записей (старше 24ч), чтобы кеш не рос бесконечно. */

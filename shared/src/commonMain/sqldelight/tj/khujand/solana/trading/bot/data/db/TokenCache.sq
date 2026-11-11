@@ -35,3 +35,6 @@ DELETE FROM token_cache WHERE scanned_at < ?;
 
 deleteAll:
 DELETE FROM token_cache;
+
+deleteByMint:
+DELETE FROM token_cache WHERE mint = ?;

@@ -45,6 +45,7 @@ import tj.khujand.solana.trading.bot.core.engine.toPositionState
 import tj.khujand.solana.trading.bot.core.engine.tradeLines
 import tj.khujand.solana.trading.bot.core.strategy.Evaluation
 import tj.khujand.solana.trading.bot.core.strategy.StrategyConfig
+import tj.khujand.solana.trading.bot.core.strategy.closedBarsOnly
 import tj.khujand.solana.trading.bot.core.strategy.createStrategy
 import tj.khujand.solana.trading.bot.core.strategy.toStrategyConfig
 import tj.khujand.solana.trading.bot.domain.backtest.timeframeMs
@@ -124,7 +125,8 @@ fun BotChartScreen(runtime: DrxRuntime?, target: ChartTarget, onClose: () -> Uni
         val client = runtime?.client ?: return@LaunchedEffect
         while (true) {
             try {
-                val c = client.getCandles(target.pairAddress, tf, 200)
+                // График — с незакрытым баром, когда лимит API это позволяет (ключ CoinGecko); иначе закрытые бары.
+                val c = client.getCandles(target.pairAddress, tf, 200, live = true)
                 if (c.isNotEmpty()) {
                     candles = c
                     status = ""
@@ -135,7 +137,9 @@ fun BotChartScreen(runtime: DrxRuntime?, target: ChartTarget, onClose: () -> Uni
                     val now = Clock.System.now().toEpochMilliseconds()
                     val candidate = runtime.tokenCache.all().firstOrNull { it.mint == target.mint }
                         ?: client.getPairDetails(target.pairAddress)?.toTokenCandidate(now)
-                    evaluation = candidate?.let { createStrategy(config, client).evaluate(it, c, emptyList()) }
+                    // Разбор — по закрытым барам, как у бота: иначе график показывал бы решение, которого бот не принимал.
+                    val closed = closedBarsOnly(c, timeframeMs(tf), now)
+                    evaluation = candidate?.let { createStrategy(config, client).evaluate(it, closed, emptyList()) }
                 }
             } catch (e: CancellationException) {
                 throw e

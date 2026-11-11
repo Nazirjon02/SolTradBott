@@ -24,9 +24,12 @@ import tj.khujand.solana.trading.bot.exchange.dex.TokenCandidate
  *  5) тренд старшего ТФ восходящий (fail-closed: нет данных — нет входа). Старший ТФ тянется
  *     только когда сетап на рабочем ТФ уже найден — экономим лимит GeckoTerminal.
  *
- * Последняя свеча может быть ещё формирующейся — тогда триггер работает как стоп-ордер на покупку
- * выше максимума предыдущего бара. Выходы — общие для всех стратегий (R-лестница, раннер,
- * ATR-трейлинг в [tj.khujand.solana.trading.bot.core.engine.TradeMonitor]).
+ * Свечи приходят закрытыми ([tj.khujand.solana.trading.bot.exchange.dex.CandleStore]): триггер — последний
+ * закрытый бар, как в бэктесте. Вход внутри бара, не дожидаясь закрытия, даёт взведённый вход
+ * ([StrategyConfig.armedEntryEnabled]). Цена входа — закрытие триггера: от него посчитан стоп, а цена
+ * кандидата из сканера к сетапу отношения не имеет; ушла живая цена дальше 3% — вход отменит StrategyManager.
+ * Выходы — общие для всех стратегий (R-лестница, раннер, ATR-трейлинг в
+ * [tj.khujand.solana.trading.bot.core.engine.TradeMonitor]).
  *
  * @param htfSource источник свечей старшего ТФ (пул, таймфрейм "15m", лимит). Инъекция — для тестов.
  */
@@ -51,9 +54,6 @@ class BreakoutPullbackStrategy(
         candles: List<Candle>,
         higherTfCandles: List<Candle>,
     ): Evaluation {
-        val entry = candidate.priceUsd
-        if (entry <= 0.0) return Evaluation.stoppedAt(1, STAGES, "нет цены кандидата")
-
         val setup = when (val r = BreakoutPullbackDetector.detect(candles, config)) {
             is BreakoutPullbackResult.Reject -> {
                 val base = Evaluation.stoppedAt(r.stage, STAGES, r.reason, r.level)
@@ -66,6 +66,10 @@ class BreakoutPullbackStrategy(
         }
 
         htfRejection(candidate, higherTfCandles)?.let { return Evaluation.stoppedAt(STAGES, STAGES, it) }
+
+        // Сетап найден — свечи не пусты; закрытие триггера и есть цена, от которой детектор считал стоп.
+        val entry = candles.last().close
+        if (entry <= 0.0) return Evaluation.stoppedAt(STAGES, STAGES, "нет цены входа", setup.pivot)
 
         val signal = Signal(
             mint = candidate.mint,

@@ -469,7 +469,8 @@ fun AnalysisScreen(
                                 NoticeCard(
                                     "Разбор ещё не запускали",
                                     "Разберу ${batch.size} ${plural(batch.size, "монету", "монеты", "монет")} сканера по методике Dars ($tfLabel). " +
-                                        "Каждая монета — два запроса свечей к GeckoTerminal (~30 запросов/мин), поэтому скан идёт постепенно.",
+                                        "Каждая монета — два запроса свечей к GeckoTerminal, а они идут по очереди " +
+                                        "(без ключа CoinGecko — 4 в минуту), поэтому скан идёт постепенно.",
                                     action = "Разобрать ${batch.size}"
                                 ) { analyzer.startScan(batch, darsConfig) }
                             }
@@ -833,7 +834,7 @@ private fun ScanLimitRow(available: Int, selected: Int, limit: Int, enabled: Boo
         }
         if (selected > 30) {
             Spacer(Modifier.height(6.dp))
-            Text("Много монет — скан дольше из-за лимита GeckoTerminal (~30 запросов/мин)",
+            Text("Много монет — скан дольше: запросы свечей к GeckoTerminal идут по очереди",
                 fontSize = 10.sp, color = TextSecondary)
         }
     }

@@ -4,6 +4,7 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 import tj.khujand.solana.trading.bot.data.BotStatus
+import tj.khujand.solana.trading.bot.exchange.dex.CandleFeedStatus
 import tj.khujand.solana.trading.bot.shouldResumeOnLaunch
 
 /** `/health`, список ошибок сессии и автозапуск: то, по чему видно, что бот не торгует, хотя должен. */
@@ -51,6 +52,30 @@ class HealthTest {
         // Последний ответ — до остановки, движок запущен минуту назад: ещё рано звать на помощь.
         val r = healthReport(BotStatus.RUNNING, BotStatus.RUNNING.name, "DEMO", lastOkAt = minAgo(40), engineStartedAt = minAgo(1), nowMs = now)
         assertEquals("ok", r.status)
+    }
+
+    @Test
+    fun dataProblemsDegradeOnlyRunningBot() {
+        val problem = listOf("ключ CoinGecko отклонён")
+        val running = healthReport(BotStatus.RUNNING, BotStatus.RUNNING.name, "DEMO", minAgo(1), minAgo(30), now, dataProblems = problem)
+        assertEquals("degraded", running.status)
+        assertEquals(problem, running.problems)
+        val stopped = healthReport(BotStatus.STOPPED, BotStatus.STOPPED.name, "DEMO", minAgo(1), minAgo(30), now, dataProblems = problem)
+        assertEquals("ok", stopped.status)
+    }
+
+    @Test
+    fun candleFeedProblemsNameRejectedKeyAndStarvation() {
+        assertTrue(candleFeedProblems(CandleFeedStatus(lastOkAtMs = minAgo(1)), now).isEmpty())
+        assertTrue(candleFeedProblems(CandleFeedStatus(keyRejected = true), now).single().contains("отклонён"))
+
+        // Единичный отказ по лимиту — не проблема: после него запросы ждут паузу и идут дальше.
+        val oneRefusal = CandleFeedStatus(rateLimitHits = 1, lastRateLimitAtMs = minAgo(2), lastOkAtMs = minAgo(1))
+        assertTrue(candleFeedProblems(oneRefusal, now).isEmpty())
+
+        // Свечи приходили, но уже 15 минут источник только отказывает.
+        val starved = CandleFeedStatus(rateLimitHits = 9, lastRateLimitAtMs = minAgo(1), lastOkAtMs = minAgo(15))
+        assertTrue(candleFeedProblems(starved, now).single().startsWith("свечи не приходят 15 мин"))
     }
 
     @Test

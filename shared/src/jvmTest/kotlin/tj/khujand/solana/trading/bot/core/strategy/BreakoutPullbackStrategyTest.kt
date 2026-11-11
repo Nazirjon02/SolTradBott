@@ -44,6 +44,14 @@ class BreakoutPullbackStrategyTest {
         assertTrue(signal.reason.startsWith("Пробой+откат"), signal.reason)
     }
 
+    @Test fun entryIsTriggerCloseNotScannerPrice() = runBlocking {
+        // Цена кандидата из сканера отстала от графика: вход и стоп считаются от закрытия триггера (1.38).
+        val signal = strategy(htfUp).analyze(candidate.copy(priceUsd = 1.20), BreakoutFixtures.setup(), emptyList())
+        assertNotNull(signal)
+        assertEquals(1.38, signal.entryPrice)
+        assertTrue(signal.stopLoss in 1.20..1.32, "стоп под минимумом отката 1.30, а не под ценой сканера: ${signal.stopLoss}")
+    }
+
     @Test fun rejectsAgainstHigherTimeframeDowntrend() = runBlocking {
         assertNull(strategy(htfDown).analyze(candidate, BreakoutFixtures.setup(), emptyList()))
     }

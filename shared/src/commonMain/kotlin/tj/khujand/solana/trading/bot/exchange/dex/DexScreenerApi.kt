@@ -19,11 +19,6 @@ import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.async
-import kotlinx.coroutines.awaitAll
-import kotlinx.coroutines.coroutineScope
-import kotlinx.coroutines.sync.Semaphore
-import kotlinx.coroutines.sync.withPermit
 import kotlin.time.Clock
 
 // МОДЕЛИ ДАННЫХ (перенесем сюда чтобы все в одном месте)
@@ -344,13 +339,17 @@ class DexScreenerApi {
         explicitNulls = false
     }
 
-    private val maxProfileTokens = 25
-    private val minRequestDelayMs = 700L
     private val maxRetries = 3
-    private val maxDetailRequestsInFlight = 2
     private val boostsCooldownMs = 90_000L
-    private var useBoostsNext = true
     private var boostsRateLimitedUntilMs = 0L
+
+    private companion object {
+        /** Столько адресов DexScreener принимает в одном запросе `tokens/v1`. */
+        const val TOKENS_BATCH_SIZE = 30
+
+        /** Сколько монет берём из одного списка рекламы за опрос. */
+        const val DISCOVERY_LIMIT = 30
+    }
 
     /**
      * Цена токена в USD по его самой ликвидной паре, где он — БАЗОВАЯ монета. В ответе бывают
@@ -366,141 +365,50 @@ class DexScreenerApi {
         return pair?.priceUsd?.toDoubleOrNull()
     }
 
-    // ✅ УЛУЧШЕННЫЙ МЕТОД: Получение НОВЫХ токенов Solana (выбор API через настройки)
-    suspend fun getNewTokens(settings: FilterSettings): List<TokenPair> {
-        val allTokens = mutableListOf<TokenPair>()
-
-        try {
-            val useBoostsNow = useBoostsNext
-            useBoostsNext = !useBoostsNext
-
-            // По очереди: boosts -> profiles -> boosts...
-            if (useBoostsNow) {
-                println("🔍 Поиск новых токенов через token-boosts...")
-                val boostTokens = getLatestTokenBoosts(settings)
-                if (boostTokens.isNotEmpty()) {
-                    println("🧩 Найдено токенов через token-boosts: ${boostTokens.size}")
-                    allTokens.addAll(boostTokens)
-                } else {
-                    println("⚠️ token-boosts не вернул данные или пусто")
-                    println("🔁 Fallback: пробуем token-profiles в этом же цикле...")
-                    val profileTokens = getLatestTokenProfilePairs(settings)
-                    if (profileTokens.isNotEmpty()) {
-                        println("🧩 Найдено токенов через token-profiles: ${profileTokens.size}")
-                        allTokens.addAll(profileTokens)
-                    } else {
-                        println("⚠️ token-profiles тоже вернул пусто")
-                    }
-                }
-            } else {
-                println("🔍 Поиск новых токенов через token-profiles...")
-                val profileTokens = getLatestTokenProfilePairs(settings)
-                if (profileTokens.isNotEmpty()) {
-                    println("🧩 Найдено токенов через token-profiles: ${profileTokens.size}")
-                    allTokens.addAll(profileTokens)
-                } else {
-                    println("⚠️ token-profiles не вернул данные или пусто")
-                    println("🔁 Fallback: пробуем token-boosts в этом же цикле...")
-                    val boostTokens = getLatestTokenBoosts(settings)
-                    if (boostTokens.isNotEmpty()) {
-                        println("🧩 Найдено токенов через token-boosts: ${boostTokens.size}")
-                        allTokens.addAll(boostTokens)
-                    } else {
-                        println("⚠️ token-boosts тоже вернул пусто")
-                    }
-                }
-            }
-
-            println("🔗 Всего пар найдено: ${allTokens.size}")
-
-            // Убираем дубликаты
-            val uniqueTokens = allTokens.distinctBy { it.pairAddress ?: it.baseToken?.address }
-            println("🔗 Уникальных пар: ${uniqueTokens.size}")
-
-            // Применяем фильтры для поиска НОВЫХ токенов
-            val filtered = uniqueTokens.filter { token ->
-                if (token.pairAddress.isNullOrEmpty()) return@filter false
-                if (token.baseToken?.address.isNullOrEmpty()) return@filter false
-                if (token.baseToken.symbol.isNullOrEmpty()) return@filter false
-
-                // 1. 🔗 Проверка цепочки (только Solana)
-                // Раньше здесь было `!chains.contains("solana") && chainId != "solana"`:
-                // левая часть всегда false (chains = ["solana"]), поэтому условие не срабатывало
-                // никогда и пары чужих сетей не отсеивались вовсе.
-                if (settings.chains.isNotEmpty() && token.chainId !in settings.chains) {
-                    return@filter false
-                }
-
-                // 2. ⏰ Проверка возраста (НОВЫЕ токены)
-                val createdAtMs = normalizePairCreatedAtMs(token.pairCreatedAt)
-                val ageOk = if (createdAtMs != null) {
-                    val ageHours = (Clock.System.now().toEpochMilliseconds() - createdAtMs) / (1000.0 * 60.0 * 60.0)
-                    val isNew = ageHours <= settings.pairMaxAgeHours
-                    if (isNew) {
-                        println("🆕 НОВЫЙ: ${token.baseToken.symbol} (возраст: ${ageHours}ч)")
-                    }
-                    isNew
-                } else {
-                    println("⚠️ ${token.baseToken.symbol}: нет даты создания пары, пропускаем фильтр возраста")
-                    true
-                }
-
-                if (!ageOk) return@filter false
-
-                // Режим «Только Dars»: momentum-фильтры первичного отбора смягчаются,
-                // чтобы спокойные трендовые монеты дошли до анализа по методике.
-                val darsOnly = settings.darsEnabled && settings.darsOnlyMode
-
-                // 3. 💰 Проверка объема (24h / 5m по флагам)
-                val volumeH24Ok = if (settings.useVolumeH24) {
-                    (token.volume?.h24 ?: 0.0) >= settings.entryMinVolume
-                } else true
-                val volumeM5Ok = if (settings.useVolumeM5) {
-                    (token.volume?.m5 ?: 0.0) >= settings.entryMinVolumeM5
-                } else true
-                val volumeOk = if (darsOnly) true else volumeH24Ok && volumeM5Ok
-
-                // 4. 💧 Проверка ликвидности (должна быть >= liquidityMinUsd)
-                val liquidityOk = (token.liquidity?.usd ?: 0.0) >= settings.liquidityMinUsd
-
-                // 5. 🚨 Проверка на скам (если включено)
-                val notScam = if (settings.excludeRugPull) {
-                    !isPotentialScam(token)
-                } else true
-
-                // 6. 📈 Buys/Sells ratio M5 > min (если фильтр включён)
-                val buysM5 = token.txns?.m5?.buys ?: 0
-                val sellsM5 = token.txns?.m5?.sells ?: 0
-                val ratioOk = if (darsOnly || !settings.useMinBuysToSellsRatioM5) true else when {
-                    sellsM5 == 0 -> buysM5 > 0
-                    else -> (buysM5.toDouble() / sellsM5) >= settings.minBuysToSellsRatioM5
-                }
-
-                // 7. 📈 Price ↑ за 5 мин (если фильтр включён; если m5 нет в API — пропускаем)
-                val pricePumpOk = if (darsOnly || !settings.useMinPriceChangeM5Pct) true
-                else token.priceChange?.m5?.let { it >= settings.minPriceChangeM5Pct } ?: true
-
-                volumeOk && liquidityOk && notScam && ratioOk && pricePumpOk
-            }
-
-            println("✅ После фильтрации (только НОВЫЕ): ${filtered.size}")
-
-            // Ограничиваем количество токенов за один тик
-            val limited = filtered.take(settings.maxTokensPerTick)
-
-            // Сортируем по времени создания (самые новые первыми)
-            return limited.sortedByDescending { it.pairCreatedAt ?: 0L }
-
-        } catch (e: CancellationException) {
-            throw e
-        } catch (e: Exception) {
-            println("❌ Ошибка получения токенов: ${e.message}")
-            e.printStackTrace()
+    /**
+     * Лучшие пары монет — по одной на монету — пакетными запросами по [TOKENS_BATCH_SIZE] адресов
+     * (`tokens/v1`, лимит 300 запросов в минуту). Так сканер обновляет метрики всего пула за один-два
+     * запроса вместо запроса на каждую монету.
+     *
+     * [PairsResult.answered] — монеты из пачек, на которые DexScreener ответил: монета оттуда без пары
+     * больше не торгуется; пачка со сбоем сети в [PairsResult.answered] не попадает.
+     */
+    suspend fun getBestPairs(chainId: String, mints: List<String>): PairsResult {
+        val pairs = ArrayList<TokenPair>()
+        val answered = HashSet<String>()
+        for (chunk in mints.distinct().chunked(TOKENS_BATCH_SIZE)) {
+            val url = "https://api.dexscreener.com/tokens/v1/$chainId/${chunk.joinToString(",")}"
+            // Сбой сети или лимит (после повторов) — пачку пропускаем: о её монетах ничего не известно.
+            val element = getJsonElementWithRetry(url) ?: continue
+            pairs += parsePairsFromJson(element)
+            answered += chunk
         }
-
-        return emptyList()
+        return PairsResult(pairs, answered)
     }
 
+    /**
+     * Адреса монет Solana со свежими бустами (платное продвижение на DexScreener), новые первыми.
+     * Пусто — сбой, лимит или пауза после отказа 429 (у эндпоинта свой лимит — 60 запросов в минуту).
+     */
+    suspend fun latestBoostMints(): List<String> {
+        if (boostsRateLimitedUntilMs > Clock.System.now().toEpochMilliseconds()) return emptyList()
+        val element = getJsonElementWithRetry("https://api.dexscreener.com/token-boosts/latest/v1") ?: return emptyList()
+        return parseTokenBoostsFromJson(element)
+            .filter { it.chainId == "solana" }
+            .mapNotNull { it.tokenAddress?.takeIf { address -> address.isNotBlank() } }
+            .distinct()
+            .take(DISCOVERY_LIMIT)
+    }
+
+    /** Адреса монет Solana со свежими профилями (платная карточка монеты на DexScreener). Пусто — сбой или лимит. */
+    suspend fun latestProfileMints(): List<String> {
+        val element = getJsonElementWithRetry("https://api.dexscreener.com/token-profiles/latest/v1") ?: return emptyList()
+        return parseTokenProfilesFromJson(element)
+            .filter { it.chainId == "solana" }
+            .mapNotNull { it.tokenAddress?.takeIf { address -> address.isNotBlank() } }
+            .distinct()
+            .take(DISCOVERY_LIMIT)
+    }
 
     // ✅ РАБОЧИЙ МЕТОД: Получить информацию о токене
     suspend fun getTokenDetails(pairAddress: String): TokenPair? {
@@ -602,156 +510,8 @@ class DexScreenerApi {
     }
 
 
-    // 🚨 Проверка на потенциальный скам
-    private fun isPotentialScam(token: TokenPair): Boolean {
-        // Простые проверки:
-
-        // 1. Слишком большая разница между FDV и ликвидностью
-        if (token.fdv == null || token.liquidity?.usd == null) return true
-        val fdvToLiquidityRatio = token.fdv / token.liquidity.usd
-
-        if (fdvToLiquidityRatio > 100) return true
-
-        // 2. Слишком много продаж vs покупок
-        val sells = token.txns?.h24?.sells ?: 0
-        val buys = token.txns?.h24?.buys ?: 0
-        if (sells > 0 && buys > 0 && sells.toDouble() / buys > 3) return true
-
-        // 3. Слишком маленькая ликвидность при большом объеме
-        val volumeToLiquidityRatio = (token.volume?.h24 ?: 0.0) / token.liquidity.usd
-        if (volumeToLiquidityRatio > 10) return true
-
-        // 4. Нет ликвидности или она заблокирована слишком слабо
-        if (token.liquidity.usd < 3000) return true
-
-        // 5. Нет покупок вообще
-        val buys5m = token.txns?.m5?.buys ?: 0
-        if (buys5m == 0) return true
-
-        return false
-    }
-
     fun close() {
         client.close()
-    }
-
-    private suspend fun getSearchTokens(settings: FilterSettings): List<TokenPair> {
-        val searchQueries = listOf(
-            "Raydium",
-            "Orca",
-            "Meteora",
-            "Pump.fun",
-            "PumpSwap",
-            "Bags",
-        )
-
-        val searchTokens = mutableListOf<TokenPair>()
-        for (query in searchQueries) {
-            try {
-                println("🔍 Поиск по запросу: $query")
-
-                val url = "https://api.dexscreener.com/latest/dex/search"
-                val jsonElement = getJsonElementWithRetry(url, mapOf("q" to query))
-                if (jsonElement != null) {
-                    val pairs = parsePairsFromJson(jsonElement)
-                    val filteredByChain = if (settings.chains.isEmpty()) {
-                        pairs
-                    } else {
-                        pairs.filter { settings.chains.contains(it.chainId) }
-                    }
-                    println("📊 Получено пар для '$query': ${filteredByChain.size}")
-                    searchTokens.addAll(filteredByChain)
-                }
-            } catch (e: CancellationException) {
-                throw e
-            } catch (e: Exception) {
-                println("⚠️ Ошибка при поиске '$query': ${e.message}")
-            }
-        }
-
-        return searchTokens
-    }
-
-    // ✅ НОВЫЙ МЕТОД: Получение токенов через token-boosts/latest/v1 (оптимизировано с параллельными запросами)
-    private suspend fun getLatestTokenBoosts(settings: FilterSettings): List<TokenPair> {
-        val nowMs = Clock.System.now().toEpochMilliseconds()
-        if (boostsRateLimitedUntilMs > nowMs) {
-            val waitSec = ((boostsRateLimitedUntilMs - nowMs) / 1000L).coerceAtLeast(1L)
-            println("⏸️ token-boosts cooldown активен, ждём ~${waitSec}с")
-            return emptyList()
-        }
-
-        val url = "https://api.dexscreener.com/token-boosts/latest/v1"
-        val jsonElement = getJsonElementWithRetry(url) ?: return emptyList()
-        
-        // Парсим массив токенов из ответа
-        val boosts = parseTokenBoostsFromJson(jsonElement)
-        
-        // Фильтруем только Solana токены
-        val solanaTokens = boosts
-            .filter { it.chainId == "solana" && !it.tokenAddress.isNullOrBlank() }
-            .take((settings.maxTokensPerTick * 6).coerceAtLeast(8).coerceAtMost(maxProfileTokens))
-        
-        if (solanaTokens.isEmpty()) return emptyList()
-
-        // ✅ ОПТИМИЗАЦИЯ: Параллельные запросы для получения деталей токенов
-        return coroutineScope {
-            val semaphore = Semaphore(maxDetailRequestsInFlight)
-            solanaTokens.map { boost ->
-                async {
-                    semaphore.withPermit {
-                        val tokenAddress = boost.tokenAddress ?: return@withPermit emptyList<TokenPair>()
-                        try {
-                            val tokenPairs = getTokenPairsForAddress("solana", tokenAddress)
-                            delay(minRequestDelayMs) // Задержка для rate limiting
-                            tokenPairs
-                        } catch (e: CancellationException) {
-                            throw e
-                        } catch (e: Exception) {
-                            println("⚠️ Ошибка получения пар для $tokenAddress: ${e.message}")
-                            emptyList()
-                        }
-                    }
-                }
-            }.awaitAll().flatten()
-        }
-    }
-    
-    private suspend fun getLatestTokenProfilePairs(settings: FilterSettings): List<TokenPair> {
-        val url = "https://api.dexscreener.com/token-profiles/latest/v1"
-        val jsonElement = getJsonElementWithRetry(url) ?: return emptyList()
-        val profiles = parseTokenProfilesFromJson(jsonElement)
-
-        val recentTokens = profiles.mapNotNull { profile ->
-            val chainId = profile.chainId
-            val tokenAddress = profile.tokenAddress
-            if (chainId.isNullOrBlank() || tokenAddress.isNullOrBlank()) return@mapNotNull null
-            if (settings.chains.isNotEmpty() && !settings.chains.contains(chainId)) return@mapNotNull null
-            chainId to tokenAddress
-        }.distinct().take((settings.maxTokensPerTick * 6).coerceAtLeast(8).coerceAtMost(maxProfileTokens))
-
-        if (recentTokens.isEmpty()) return emptyList()
-
-        // ✅ ОПТИМИЗАЦИЯ: Параллельные запросы для получения деталей токенов
-        return coroutineScope {
-            val semaphore = Semaphore(maxDetailRequestsInFlight)
-            recentTokens.map { (chainId, tokenAddress) ->
-                async {
-                    semaphore.withPermit {
-                        try {
-                            val tokenPairs = getTokenPairsForAddress(chainId, tokenAddress)
-                            delay(minRequestDelayMs) // Задержка для rate limiting
-                            tokenPairs
-                        } catch (e: CancellationException) {
-                            throw e
-                        } catch (e: Exception) {
-                            println("⚠️ Ошибка получения пар для $chainId/$tokenAddress: ${e.message}")
-                            emptyList()
-                        }
-                    }
-                }
-            }.awaitAll().flatten()
-        }
     }
 
     private suspend fun getTokenPairsForAddress(chainId: String, tokenAddress: String): List<TokenPair> {
@@ -858,11 +618,6 @@ class DexScreenerApi {
         return array.mapNotNull { element ->
             runCatching { json.decodeFromJsonElement<TokenBoost>(element) }.getOrNull()
         }
-    }
-
-    private fun normalizePairCreatedAtMs(value: Long?): Long? {
-        if (value == null || value <= 0L) return null
-        return if (value < 1_000_000_000_000L) value * 1000 else value
     }
 }
 

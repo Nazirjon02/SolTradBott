@@ -34,7 +34,9 @@ import tj.khujand.solana.trading.bot.core.engine.ActivityLog
 import tj.khujand.solana.trading.bot.core.engine.BotEngine
 import tj.khujand.solana.trading.bot.core.engine.TradeExecutor
 import tj.khujand.solana.trading.bot.core.engine.TradeMonitor
+import tj.khujand.solana.trading.bot.core.engine.candleFeedProblems
 import tj.khujand.solana.trading.bot.core.engine.healthReport
+import tj.khujand.solana.trading.bot.core.engine.watchCandleFeed
 import tj.khujand.solana.trading.bot.core.risk.EntryGuard
 import tj.khujand.solana.trading.bot.core.risk.RiskManager
 import tj.khujand.solana.trading.bot.core.strategy.StrategyManager
@@ -45,6 +47,7 @@ import tj.khujand.solana.trading.bot.data.createDatabaseDriver
 import tj.khujand.solana.trading.bot.data.db.DrxDatabase
 import tj.khujand.solana.trading.bot.exchange.dex.AccountCache
 import tj.khujand.solana.trading.bot.exchange.dex.DexClient
+import tj.khujand.solana.trading.bot.exchange.dex.GeckoTerminalApi
 import tj.khujand.solana.trading.bot.exchange.dex.JupiterSwapQuotes
 import tj.khujand.solana.trading.bot.exchange.dex.TokenCache
 import tj.khujand.solana.trading.bot.exchange.dex.TokenScanner
@@ -72,6 +75,11 @@ fun main() {
     if (config.telegramChatId != 0L && settingsStore.getTelegramChatId() == null) {
         settingsStore.setTelegramChatId(config.telegramChatId)
     }
+    if (config.coinGeckoKey.isNotBlank() && settingsStore.getCoinGeckoKey() == null) {
+        settingsStore.setCoinGeckoKey(config.coinGeckoKey)
+    }
+    // Ключ свечей — до первого запроса: без него GeckoTerminal пускает считаные запросы в минуту.
+    GeckoTerminalApi.setApiKey(settingsStore.getCoinGeckoKey())
 
     val rpcUrl = settingsStore.getRpcUrl() ?: config.rpcUrl
     val client = DexClient(rpcUrl = rpcUrl)
@@ -107,6 +115,9 @@ fun main() {
     // статуса для каждого WebSocket. С обычным Job падение одной корутины (например,
     // send в отвалившийся сокет) отменяло весь scope и молча убивало Telegram-управление.
     val scope = CoroutineScope(Dispatchers.Default + SupervisorJob())
+
+    // Лимит и ключ источника свечей — в ленту активности (UI у сервера нет, но лента видна в логах и Telegram).
+    scope.watchCandleFeed(GeckoTerminalApi.status, activityLog)
 
     // После рестарта процесса (docker `restart: always`, перезагрузка VPS) возвращаем движок в то
     // состояние, в котором его оставили, — как это делает Android-сервис. Иначе бот молча стоял
@@ -144,13 +155,15 @@ fun main() {
         routing {
             // Для внешнего мониторинга: 503 + список проблем, если бот должен торговать, а не торгует.
             get("/health") {
+                val now = System.currentTimeMillis()
                 val report = healthReport(
                     status = engine.getStatus(),
                     desiredState = settingsStore.getDesiredState(),
                     mode = executor.modeLabel(),
                     lastOkAt = activityLog.stats.value.lastOkAt,
                     engineStartedAt = engine.startedAt,
-                    nowMs = System.currentTimeMillis(),
+                    nowMs = now,
+                    dataProblems = candleFeedProblems(GeckoTerminalApi.status.value, now),
                 )
                 call.respond(if (report.problems.isEmpty()) HttpStatusCode.OK else HttpStatusCode.ServiceUnavailable, report)
             }

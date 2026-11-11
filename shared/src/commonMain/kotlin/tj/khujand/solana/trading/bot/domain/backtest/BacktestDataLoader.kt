@@ -13,8 +13,8 @@ import tj.khujand.solana.trading.bot.exchange.dex.OhlcvPage
  * Загрузка истории для бэктеста с GeckoTerminal: список монет (trending / new / top) и свечи
  * за N дней постранично назад (до 1000 свечей на запрос).
  *
- * Бесплатный лимит GeckoTerminal ~30 запросов в минуту: запросы идут не чаще [minRequestIntervalMs],
- * на ответ 429 — пауза [rateLimitBackoffMs] и повтор (до [MAX_RETRIES] раз).
+ * Запросы идут не чаще [minRequestIntervalMs] и через общую очередь GeckoTerminalApi (без ключа CoinGecko —
+ * 4 в минуту, с ключом — 60), на ответ 429 — пауза [rateLimitBackoffMs] и повтор (до [MAX_RETRIES] раз).
  * Источники и часы инъектируются — для тестов без сети и ожидания.
  */
 class BacktestDataLoader(

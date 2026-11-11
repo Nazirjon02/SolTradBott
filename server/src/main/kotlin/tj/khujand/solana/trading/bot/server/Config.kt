@@ -12,6 +12,9 @@ data class DrxConfig(
     val telegramToken: String = env("TG_BOT_TOKEN") ?: "",
     val telegramChatId: Long = env("TG_CHAT_ID")?.toLongOrNull() ?: 0L,
 
+    // Demo-ключ CoinGecko для свечей (бесплатный). Без него GeckoTerminal пускает ~4 запроса в минуту.
+    val coinGeckoKey: String = env("COINGECKO_API_KEY") ?: "",
+
     val serverPort: Int = env("PORT")?.toIntOrNull() ?: 8080,
     // Пусто → сервер генерирует случайный ключ и хранит его в БД (см. resolveApiKey в Application.kt).
     // Раньше дефолтом был общеизвестный "soltrad-secret": любой, кто достучался до порта,

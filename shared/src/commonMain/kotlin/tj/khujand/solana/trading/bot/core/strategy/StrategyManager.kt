@@ -40,9 +40,11 @@ private const val SCAN_INTERVAL_MS = 30_000L
 internal const val MIN_CONFIDENCE = 0.6
 
 /**
- * Максимальный допустимый разбег между ценой кандидата из кеша сканера и живой ценой
- * в момент входа. Кеш живёт до 5 минут — на мемкоинах цена за это время успевает уйти,
- * а от неё считаются qty, SL и TP. Разбег больше порога = «цена убежала», вход отменяем.
+ * Максимальный допустимый разбег между ценой сигнала и живой ценой в момент входа. Цена сигнала — та, от
+ * которой стратегия считала стоп: закрытие последнего закрытого бара (у «Входа по баллу» — цена кандидата,
+ * её сканер освежает каждый цикл). Стоп и тейк тянутся за живой ценой пропорционально, поэтому при большом
+ * разбеге стоп уехал бы от структуры, под которую его ставили. Разбег больше порога = «цена убежала»,
+ * вход отменяем.
  */
 internal const val MAX_ENTRY_PRICE_DRIFT = 0.03
 
@@ -502,7 +504,10 @@ class StrategyManager(
         }
     }
 
-    /** Строка доски наблюдения по разбору кандидата (цена — закрытие последней свечи, она свежее кеша сканера). */
+    /**
+     * Строка доски наблюдения по разбору кандидата. Цена — из сканера: он освежает её каждый цикл, а свечи
+     * теперь только закрытые (закрытие последней — запасной вариант, если цены у кандидата нет).
+     */
     private fun watchItem(
         config: StrategyConfig,
         candidate: TokenCandidate,
@@ -512,7 +517,7 @@ class StrategyManager(
         confidenceOk: Boolean,
         armedPlan: TriggerPlan? = null,
     ): WatchItem {
-        val price = candles.lastOrNull()?.close?.takeIf { it > 0.0 } ?: candidate.priceUsd
+        val price = candidate.priceUsd.takeIf { it > 0.0 } ?: candles.lastOrNull()?.close ?: 0.0
         if (armedPlan != null) {
             return WatchItem(
                 mint = candidate.mint, symbol = candidate.symbol, pairAddress = candidate.pairAddress,
@@ -546,10 +551,10 @@ class StrategyManager(
     }
 
     /**
-     * Перед входом заменяет цену кандидата (из кеша сканера, до 5 минут давности) на живую.
+     * Перед входом заменяет цену сигнала (закрытие последнего закрытого бара или цена кандидата) на живую.
      * SL/TP тянутся за ней пропорционально, поэтому проценты риска сохраняются.
      * Если цена ушла больше чем на [MAX_ENTRY_PRICE_DRIFT] — сетап уже не тот, вход отменяем.
-     * Живой цены нет → идём по цене сканера (лучше вход по старой цене, чем пропуск вслепую).
+     * Живой цены нет → идём по цене сигнала (лучше вход по ней, чем пропуск вслепую).
      */
     private suspend fun withFreshEntryPrice(signal: Signal): Signal? {
         if (signal.entryPrice <= 0.0) return null
@@ -565,7 +570,7 @@ class StrategyManager(
         val drift = abs(live - signal.entryPrice) / signal.entryPrice
         if (drift > MAX_ENTRY_PRICE_DRIFT) {
             activityLog.info(
-                "○ ${signal.symbol}: цена ушла на ${(drift * 100).toInt()}% с момента скана — вход отменён"
+                "○ ${signal.symbol}: цена ушла на ${(drift * 100).toInt()}% от цены сигнала — вход отменён"
             )
             return null
         }

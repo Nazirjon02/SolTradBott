@@ -94,7 +94,7 @@ SolTradBott/
 | `Strategy` | Конфиги стратегий: имя, тип, активность, размер позиции (% от баланса), SL/TP/partial TP/trailing/break-even, фильтры токенов (ликвидность, MC, возраст, объём), параметры Dars/индикаторов, режим (DEMO/REAL) |
 | `Trade` | Журнал сделок: mint-адрес, символ, вход (цена/время/размер SOL и USD), выход, PnL, комиссии+slippage, причина выхода (TP/SL/TRAILING/MANUAL), стратегия, demo-флаг |
 | `AccountCache` | Кеш баланса SOL + USDC (одна строка) — чтобы не дёргать RPC на каждый расчёт |
-| `TokenCache` | Кеш результатов сканера DexScreener (топ-кандидаты с метриками, TTL) |
+| `TokenCache` | Список наблюдения сканера (монеты пула со свежими метриками; выбывшие удаляются) |
 | `Report` | Агрегированные дневные отчёты |
 | `Settings` | Рантайм-настройки: Telegram-токен/чат, ключи, флаги — переживают перезапуск, меняются из Telegram/UI без рестарта |
 
@@ -111,8 +111,8 @@ SolTradBott/
 - После старта сервер НЕ торгует сам — ждёт `/bot/start` (REST) или «🟢 Старт» в Telegram (как в MRX).
 
 ### 4.2 Вход в позицию (pipeline)
-1. `TokenScanner` отдаёт кандидатов из `TokenCache` (свежие мемкоины с DexScreener, прошедшие фильтры: ликвидность, MC, возраст).
-2. Стратегия анализирует OHLCV (GeckoTerminal) → сигнал BUY + confidence.
+1. `TokenScanner` отдаёт кандидатов из общего пула наблюдения (реклама DexScreener + трендовые пулы GeckoTerminal, метрики обновляются пакетно раз в ~20 с) — лучших по баллу под фильтры стратегии: ликвидность, MC, возраст.
+2. Стратегия анализирует закрытые свечи OHLCV (GeckoTerminal, один запрос на бар) → сигнал BUY + confidence.
 3. `RiskManager.canTrade()` — дневной убыток, просадка, лимит открытых позиций.
 4. Расчёт размера: `usdAmount = balance * positionSize / 100` (баланс из `AccountCache`).
 5. Исполнение: **DEMO** → `DemoAccountManager`; **REAL** → котировка Jupiter → своп SOL→token (slippage и priority fee из настроек) → подтверждение транзакции через RPC.
@@ -172,6 +172,7 @@ SOLANA_RPC_URL=          # RPC-эндпоинт (дефолт mainnet-beta)
 DEMO_MODE=true           # true = paper-trading, REAL только когда уверен
 TG_BOT_TOKEN=            # Telegram-бот
 TG_CHAT_ID=0             # единственный разрешённый chat_id
+COINGECKO_API_KEY=       # бесплатный Demo-ключ CoinGecko для свечей (без него ~4 запроса в минуту)
 PORT=8080
 SOLTRAD_API_KEY=                 # Bearer для REST; пусто — сервер сгенерирует ключ и напечатает в лог
 DB_PATH=soltradbot.db
@@ -235,8 +236,8 @@ Desktop и Android рендерят один и тот же `shared/App.kt` (к�
 | Кеш | Аналог в MRX | Что хранит |
 |---|---|---|
 | `AccountCache` (БД) | AccountCache.sq | Баланс SOL/USDC, обновляется фоново, UI/RiskManager читают кеш |
-| `TokenCache` (БД) | TopSymbolCache | Топ-кандидаты сканера с метриками, TTL ~1–5 мин |
-| OHLCV in-memory | кеш свечей в BybitClient | Свечи GeckoTerminal на символ+таймфрейм, чтобы не упираться в rate-limit |
+| `TokenCache` (БД) | TopSymbolCache | Пул наблюдения сканера с метриками не старше ~20 с |
+| OHLCV in-memory (`CandleStore`) | кеш свечей в BybitClient | Закрытые свечи GeckoTerminal на пул+таймфрейм: один запрос на бар, очередь под лимит API |
 | `Settings` (БД) | Settings.sq | Рантайм-настройки, переживают перезапуск |
 
 ---

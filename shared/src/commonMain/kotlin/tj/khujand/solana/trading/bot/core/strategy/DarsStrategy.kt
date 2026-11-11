@@ -50,8 +50,10 @@ class DarsStrategy(
             return Evaluation.stoppedAt(result.stage.coerceAtLeast(1), total, why)
         }
 
-        val entry = candidate.priceUsd
-        if (entry <= 0) return Evaluation.stoppedAt(total, total, "нет цены кандидата")
+        // Движок считает стоп и цель от закрытия последней свечи рабочего ТФ — оно же цена входа. Свечи
+        // стратегии и движка — один и тот же ответ источника; без свечей (их дал только движок) — цена сканера.
+        val entry = candles.lastOrNull()?.close?.takeIf { it > 0.0 } ?: candidate.priceUsd
+        if (entry <= 0) return Evaluation.stoppedAt(total, total, "нет цены входа")
 
         // Стоп «за структурой» (минимум коррекции) + TP у уровня + гейт риск/прибыль.
         // Без приемлемого R:R вход отклоняем — даже верный по форме сетап не берём в убыток.

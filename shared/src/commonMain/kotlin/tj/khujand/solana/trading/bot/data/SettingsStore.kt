@@ -29,6 +29,7 @@ class SettingsStore(private val db: DrxDatabase) {
         const val RPC_URL          = "solana.rpc_url"
         const val WALLET_SEED      = "wallet.seed_phrase"
         const val AI_API_KEY       = "ai.api_key"
+        const val COINGECKO_KEY    = "data.coingecko_key"
         const val ANALYSIS_FAVORITES = "analysis.favorites"
     }
 
@@ -93,6 +94,13 @@ class SettingsStore(private val db: DrxDatabase) {
     fun getWalletSeed(): String?     = get(Keys.WALLET_SEED)?.takeIf { it.isNotBlank() }
     fun setWalletSeed(v: String)     = set(Keys.WALLET_SEED, v)
     fun clearWalletSeed()            = delete(Keys.WALLET_SEED)
+
+    // ─── Данные рынка ────────────────────────────────────────────────────────
+
+    // Demo-ключ CoinGecko для свечей: без него GeckoTerminal пускает считаные запросы в минуту
+    // (см. GeckoTerminalApi). Пусто — работаем без ключа.
+    fun getCoinGeckoKey(): String?   = get(Keys.COINGECKO_KEY)?.takeIf { it.isNotBlank() }
+    fun setCoinGeckoKey(v: String)   = set(Keys.COINGECKO_KEY, v)
 
     // ─── AI-анализатор (опциональный фильтр confidence) ──────────────────────
 

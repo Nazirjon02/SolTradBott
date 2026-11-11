@@ -59,8 +59,6 @@ class MemePlaybookStrategy(
         higherTfCandles: List<Candle>,
     ): Evaluation {
         val total = MemeFibDetector.STAGES + 2
-        val entry = candidate.priceUsd
-        if (entry <= 0.0) return Evaluation.stoppedAt(1, total, "нет цены кандидата")
         if (!liquidityDeepEnough(candidate, config.mpMinLiqToMcPct)) {
             val liqPct = if (candidate.marketCap > 0) candidate.liquidityUsd / candidate.marketCap * 100 else 0.0
             return Evaluation.stoppedAt(1, total, "ликвидность ${fmt1(liqPct)}% капитализации < ${fmt1(config.mpMinLiqToMcPct)}%")
@@ -82,6 +80,11 @@ class MemePlaybookStrategy(
             "" -> Unit
             else -> return Evaluation.stoppedAt(total, total, verdict)
         }
+
+        // Цена входа — закрытие триггера (последний закрытый бар): от него детектор считал стоп. Цена кандидата
+        // из сканера к сетапу отношения не имеет; ушла живая цена дальше 3% — вход отменит StrategyManager.
+        val entry = candles.last().close
+        if (entry <= 0.0) return Evaluation.stoppedAt(total, total, "нет цены входа")
 
         val signal = Signal(
             mint = candidate.mint,
