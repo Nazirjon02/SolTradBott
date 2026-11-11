@@ -94,6 +94,9 @@ class DrxRuntime(val db: DrxDatabase) {
     val engine = BotEngine(client, strategyManager, notifier, db, accountCache, executor, settingsStore, activityLog)
     val tradeMonitor = TradeMonitor(client, db, executor, notifier, activityLog, protection = settingsStore::getProtection)
 
+    // Прототип свечей из блокчейна (теневой режим, по умолчанию выключен): стратегии его свечей не получают.
+    val chainCandles = createChainCandles(settingsStore, tokenCache, client, activityLog)
+
     // Собственный scope рантайма: здесь живёт long-polling Telegram-контроллера, чтобы он
     // переживал уход Activity так же, как движок (раньше polling был привязан к Compose и
     // умирал вместе с UI). SupervisorJob — падение одной корутины не роняет остальные.
@@ -114,6 +117,7 @@ class DrxRuntime(val db: DrxDatabase) {
         GeckoTerminalApi.setApiKey(settingsStore.getCoinGeckoKey())
         runtimeScope.watchCandleFeed(GeckoTerminalApi.status, activityLog)
         tradeMonitor.start()
+        if (settingsStore.getChainCandlesEnabled()) chainCandles.start()
         syncTelegramController()
     }
 
@@ -179,6 +183,7 @@ class DrxRuntime(val db: DrxDatabase) {
         telegramJob?.cancel()
         telegramController?.close()
         runtimeScope.cancel()
+        chainCandles.stop()
         marketAnalyzer.close()
         tradeMonitor.close()
         engine.shutdown()

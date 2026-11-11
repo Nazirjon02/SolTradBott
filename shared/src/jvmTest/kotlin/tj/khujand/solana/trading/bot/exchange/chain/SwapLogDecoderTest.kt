@@ -233,5 +233,10 @@ class SwapLogDecoderTest {
         assertEquals("mainnet.helius-rpc.com", ChainCandleService.hostOf(url))
         assertTrue(ChainCandleService.isHelius(url))
         assertNull(ChainCandleService.wsUrlOf(""))
+        assertEquals(
+            "Failed to connect to wss://mainnet.helius-rpc.com/?api-key=***: timeout",
+            hideApiKey("Failed to connect to wss://mainnet.helius-rpc.com/?api-key=0f1e-SECRET: timeout"),
+        )
+        assertEquals("https://x/?a=1&api_key=***&b=2", hideApiKey("https://x/?a=1&api_key=k&b=2"))
     }
 }

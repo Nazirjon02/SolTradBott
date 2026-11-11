@@ -4,6 +4,7 @@ import kotlin.time.Clock
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import tj.khujand.solana.trading.bot.data.db.DrxDatabase
+import tj.khujand.solana.trading.bot.exchange.chain.DEFAULT_CHAIN_CREDIT_LIMIT
 import tj.khujand.solana.trading.bot.exchange.dex.DEFAULT_KEY_MONTHLY_QUOTA
 import tj.khujand.solana.trading.bot.exchange.dex.KeyUsage
 
@@ -35,6 +36,8 @@ class SettingsStore(private val db: DrxDatabase) {
         const val COINGECKO_QUOTA  = "data.coingecko_quota"
         const val COINGECKO_USAGE  = "data.coingecko_usage"
         const val ANALYSIS_FAVORITES = "analysis.favorites"
+        const val CHAIN_CANDLES    = "chain.candles_enabled"
+        const val CHAIN_CREDIT_LIMIT = "chain.daily_credit_limit"
     }
 
     // ─── Raw API ─────────────────────────────────────────────────────────────
@@ -116,6 +119,14 @@ class SettingsStore(private val db: DrxDatabase) {
             ?.let { runCatching { json.decodeFromString<KeyUsage>(it) }.getOrNull() }
 
     fun setCoinGeckoUsage(v: KeyUsage) = set(Keys.COINGECKO_USAGE, json.encodeToString(v))
+
+    // Свечи из блокчейна (прототип, теневой режим: стратегии их не получают) — по умолчанию выключены.
+    // Узел — тот же «Solana RPC URL» (ключ Helius живёт в нём); лимит — кредитов Helius в сутки.
+    fun getChainCandlesEnabled(): Boolean = get(Keys.CHAIN_CANDLES)?.toBooleanStrictOrNull() ?: false
+    fun setChainCandlesEnabled(v: Boolean) = set(Keys.CHAIN_CANDLES, v.toString())
+
+    fun getChainCreditLimit(): Int   = get(Keys.CHAIN_CREDIT_LIMIT)?.toIntOrNull()?.takeIf { it > 0 } ?: DEFAULT_CHAIN_CREDIT_LIMIT
+    fun setChainCreditLimit(v: Int)  = set(Keys.CHAIN_CREDIT_LIMIT, v.toString())
 
     // ─── AI-анализатор (опциональный фильтр confidence) ──────────────────────
 

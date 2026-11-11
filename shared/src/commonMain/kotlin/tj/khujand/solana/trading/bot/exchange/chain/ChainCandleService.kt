@@ -63,6 +63,29 @@ data class ChainCandleStatus(
 )
 
 /**
+ * Подписка на пул: цена (байты, прогноз кредитов в сутки) и что в потоке.
+ * @param noise уведомления без сделки этого пула (транзакции MEV-ботов, маршруты через соседние пулы).
+ * @param measuredMs сколько длится замер (с первой подписки).
+ */
+data class ChainPoolStat(
+    val pool: String,
+    val symbol: String,
+    val dex: ChainDex,
+    val subscribed: Boolean,
+    val skip: SkipReason?,
+    val bytes: Long,
+    val measuredMs: Long,
+    val creditsPerDayNow: Double,
+    val trades: Long,
+    val noise: Long,
+    val failedTx: Long,
+    val truncated: Long,
+) {
+    /** Средняя цена подписки за весь замер, кредитов в сутки. */
+    val creditsPerDayAvg: Double get() = if (measuredMs <= 0) 0.0 else bytes / BYTES_PER_CREDIT * DAY_MS / measuredMs
+}
+
+/**
  * Свечи OHLCV прямо из блокчейна Solana для пулов списка наблюдения — прототип в теневом режиме: свечи
  * строятся и сверяются с GeckoTerminal, но стратегии их не получают.
  *
@@ -85,6 +108,8 @@ data class ChainCandleStatus(
  * @param geckoSpacingMs пауза между своими запросами к GeckoTerminal: прототип не должен отнимать лимит у
  *   стратегий.
  * @param geckoMinutes просить ли у GeckoTerminal ещё и 1m-историю (без ключа — нет: лимит дорог).
+ * @param geckoHistory подгружать ли историю и неполные бары из GeckoTerminal; прогон сверки выключает это,
+ *   чтобы не тратить чужой лимит запросов, — ему нужна только итоговая сверка.
  * @param onEvent заметные события (старт, лимит на сутки, итог сверки) — для ленты активности.
  * @param tradeSink каждая принятая сделка и курс котировки в USD (для прогона сверки).
  */
@@ -96,10 +121,14 @@ class ChainCandleService(
     private val dailyCreditLimit: () -> Int,
     private val geckoSpacingMs: () -> Long,
     private val geckoMinutes: () -> Boolean = { false },
+    private val geckoHistory: Boolean = true,
     private val reconcileEveryMs: Long = RECONCILE_EVERY_MS,
     private val reportSink: ((String) -> Unit)? = null,
     private val tradeSink: ((ChainTrade, Double) -> Unit)? = null,
     private val onEvent: (String) -> Unit = {},
+    private val onDiagnostic: (String) -> Unit = {},
+    private val pingIntervalMs: Long = PING_INTERVAL_MS,
+    private val keepLeftMs: Long = KEEP_LEFT_MS,
     private val nowMs: () -> Long = { Clock.System.now().toEpochMilliseconds() },
 ) {
     private class PoolState(val meta: ChainPool, var symbol: String) {
@@ -172,7 +201,7 @@ class ChainCandleService(
         }
         val wsc = HttpClient {
             install(WebSockets) {
-                pingIntervalMillis = PING_INTERVAL_MS
+                pingIntervalMillis = pingIntervalMs
                 maxFrameSize = Long.MAX_VALUE
             }
             install(HttpTimeout) { connectTimeoutMillis = 15_000L }
@@ -220,6 +249,30 @@ class ChainCandleService(
 
     /** Итоги последней сверки по пулам. */
     suspend fun reconcileResults(): List<ReconcileResult> = lock.withLock { results.values.toList() }
+
+    /** Пулы, по которым есть бары (подписанные сейчас и выбывшие недавно): адрес → символ. */
+    suspend fun poolSymbols(): Map<String, String> = lock.withLock { pools.mapValues { it.value.symbol } }
+
+    /** Цена и поток каждой подписки — для отчёта: сколько стоит пул и какая доля уведомлений — сделки. */
+    suspend fun poolStats(): List<ChainPoolStat> = lock.withLock {
+        val now = nowMs()
+        pools.values.map { st ->
+            ChainPoolStat(
+                pool = st.meta.address,
+                symbol = st.symbol,
+                dex = st.meta.dex,
+                subscribed = st.subId != null,
+                skip = banned[st.meta.address]?.second,
+                bytes = st.rate.totalBytes,
+                measuredMs = st.rate.ageMs(now),
+                creditsPerDayNow = st.rate.creditsPerDay(now),
+                trades = st.trades,
+                noise = st.noise,
+                failedTx = st.failedTx,
+                truncated = st.truncated,
+            )
+        }
+    }
 
     /**
      * Сверка сейчас: для каждого пула с полными 5m-барами — свежие бары GeckoTerminal и сравнение. Обычно
@@ -275,12 +328,17 @@ class ChainCandleService(
                             else -> Unit
                         }
                     }
+                    val reason = closeReason.await()
+                    onDiagnostic("соединение закрыто: ${reason?.code} ${hideApiKey(reason?.message)}")
                 }
                 lastError = null
             } catch (e: CancellationException) {
                 if (!alive()) throw e
+                onDiagnostic("соединение отменено: ${hideApiKey(e.message)}")
             } catch (e: Exception) {
-                lastError = e.message ?: e::class.simpleName
+                // Ktor пишет в текст ошибки адрес узла целиком — вместе с ключом Helius.
+                lastError = hideApiKey(e.message ?: e::class.simpleName)
+                onDiagnostic("ошибка соединения: ${e::class.simpleName}: $lastError")
             }
             onDisconnected()
             failures++
@@ -554,7 +612,7 @@ class ChainCandleService(
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
-            lastError = "getMultipleAccounts: ${e.message}"
+            lastError = "getMultipleAccounts: ${hideApiKey(e.message)}"
             null
         }
     }
@@ -581,7 +639,7 @@ class ChainCandleService(
                     geckoJobs += GeckoJob(st.meta.address, 5, now + RECONCILE_SETTLE_MS, reconcile = true)
                 }
             }
-            pools.values.removeAll { !it.inWatchlist && now - it.leftAtMs > KEEP_LEFT_MS }
+            pools.values.removeAll { !it.inWatchlist && now - it.leftAtMs > keepLeftMs }
         }
         out.forEach { send(it) }
     }
@@ -642,6 +700,7 @@ class ChainCandleService(
 
     /** Под [lock]: бары GeckoTerminal после закрытия бара, в котором началась (или возобновилась) подписка. */
     private fun scheduleGecko(pool: String, now: Long) {
+        if (!geckoHistory) return
         geckoJobs.removeAll { it.pool == pool && !it.reconcile }
         geckoJobs += GeckoJob(pool, 5, now - now.mod(300_000L) + 300_000L + GECKO_SETTLE_MS, reconcile = false)
         if (geckoMinutes()) {
@@ -792,7 +851,9 @@ class ChainCandleService(
         private const val WATCHLIST_EVERY_MS = 60_000L
         private const val MAX_ACCOUNTS_PER_CALL = 100
         private const val MAX_RESOLVED = 2_000
-        private const val KEEP_LEFT_MS = 3 * 60 * 60_000L
+
+        /** Выбывший из списка наблюдения пул живёт столько — для сверки его последних баров. */
+        const val KEEP_LEFT_MS = 3 * 60 * 60_000L
         private const val RETRY_FAILED_MS = 60 * 60_000L
         private const val RETRY_OVER_BUDGET_MS = 60 * 60_000L
         private const val WATCHDOG_MIN_SUBS = 5

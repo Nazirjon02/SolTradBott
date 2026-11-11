@@ -1,5 +1,11 @@
 package tj.khujand.solana.trading.bot.exchange.chain
 
+/**
+ * Лимит кредитов Helius в сутки по умолчанию: бесплатный тариф — 1 млн в месяц (~33 тыс. в сутки);
+ * ~8 тыс. в сутки остаются на остальные вызовы RPC того же ключа (баланс, отправка транзакций).
+ */
+const val DEFAULT_CHAIN_CREDIT_LIMIT = 25_000
+
 /** Сутки в мс. */
 internal const val DAY_MS = 86_400_000L
 
