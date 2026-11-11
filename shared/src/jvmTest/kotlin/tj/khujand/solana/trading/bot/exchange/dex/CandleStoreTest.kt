@@ -190,4 +190,112 @@ class CandleStoreTest {
         val hour = 60 * minute
         assertEquals(10 * hour + 5 * minute + 3 * minute, CandleStore.validUntil(10 * hour + 5 * minute, 10 * hour + 5 * minute, hour, empty = true))
     }
+
+    // ─── Закрытие бара и старший ТФ из младшего ─────────────────────────────
+
+    @Test
+    fun barThatClosedSecondsAgoWaitsUntilTheSourceFinishesIt() = runBlocking {
+        val s = store()
+        now = (cur + 1) * bar + 5_000L // бар закрылся 5 с назад — источник его ещё дописывает
+        assertEquals(cur - 1, s.get(key, 50).lastBar(), "только что закрытый бар в ответе может быть недописан")
+        now = (cur + 1) * bar + 66_000L // копия в CDN протухла — перечитываем
+        assertEquals(cur, s.get(key, 50).lastBar())
+        assertEquals(2, asked.size)
+    }
+
+    private val key15 = CandleKey("solana", "POOL", "minute", 15)
+
+    /** Что запрошено у источника: агрегат ТФ (5 или 15) и лимит. */
+    private val fetchedTf = ArrayList<Pair<Int, Int>>()
+
+    /** С какого 5m-бара начинается история пула. */
+    private var firstBar = 0
+
+    /** 5m-бар с разными экстремумами и объёмом — чтобы свёртка в 15m проверялась по-настоящему. */
+    private fun rich(i: Int) = Candle(
+        i * bar, 1.0 + i * 0.01, 1.05 + i * 0.01 + (i % 3) * 0.01, 0.95 + i * 0.01 - (i % 2) * 0.01,
+        1.0 + (i + 1) * 0.01, 100.0 + i,
+    )
+
+    /** Независимая свёртка 5m в 15m (как у источника) — эталон для проверки. */
+    private fun fold15(fives: List<Candle>): List<Candle> = fives.groupBy { it.openTimeMs / (3 * bar) }.map { (j, g) ->
+        Candle(j * 3 * bar, g.first().open, g.maxOf { it.high }, g.minOf { it.low }, g.last().close, g.sumOf { it.volume })
+    }
+
+    /** Закрытые (с запасом на запись) 15m-бары источника на текущий момент. */
+    private fun closed15(): List<Candle> =
+        fold15((firstBar..(now / bar).toInt()).map { rich(it) }).filter { it.openTimeMs + 3 * bar + CandleStore.SETTLE_MS <= now }
+
+    private fun tfStore() = CandleStore(
+        fetch = { k, limit ->
+            fetchedTf += k.aggregate to limit
+            val fives = (firstBar..(now / bar).toInt()).map { rich(it) }
+            CandleFetch.Ok((if (k.aggregate == 5) fives else fold15(fives)).takeLast(limit))
+        },
+        limiter = RequestLimiter(intervalMs = { 0L }, nowMs = { now }, sleep = { now += it }),
+        nowMs = { now },
+    )
+
+    @Test
+    fun fifteenMinuteBarsAreFoldedFromFiveMinuteOnesWithoutARequest() = runBlocking {
+        // Пул моложе запрошенной глубины (151 свеча 5m): в ответе вся его история.
+        firstBar = cur - 150
+        val s = tfStore()
+        s.get(key, 200)
+        val derived = s.get(key15, 200)
+        assertEquals(listOf(5 to 200), fetchedTf, "15m собраны из уже загруженных 5m — запроса за ними нет")
+        assertEquals(closed15().takeLast(200), derived)
+        assertEquals(132, (derived.last().openTimeMs / (3 * bar)).toInt(), "незакрытый 15m-бар (последний 5m ещё идёт) не отдаётся")
+    }
+
+    @Test
+    fun shallowFiveMinuteHistoryIsDeepenedOnceInsteadOfFetchingFifteen() = runBlocking {
+        now = 1000 * bar + 60_000L // история длиннее 200 свечей 5m
+        val s = tfStore()
+        s.get(key, 200)
+        val derived = s.get(key15, 200)
+        assertEquals(listOf(5 to 200, 5 to 606), fetchedTf, "5m перезапрошены глубже (тот же один запрос), 15m — нет")
+        assertEquals(closed15().takeLast(200), derived, "первый, возможно неполный, 15m-бар отброшен — остальные точные")
+
+        // Дальше и 5m, и 15m обслуживаются из глубокой записи.
+        now += 60_000L
+        s.get(key, 200)
+        s.get(key15, 200)
+        assertEquals(2, fetchedTf.size)
+    }
+
+    @Test
+    fun staleFiveMinuteRecordIsRefreshedAndServesFifteen() = runBlocking {
+        firstBar = cur - 150
+        val s = tfStore()
+        s.get(key, 200)
+        s.get(key15, 200)
+        now = (cur + 3) * bar + 25_000L // три бара 5m спустя — запись 5m устарела, 15m-бар закрылся
+        val derived = s.get(key15, 200)
+        assertEquals(2, fetchedTf.size, "одно обновление 5m на новый 15m-бар")
+        assertTrue(fetchedTf.all { it.first == 5 }, "за 15m отдельно не ходили: $fetchedTf")
+        assertEquals(closed15().takeLast(200), derived)
+        // 5m-бары 399–401 закрылись — 15m-бар №133, которого при первом запросе ещё не было, уже в ответе.
+        assertEquals(133, (derived.last().openTimeMs / (3 * bar)).toInt())
+    }
+
+    @Test
+    fun withoutFiveMinuteDataFifteenIsFetchedDirectly() = runBlocking {
+        val s = tfStore()
+        s.get(key15, 200)
+        assertEquals(listOf(15 to 200), fetchedTf)
+    }
+
+    @Test
+    fun foldSkipsMissingBarsAndUnclosedBucket() {
+        val five = 5 * 60_000L
+        val fifteen = 3 * five
+        val bars = listOf(
+            Candle(0, 1.0, 1.2, 0.9, 1.1, 10.0),
+            Candle(2 * five, 1.1, 1.5, 1.0, 1.4, 5.0), // бара 5–10 мин нет — сделок не было
+            Candle(3 * five, 1.4, 1.6, 1.3, 1.5, 7.0),
+        )
+        val folded = CandleStore.aggregate(bars, fifteen, asOfMs = fifteen + CandleStore.SETTLE_MS)
+        assertEquals(listOf(Candle(0, 1.0, 1.5, 0.9, 1.4, 15.0)), folded, "второй 15m-бар ещё не закрыт")
+    }
 }

@@ -28,11 +28,17 @@ import tj.khujand.solana.trading.bot.data.db.Trade as TradeRow
 import tj.khujand.solana.trading.bot.exchange.dex.AccountCache
 import tj.khujand.solana.trading.bot.exchange.dex.DexClient
 
-private const val MAX_ACTIVE_STRATEGIES = 3
+/**
+ * Сколько стратегий движок крутит одновременно. У каждой свой цикл скана (~30 с), а пул монет и свечи общие:
+ * монета на одном ТФ — один запрос свечей на бар, сколько бы стратегий её ни смотрело. Потолок — защита от
+ * случайно наплодённых копий, а не от встроенных стратегий: раньше он был 3, и из шести включённых молча
+ * работали первые три.
+ */
+private const val MAX_ACTIVE_STRATEGIES = 10
 
 /**
  * Главный движок (порт BotEngine из MRX): старт/стоп/пауза/резюме,
- * статус в StateFlow (UI и WebSocket подписаны), до 3 стратегий параллельно.
+ * статус в StateFlow (UI и WebSocket подписаны), до [MAX_ACTIVE_STRATEGIES] стратегий параллельно.
  */
 class BotEngine(
     private val client: DexClient,
@@ -88,6 +94,13 @@ class BotEngine(
         // Фиксируем «желаемое состояние» — чтобы после kill'а процесса сервис возобновил торговлю.
         settingsStore.setDesiredState(BotStatus.RUNNING.name)
         activityLog.success("🟢 Движок запущен — стратегий активно: ${running.size}")
+        val skipped = activeStrategies.drop(MAX_ACTIVE_STRATEGIES)
+        if (skipped.isNotEmpty()) {
+            activityLog.warn(
+                "⚠️ Включено стратегий: ${activeStrategies.size}, одновременно работают не больше $MAX_ACTIVE_STRATEGIES — " +
+                    "не запущены: ${skipped.joinToString { "«${it.name}»" }}"
+            )
+        }
         // «Запущен» — только когда реально есть что запускать: раньше это уходило в Telegram
         // до проверки, и сразу за ним следовало «⚠️ Бот не запущен».
         notifier.send("🟢 DRX Bot запущен (${executor.modeLabel()})")
@@ -149,9 +162,13 @@ class BotEngine(
         if (active) {
             if (_status.value != BotStatus.RUNNING) return StrategyToggle.PENDING_START
             if (strategyManager.isRunning(strategyId)) return StrategyToggle.ALREADY_RUNNING
-            if (strategyManager.activeCount() >= MAX_ACTIVE_STRATEGIES) return StrategyToggle.LIMIT_REACHED
             val s = db.strategyQueries.getById(strategyId).executeAsOneOrNull()
                 ?: return StrategyToggle.PENDING_START
+            if (strategyManager.activeCount() >= MAX_ACTIVE_STRATEGIES) {
+                // Экран стратегий результат не показывает — без строки в ленте отказ был бы незаметен.
+                activityLog.warn("⚠️ «${s.name}» не запущена: одновременно работают не больше $MAX_ACTIVE_STRATEGIES стратегий")
+                return StrategyToggle.LIMIT_REACHED
+            }
             scope.launch { strategyManager.run(s.toStrategyConfig()) }
             activityLog.success("➕ Стратегия «${s.name}» запущена")
             return StrategyToggle.STARTED

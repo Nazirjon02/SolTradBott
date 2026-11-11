@@ -46,6 +46,18 @@ class CandleFeedNotesTest {
     }
 
     @Test
+    fun exhaustedQuotaIsReportedOnceWithoutSuggestingTheKey() {
+        notes.onStatus(CandleFeedStatus(usingKey = true))
+        val exhausted = CandleFeedStatus(keyExhaustedUntilMs = now + 3_600_000L)
+        val first = notes.onStatus(exhausted).single()
+        assertEquals(ActivityLevel.WARN, first.first)
+        assertTrue(first.second.contains("квота"), first.second)
+        assertTrue(notes.onStatus(exhausted.copy(lastOkAtMs = now)).isEmpty(), "ни повтора, ни «ключа нет» — ключ просто отложен")
+        val limitNote = notes.onStatus(exhausted.copy(rateLimitHits = 1)).single().second
+        assertTrue(!limitNote.contains("Данные рынка"), "ключ уже есть — предлагать его незачем: $limitNote")
+    }
+
+    @Test
     fun withoutKeyTheRefusalNoteSuggestsTheKey() {
         notes.onStatus(CandleFeedStatus())
         val note = notes.onStatus(CandleFeedStatus(rateLimitHits = 1)).single().second

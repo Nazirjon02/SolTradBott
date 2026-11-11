@@ -3558,9 +3558,12 @@ private fun MarketDataSection(key: String, onKey: (String) -> Unit) {
     FormSection("📡  Данные рынка") {
         val (text, color) = when {
             feed.keyRejected -> "⚠️  Ключ отклонён сервером — запросы идут без ключа. Проверьте ключ и сохраните заново." to Red
-            feed.usingKey -> "✅  Свечи идут с ключом CoinGecko — до 60 запросов в минуту." to Green
-            else -> "Без ключа GeckoTerminal даёт около 4 запросов свечей в минуту: монеты разбираются по очереди, " +
-                "на ТФ 1m — с отставанием." to Amber
+            feed.keyExhaustedUntilMs > 0L -> "⏸  Ключ упирается в лимит — похоже, кончилась месячная квота. Свечи идут " +
+                "без ключа (бесплатно, но медленнее), ключ бот попробует снова ${formatLocalTime(feed.keyExhaustedUntilMs)}." to Amber
+            feed.usingKey -> "✅  Свечи идут с ключом CoinGecko — до 60 запросов в минуту. У бесплатного ключа 10 000 " +
+                "запросов в месяц — это один-два дня работы бота; когда кончатся, он сам продолжит без ключа." to Green
+            else -> "Без ключа GeckoTerminal даёт около 4 запросов свечей в минуту без месячного предела: монеты " +
+                "разбираются по очереди, на ТФ 1m — с отставанием." to Amber
         }
         Surface(color = color.copy(alpha = 0.12f), shape = RoundedCornerShape(8.dp), modifier = Modifier.fillMaxWidth()) {
             Text(text, fontSize = 12.sp, color = color, modifier = Modifier.padding(12.dp))

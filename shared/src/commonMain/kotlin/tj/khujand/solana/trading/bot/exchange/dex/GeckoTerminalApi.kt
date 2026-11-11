@@ -72,8 +72,9 @@ data class GtPool(
 /**
  * Источник свечей OHLCV и списков пулов — GeckoTerminal.
  *
- * Лимиты (проверено 2026-11-11): без ключа — около 5 запросов в минуту на IP, дальше HTTP 429. С бесплатным
- * Demo-ключом CoinGecko те же данные отдаёт `api.coingecko.com/api/v3/onchain` — до 100 запросов в минуту.
+ * Лимиты (проверено 2026-11-11): без ключа — около 5 запросов в минуту на IP, дальше HTTP 429, зато без месячного
+ * предела. С бесплатным Demo-ключом CoinGecko те же данные отдаёт `api.coingecko.com/api/v3/onchain` — до 100
+ * запросов в минуту, но 10 000 в месяц; кончились — бот сам продолжает без ключа ([KeyQuotaWatch]).
  * Все запросы идут через общую очередь [RequestLimiter]; свечи для стратегий хранит [CandleStore] —
  * закрытые бары, один запрос на бар (см. там же, почему).
  */
@@ -101,6 +102,9 @@ object GeckoTerminalApi {
     // StateFlow — потокобезопасная ячейка: ключ читают параллельные запросы, меняют настройки.
     private val apiKey = MutableStateFlow<String?>(null)
 
+    // Отказы 429 на запросах с ключом: несколько подряд — кончилась месячная квота, дальше без ключа.
+    private val quota = KeyQuotaWatch()
+
     private val limiter = RequestLimiter(intervalMs = { if (activeKey() != null) KEYED_INTERVAL_MS else KEYLESS_INTERVAL_MS })
 
     private val store = CandleStore(
@@ -115,20 +119,41 @@ object GeckoTerminalApi {
 
     /**
      * Demo-ключ CoinGecko из настроек; null или пусто — работаем без ключа. Повторное сохранение того же
-     * ключа снимает отметку «отклонён»: пользователь мог его активировать или поправить опечатку.
+     * ключа снимает отметки «отклонён» и «квота кончилась»: пользователь мог его активировать, поправить
+     * опечатку или сменить план.
      */
     fun setApiKey(key: String?) {
         val clean = key?.trim()?.takeIf { it.isNotEmpty() }
         apiKey.value = clean
+        quota.reset()
         store.setKeyState(usingKey = clean != null, keyRejected = false)
     }
 
-    /** Ключ, с которым идут запросы; отклонённый сервером ключ не используем до следующего сохранения. */
-    private fun activeKey(): String? = apiKey.value?.takeUnless { store.status.value.keyRejected }
+    /**
+     * Ключ, с которым идут запросы, или null. Отклонённый сервером ключ не используем до следующего сохранения,
+     * упёршийся в месячную квоту — до срока из [KeyQuotaWatch]; срок вышел — пробуем ключ снова.
+     */
+    private fun activeKey(): String? {
+        val key = apiKey.value ?: return null
+        val s = store.status.value
+        if (s.keyRejected) return null
+        if (s.keyExhaustedUntilMs > 0L) {
+            if (Clock.System.now().toEpochMilliseconds() < s.keyExhaustedUntilMs) return null
+            store.setKeyState(usingKey = true, keyRejected = false)
+        }
+        return key
+    }
 
     private fun rejectKey() {
         println("GeckoTerminal: ключ CoinGecko отклонён — работаю без ключа")
         store.setKeyState(usingKey = false, keyRejected = true)
+    }
+
+    /** Итог запроса с ключом: несколько отказов 429 подряд — кончилась квота, дальше без ключа (см. [KeyQuotaWatch]). */
+    private fun onKeyedResponse(code: Int) {
+        val until = quota.onKeyedResponse(code, Clock.System.now().toEpochMilliseconds()) ?: return
+        println("GeckoTerminal: ключ CoinGecko упирается в лимит — похоже, кончилась месячная квота; работаю без ключа")
+        store.setKeyState(usingKey = false, keyRejected = false, keyExhaustedUntilMs = until)
     }
 
     /**
@@ -167,7 +192,9 @@ object GeckoTerminalApi {
             "/networks/${key.network}/pools/${key.pool}/ohlcv/${key.timeframe}" +
                 "?aggregate=${key.aggregate}&limit=$limit&currency=usd"
         )
-        when (val code = resp.status.value) {
+        val code = resp.status.value
+        if (withKey) onKeyedResponse(code)
+        when (code) {
             200 -> CandleFetch.Ok(parse(resp.bodyAsText()), ageMs = secondsHeader(resp, "Age") ?: 0L)
             // Пул ещё не проиндексирован — это «свечей нет», а не сбой: перепроверим позже, а не каждый цикл.
             404 -> CandleFetch.Ok(emptyList())
@@ -196,6 +223,7 @@ object GeckoTerminalApi {
         return try {
             val (resp, withKey) = request(path)
             val code = resp.status.value
+            if (withKey) onKeyedResponse(code)
             when {
                 code == 429 -> limiter.pauseUntil(
                     Clock.System.now().toEpochMilliseconds() + (secondsHeader(resp, "Retry-After") ?: CandleStore.RATE_LIMIT_PAUSE_MS)

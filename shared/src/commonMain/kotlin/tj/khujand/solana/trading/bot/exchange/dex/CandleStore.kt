@@ -38,14 +38,17 @@ sealed interface CandleFetch {
 }
 
 /**
- * Состояние источника свечей — для ленты активности и `/health`.
+ * Состояние источника свечей — для ленты активности, настроек и `/health`.
  * @param usingKey запросы идут с ключом API (лимит выше).
  * @param keyRejected сервер отклонил ключ — работаем без него.
+ * @param keyExhaustedUntilMs ключ несколько раз подряд упёрся в лимит — похоже, кончилась месячная квота: до этого
+ *   момента запросы идут без ключа; 0 — не упирался.
  * @param rateLimitHits сколько раз сервер отказал по лимиту с начала работы.
  */
 data class CandleFeedStatus(
     val usingKey: Boolean = false,
     val keyRejected: Boolean = false,
+    val keyExhaustedUntilMs: Long = 0L,
     val rateLimitHits: Int = 0,
     val lastRateLimitAtMs: Long = 0L,
     val lastOkAtMs: Long = 0L,
@@ -58,13 +61,17 @@ data class CandleFeedStatus(
  * кандидата каждый цикл (~30 с). Поэтому:
  *  - стратегии получают только ЗАКРЫТЫЕ бары, и один ответ служит до закрытия следующего бара: внутри бара
  *    в закрытых свечах ничего не меняется. На 5m это один запрос вместо восьми-десяти;
+ *  - старший ТФ собирается из уже загруженного младшего того же пула (15m — из трёх 5m), а не запрашивается
+ *    отдельно: OHLCV складывается точно, а запрос на 15m у пула, который и так обновляется раз в 5 минут, —
+ *    лишний. Младший устарел или неглубок — обновляется он (тот же один запрос, но с нужной глубиной);
  *  - запросы идут через [RequestLimiter] — по очереди и не чаще лимита; отказ 429 ставит на паузу всех,
  *    а не превращается в «свечей нет»;
  *  - пока свежих данных нет (лимит, сбой сети), отдаются прежние закрытые бары, но не старше
  *    [MAX_STALE_BARS] баров: по более старой картине входить нельзя.
  *
- * Закрытость бара считается на момент, когда ответ был собран сервером, а не получен нами: CDN держит
- * копию ответа до минуты, и бар, закрывшийся за это время, лежит в ней недописанным.
+ * Закрытость бара считается на момент, когда ответ был собран сервером, а не получен нами, и с запасом
+ * [SETTLE_MS]: CDN держит копию ответа до минуты, а источник дописывает только что закрывшийся бар ещё
+ * несколько секунд.
  *
  * Режим [get] `live` (график сделки): свежесть [LIVE_TTL_MS] и незакрытый бар в конце — только когда лимит
  * это позволяет ([liveAllowed], то есть с ключом API); иначе тот же ответ, что у стратегий.
@@ -101,9 +108,9 @@ class CandleStore(
     private val _status = MutableStateFlow(CandleFeedStatus())
     val status: StateFlow<CandleFeedStatus> = _status.asStateFlow()
 
-    /** Ключ API появился, сменился или был отклонён сервером. */
-    fun setKeyState(usingKey: Boolean, keyRejected: Boolean) {
-        _status.update { it.copy(usingKey = usingKey, keyRejected = keyRejected) }
+    /** Ключ API появился, сменился, отклонён сервером или отложен до сброса квоты. */
+    fun setKeyState(usingKey: Boolean, keyRejected: Boolean, keyExhaustedUntilMs: Long = 0L) {
+        _status.update { it.copy(usingKey = usingKey, keyRejected = keyRejected, keyExhaustedUntilMs = keyExhaustedUntilMs) }
     }
 
     /**
@@ -121,9 +128,20 @@ class CandleStore(
         val want = limit.coerceAtMost(MAX_FETCH_LIMIT)
         val liveMode = live && liveAllowed()
         cached(key, want, liveMode)?.let { return it }
+        if (!liveMode) {
+            derived(key, want, allowStale = false)?.let { return it }
+            // Младший ТФ этого пула уже кто-то смотрит, но запись устарела или неглубока: обновляем её — это тот
+            // же один запрос, что и за старшим ТФ, но младший нужен и своим стратегиям, — и собираем старший из неё.
+            baseFor(key, want)?.let { (base, baseLimit) ->
+                get(base, baseLimit, live = false, maxWaitMs = maxWaitMs)
+                derived(key, want, allowStale = true)?.let { return it }
+            }
+        }
         return lockFor(key).withLock {
             // Пока ждали замок, эти же свечи мог обновить соседний запрос.
-            cached(key, want, liveMode) ?: refresh(key, want, liveMode, maxWaitMs)
+            cached(key, want, liveMode)
+                ?: (if (liveMode) null else derived(key, want, allowStale = false))
+                ?: refresh(key, want, liveMode, maxWaitMs)
         }
     }
 
@@ -135,10 +153,52 @@ class CandleStore(
         return if (fresh) view(e, key.barMs, liveMode).takeLast(limit) else null
     }
 
+    /** Записи младших ТФ того же пула, из которых собирается [target] (15m — из 5m и 1m…), крупнейший ТФ первым. */
+    private suspend fun baseEntries(target: CandleKey): List<Pair<CandleKey, Entry>> = guard.withLock {
+        entries.filter { (k, _) ->
+            k != target && k.network == target.network && k.pool == target.pool &&
+                k.barMs < target.barMs && target.barMs % k.barMs == 0L
+        }.toList()
+    }.sortedByDescending { it.first.barMs }
+
+    /** Сколько младших баров нужно на [want] старших: +2 — первый может начаться до самой старой свечи, последний не закрыт. */
+    private fun neededBaseBars(target: CandleKey, base: CandleKey, want: Int): Long = (want + 2L) * (target.barMs / base.barMs)
+
+    /**
+     * Бары [target] из записи младшего ТФ того же пула, без запроса к API. Запись годится, пока не закрылся её
+     * следующий бар (иначе старший мог закрыться, а младших в ней нет; с [allowStale] — как прежние бары у
+     * [stale]), и когда в ней хватает истории: либо это вся история пула, либо глубины хватает на [want] баров.
+     */
+    private suspend fun derived(target: CandleKey, want: Int, allowStale: Boolean): List<Candle>? {
+        val now = nowMs()
+        for ((base, e) in baseEntries(target)) {
+            val fresh = now < e.validUntilMs ||
+                (allowStale && now - e.asOfMs <= MAX_STALE_BARS * target.barMs + SETTLE_MS)
+            val wholeHistory = e.candles.size < e.limit
+            if (!fresh || (!wholeHistory && e.limit < neededBaseBars(target, base, want))) continue
+            val bars = aggregate(view(e, base.barMs, liveMode = false), target.barMs, e.asOfMs)
+            // История обрезана лимитом запроса — первый старший бар может быть собран не из всех младших.
+            return (if (wholeHistory) bars else bars.drop(1)).takeLast(want)
+        }
+        return null
+    }
+
+    /** Младший ТФ, обновив который (с нужной глубиной), можно собрать [target]; null — такого нет. */
+    private suspend fun baseFor(target: CandleKey, want: Int): Pair<CandleKey, Int>? {
+        for ((base, e) in baseEntries(target)) {
+            val needed = neededBaseBars(target, base, want)
+            if (needed <= MAX_FETCH_LIMIT || e.candles.size < e.limit) {
+                return base to needed.coerceAtMost(MAX_FETCH_LIMIT.toLong()).toInt()
+            }
+        }
+        return null
+    }
+
     private suspend fun refresh(key: CandleKey, limit: Int, liveMode: Boolean, maxWaitMs: Long): List<Candle> {
         val old = guard.withLock { entries[key] }
         if (!limiter.acquire(maxWaitMs)) return stale(old, key.barMs, limit)
-        // Берём с запасом: стратегии, монитор и график просят разное число свечей одного пула.
+        // Берём с запасом: стратегии, монитор и график просят разное число свечей одного пула, а старший ТФ
+        // собирается из этой же записи — однажды углублённая, она такой и остаётся.
         val fetchLimit = maxOf(limit, old?.limit ?: 0, MIN_FETCH_LIMIT).coerceAtMost(MAX_FETCH_LIMIT)
         return when (val r = fetch(key, fetchLimit)) {
             is CandleFetch.Ok -> {
@@ -166,9 +226,12 @@ class CandleStore(
         }
     }
 
-    /** Свечи записи: для стратегий — только бары, закрытые на момент сборки ответа; для графика — как пришли. */
+    /**
+     * Свечи записи: для стратегий — только бары, закрытые на момент сборки ответа (с запасом [SETTLE_MS] на
+     * дописывание только что закрывшегося); для графика — как пришли.
+     */
     private fun view(e: Entry, barMs: Long, liveMode: Boolean): List<Candle> =
-        if (liveMode) e.candles else e.candles.dropLastWhile { it.openTimeMs + barMs > e.asOfMs }
+        if (liveMode) e.candles else e.candles.dropLastWhile { it.openTimeMs + barMs + SETTLE_MS > e.asOfMs }
 
     /** Прежние закрытые бары, пока свежих нет; слишком старые не отдаём — пусто честнее. */
     private fun stale(e: Entry?, barMs: Long, limit: Int): List<Candle> {
@@ -234,6 +297,44 @@ class CandleStore(
             if (t - open < SETTLE_MS) t = open + SETTLE_MS
             if (empty) t = minOf(t, fetchedAtMs + EMPTY_RETRY_MS)
             return maxOf(t, fetchedAtMs + MIN_REFRESH_MS)
+        }
+
+        /**
+         * Бары ТФ [barMs] из баров младшего ТФ (по возрастанию времени): open — первого, high/low — экстремумы,
+         * close — последнего, объём — сумма. Корзины выровнены по эпохе, как бары GeckoTerminal (по UTC); бар без
+         * сделок источник не отдаёт — корзина собирается из тех, что есть. Корзина, не закрытая к [asOfMs] (с
+         * запасом [SETTLE_MS]), отбрасывается: в ней ещё не все младшие бары.
+         */
+        internal fun aggregate(bars: List<Candle>, barMs: Long, asOfMs: Long): List<Candle> {
+            val out = ArrayList<Candle>(bars.size / 2 + 1)
+            var start = Long.MIN_VALUE
+            var open = 0.0
+            var high = 0.0
+            var low = 0.0
+            var close = 0.0
+            var volume = 0.0
+            fun flush() {
+                if (start != Long.MIN_VALUE) out += Candle(start, open, high, low, close, volume)
+            }
+            for (b in bars) {
+                val bucket = b.openTimeMs - b.openTimeMs.mod(barMs)
+                if (bucket != start) {
+                    flush()
+                    start = bucket
+                    open = b.open
+                    high = b.high
+                    low = b.low
+                    close = b.close
+                    volume = b.volume
+                } else {
+                    high = maxOf(high, b.high)
+                    low = minOf(low, b.low)
+                    close = b.close
+                    volume += b.volume
+                }
+            }
+            flush()
+            return out.filter { it.openTimeMs + barMs + SETTLE_MS <= asOfMs }
         }
     }
 }
