@@ -61,7 +61,7 @@ class CandleFeedNotes(private val nowMs: () -> Long = { Clock.System.now().toEpo
             add(
                 ActivityLevel.INFO to "ℹ️ Свечи: без ключа CoinGecko GeckoTerminal даёт около 4 запросов в минуту — монеты " +
                     "разбираются по очереди, на ТФ 1m с отставанием. Бесплатный ключ ускорит бэктест и «Анализ» — " +
-                    "«Настройки» → «Данные рынка»."
+                    "«Настройки» → «Подключения»."
             )
         }
         keylessNoted = noKey

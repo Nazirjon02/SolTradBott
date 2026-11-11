@@ -57,7 +57,7 @@ class CandleFeedNotesTest {
         assertTrue(first.second.contains("квота"), first.second)
         assertTrue(notes.onStatus(exhausted.copy(lastOkAtMs = now)).isEmpty(), "ни повтора, ни «ключа нет» — ключ просто отложен")
         val limitNote = notes.onStatus(exhausted.copy(rateLimitHits = 1)).single().second
-        assertTrue(!limitNote.contains("Данные рынка"), "ключ уже есть — предлагать его незачем: $limitNote")
+        assertTrue(!limitNote.contains("Подключения"), "ключ уже есть — предлагать его незачем: $limitNote")
     }
 
     @Test

@@ -70,6 +70,21 @@ class KeyBudget(
         save(updated)
     }
 
+    /**
+     * Сверка с кабинетом CoinGecko: за месяц всего потрачено [totalUsed] запросов, сегодняшние включительно. Нужна,
+     * когда ключ тратился до того, как бот начал вести счёт, или им пользуется кто-то ещё. Сегодняшний счёт бота
+     * остаётся: меньше него месячный быть не может. Дневной лимит пересчитывается от нового остатка.
+     */
+    fun correctMonthUsage(totalUsed: Int) {
+        val now = nowMs()
+        val updated = state.updateAndGet { old ->
+            val r = rolledOver(old ?: load() ?: KeyUsage(), now)
+            val month = totalUsed.coerceAtLeast(r.usedToday)
+            r.copy(usedMonth = month, usedBeforeToday = month - r.usedToday)
+        } ?: return
+        save(updated)
+    }
+
     fun view(): KeyBudgetView {
         val now = nowMs()
         val u = current(now)

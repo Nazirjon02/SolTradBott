@@ -91,4 +91,27 @@ class KeyBudgetTest {
         saved = KeyUsage(month = "2026-11", usedMonth = 9_000, day = "2026-11-30", usedToday = 0, usedBeforeToday = 9_000)
         assertEquals(1_000, budget().view().allowanceToday)
     }
+
+    @Test
+    fun correctionFromDashboardRecalculatesTheAllowance() {
+        // Ключ тратился до того, как бот начал вести счёт: в кабинете за месяц 4 000, бот сегодня насчитал 20.
+        val b = budget()
+        b.spend(20)
+        b.correctMonthUsage(4_000)
+        val v = b.view()
+        assertEquals(4_000, v.usedMonth)
+        assertEquals(20, v.usedToday, "сегодняшний счёт бота остаётся")
+        // Остаток к началу суток: 10 000 − (4 000 − 20) на 20 дней.
+        assertEquals((10_000 - 3_980) / 20, v.allowanceToday)
+        assertEquals(KeyUsage("2026-11", 4_000, "2026-11-11", 20, 3_980), saved, "сверка сохраняется")
+    }
+
+    @Test
+    fun correctionCannotGoBelowTodaysCount() {
+        val b = budget()
+        b.spend(30)
+        b.correctMonthUsage(10)
+        assertEquals(30, b.view().usedMonth)
+        assertEquals(500, b.view().allowanceToday, "к началу суток потрачено 0 — лимит прежний")
+    }
 }

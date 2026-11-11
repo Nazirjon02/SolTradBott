@@ -11,6 +11,8 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.Flag
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -34,7 +36,7 @@ import tj.khujand.solana.trading.bot.core.engine.RunSummary
  */
 @Composable
 fun RunsCard(runs: List<RunSummary>, modeLabel: String) {
-    Surface(modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp), color = SurfaceCard, shape = RoundedCornerShape(16.dp)) {
+    Surface(modifier = Modifier.fillMaxWidth(), color = SurfaceCard, shape = RoundedCornerShape(16.dp)) {
         Column(Modifier.padding(16.dp)) {
             Text("🏁 Забеги ($modeLabel)", fontSize = 14.sp, fontWeight = FontWeight.Bold, color = TextPrimary)
             Spacer(Modifier.height(10.dp))
@@ -64,14 +66,14 @@ fun RunsCard(runs: List<RunSummary>, modeLabel: String) {
 /** Переключатель «Текущий забег / Вся история» над итогами. */
 @Composable
 fun RunScopeChips(currentRun: Boolean, runNumber: Int, onChange: (Boolean) -> Unit) {
-    Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         HistoryFilterChip("Забег №$runNumber", currentRun) { onChange(true) }
         HistoryFilterChip("Вся история", !currentRun) { onChange(false) }
     }
 }
 
 /**
- * «🏁 Новый старт» в настройках: статистика и лимиты убытка — с этого момента, сделки остаются. В DEMO
+ * «Новый старт» в настройках: статистика и лимиты убытка — с этого момента, сделки остаются. В DEMO
  * можно сразу выставить новый демо-счёт. [onNewRun] возвращает строку-итог для показа.
  */
 @Composable
@@ -79,45 +81,37 @@ fun NewRunSection(demoMode: Boolean, onNewRun: (Double?) -> String) {
     var balanceText by remember { mutableStateOf("") }
     var confirm by remember { mutableStateOf(false) }
     var result by remember { mutableStateOf<String?>(null) }
-    FormSection("🏁  Новый старт") {
-        Text(
+    DrxCard {
+        CardTitle("Новый старт", icon = Icons.Rounded.Flag, subtitle = "итоги и лимиты — с этого момента")
+        Spacer(Modifier.height(10.dp))
+        HintText(
             "Статистика, отчёты и лимиты убытка (день, неделя, просадка, серия убытков) начнут считаться с этого " +
-                "момента. Сделки не удаляются — итоги прошлых забегов остаются на «Аналитике». Открытые позиции " +
-                "ведутся дальше.",
-            fontSize = 11.sp, color = TextSecondary, lineHeight = 16.sp
+                "момента. Сделки не удаляются — итоги прошлых забегов остаются на вкладке «Сделки». Открытые позиции " +
+                "ведутся дальше."
         )
         if (demoMode) {
-            FormTextField("Новый демо-счёт, USD (пусто — оставить как есть)", balanceText, isNumber = true) { balanceText = it }
+            Spacer(Modifier.height(8.dp))
+            NumberField(
+                "Новый демо-счёт", balanceText, onChange = { balanceText = it }, suffix = "USD",
+                hint = "Пусто — оставить как есть",
+            )
         }
-        Spacer(Modifier.height(6.dp))
+        Spacer(Modifier.height(10.dp))
         if (!confirm) {
-            ActionButton("🏁  Начать новый забег", Blue) { confirm = true; result = null }
+            ActionButton("Начать новый забег", Blue, Modifier.fillMaxWidth(), icon = Icons.Rounded.Flag) { confirm = true; result = null }
         } else {
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Box(Modifier.weight(1f)) {
-                    ActionButton("✅  Да, новый старт", Green) {
-                        result = onNewRun(balanceText.toDoubleOrNull()?.takeIf { demoMode && it > 0.0 })
-                        confirm = false
-                        balanceText = ""
-                    }
+                ActionButton("Да, новый старт", Green, Modifier.weight(1f), filled = true) {
+                    result = onNewRun(balanceText.toDoubleOrNull()?.takeIf { demoMode && it > 0.0 })
+                    confirm = false
+                    balanceText = ""
                 }
-                Box(Modifier.weight(1f)) { ActionButton("Отмена", SurfaceCard) { confirm = false } }
+                ActionButton("Отмена", TextSecondary, Modifier.weight(1f)) { confirm = false }
             }
         }
         result?.let {
-            Spacer(Modifier.height(6.dp))
-            Text(it, fontSize = 12.sp, color = Green, lineHeight = 16.sp)
+            Spacer(Modifier.height(8.dp))
+            Banner(it, Tone.OK)
         }
-    }
-}
-
-@Composable
-private fun ActionButton(label: String, color: Color, onClick: () -> Unit) {
-    Surface(color = color.copy(alpha = if (color == SurfaceCard) 1f else 0.18f), shape = RoundedCornerShape(10.dp),
-        modifier = Modifier.fillMaxWidth().clickable { onClick() }) {
-        Text(
-            label, color = if (color == SurfaceCard) TextSecondary else color, fontSize = 13.sp, fontWeight = FontWeight.Bold,
-            textAlign = TextAlign.Center, modifier = Modifier.padding(12.dp)
-        )
     }
 }

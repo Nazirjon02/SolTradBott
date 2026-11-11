@@ -88,6 +88,7 @@ import tj.khujand.solana.trading.bot.exchange.dex.TokenCandidate
 import tj.khujand.solana.trading.bot.util.formatDexTime
 import tj.khujand.solana.trading.bot.util.formatLargeNumber
 import tj.khujand.solana.trading.bot.util.formatLocalTime
+import tj.khujand.solana.trading.bot.util.plural
 import kotlin.math.abs
 import kotlin.time.Clock
 

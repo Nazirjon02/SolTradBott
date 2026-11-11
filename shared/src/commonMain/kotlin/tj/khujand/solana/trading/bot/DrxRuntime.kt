@@ -14,6 +14,7 @@ import tj.khujand.solana.trading.bot.core.engine.beginNewRun
 import tj.khujand.solana.trading.bot.core.engine.watchCandleFeed
 import tj.khujand.solana.trading.bot.core.risk.EntryGuard
 import tj.khujand.solana.trading.bot.core.risk.RiskManager
+import tj.khujand.solana.trading.bot.core.strategy.EntryFunnel
 import tj.khujand.solana.trading.bot.core.strategy.StrategyManager
 import tj.khujand.solana.trading.bot.core.strategy.WatchBoard
 import tj.khujand.solana.trading.bot.data.BotStatus
@@ -84,8 +85,11 @@ class DrxRuntime(val db: DrxDatabase) {
     // Доска наблюдения: что стратегии видят по каждому кандидату — из того же цикла сканера.
     val watchBoard = WatchBoard()
 
+    // Воронка входа за час — для карточки «почему нет сделок» на главной.
+    val entryFunnel = EntryFunnel()
+
     val strategyManager = StrategyManager(
-        client, riskManager, notifier, db, scanner, executor, activityLog, settingsStore, entryGuard, watchBoard
+        client, riskManager, notifier, db, scanner, executor, activityLog, settingsStore, entryGuard, watchBoard, entryFunnel
     )
     val engine = BotEngine(client, strategyManager, notifier, db, accountCache, executor, settingsStore, activityLog)
     val tradeMonitor = TradeMonitor(client, db, executor, notifier, activityLog, protection = settingsStore::getProtection)

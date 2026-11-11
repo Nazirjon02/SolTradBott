@@ -76,14 +76,14 @@ const val MANUAL_STRATEGY_ID = "manual"
 const val MANUAL_STRATEGY_NAME = "Ручная покупка"
 
 /** Чем закончилась попытка входа по сигналу. */
-private enum class EntryOutcome {
-    OPENED,
+private sealed interface EntryOutcome {
+    data object Opened : EntryOutcome
 
     /** Эту монету пропускаем (проверка монеты, нет размера, сбой исполнения) — смотрим следующих кандидатов. */
-    SKIPPED,
+    data class Skipped(val loss: EntryLoss) : EntryOutcome
 
     /** Портфель не пускает новые входы — до конца цикла пробовать бессмысленно. */
-    PORTFOLIO_BLOCKED,
+    data object PortfolioBlocked : EntryOutcome
 }
 
 /**
@@ -93,6 +93,7 @@ private enum class EntryOutcome {
  *
  * @param entryGuard общая проверка монеты перед покупкой; null — без проверки (тесты, старые сборки).
  * @param watchBoard доска наблюдения: что стратегии видят по каждому кандидату; null — не ведётся.
+ * @param entryFunnel воронка входа для карточки «почему нет сделок»: только счёт, на решения не влияет.
  */
 class StrategyManager(
     private val client: DexClient,
@@ -105,6 +106,7 @@ class StrategyManager(
     private val settingsStore: SettingsStore? = null,
     private val entryGuard: EntryGuard? = null,
     private val watchBoard: WatchBoard? = null,
+    private val entryFunnel: EntryFunnel? = null,
 ) {
     /**
      * Режим «только сигнал» (глобальный переключатель из настроек/Telegram).
@@ -185,11 +187,22 @@ class StrategyManager(
         }
     }
 
+    /** Цикл стратегии; что он увидел, уходит в воронку входа, даже если цикл оборвался ошибкой. */
     private suspend fun scanOnce(config: StrategyConfig, strategy: Strategy) {
+        val report = CycleReport(config.id, now())
+        try {
+            scanCandidates(config, strategy, report)
+        } finally {
+            entryFunnel?.record(report)
+        }
+    }
+
+    private suspend fun scanCandidates(config: StrategyConfig, strategy: Strategy, report: CycleReport) {
         // Лимит убытка портфеля с остановкой бота — раньше кулдауна: стратегия на кулдауне иначе
         // не заметила бы, что портфель уже потерял больше лимита.
         if (!_signalOnly.value) {
             riskManager.hardStopReason()?.let { reason ->
+                report.block(CycleBlock.HARD_STOP, reason)
                 activityLog.error("🛑 Лимит убытка портфеля: $reason — бот останавливается")
                 onHardStop?.invoke(reason)
                 return
@@ -200,7 +213,9 @@ class StrategyManager(
         val last = mutex.withLock { lastTradeAt[config.id] } ?: 0L
         val sinceLast = now() - last
         if (sinceLast < config.cooldownSeconds * 1000L) {
-            activityLog.info("⏸ ${config.name}: кулдаун ещё ${(config.cooldownSeconds - sinceLast / 1000)}с")
+            val left = config.cooldownSeconds - sinceLast / 1000
+            report.block(CycleBlock.COOLDOWN, "ещё $left с")
+            activityLog.info("⏸ ${config.name}: кулдаун ещё ${left}с")
             return
         }
 
@@ -209,9 +224,12 @@ class StrategyManager(
             // Размер позиции считается из кеша баланса — в REAL его нужно освежить,
             // иначе кеш пустой/протухший и вход отваливается с «нулевым размером».
             executor.refreshRealBalanceIfStale()
-            val block = riskManager.blockReason(config)
-                ?: riskManager.portfolioBlockReason()?.let { "портфель — $it" }
+            val strategyBlock = riskManager.blockReason(config)
+            val portfolioBlock = if (strategyBlock == null) riskManager.portfolioBlockReason() else null
+            val block = strategyBlock ?: portfolioBlock?.let { "портфель — $it" }
             if (block != null) {
+                if (strategyBlock != null) report.block(CycleBlock.STRATEGY_LIMITS, strategyBlock)
+                else report.block(CycleBlock.PORTFOLIO, portfolioBlock.orEmpty())
                 activityLog.warn("⏸ ${config.name}: $block")
                 return
             }
@@ -221,6 +239,7 @@ class StrategyManager(
         val candidates = scanner.scan(config.scanFilters())
         activityLog.requestOk()
         if (candidates.isEmpty()) {
+            report.emptyScan = true
             activityLog.info("○ ${config.name}: подходящих токенов нет")
             return
         }
@@ -235,7 +254,9 @@ class StrategyManager(
             db.txJournalQueries.pendingBuyMints().executeAsList()
 
         for (candidate in candidates) {
+            report.coins += candidate.mint
             if (candidate.mint in tradedMints) {
+                report.alreadyTraded += candidate.mint
                 watchBoard?.remove(candidate.mint)
                 continue
             }
@@ -243,6 +264,7 @@ class StrategyManager(
             val candles = runCatching {
                 client.getCandles(candidate.pairAddress, config.timeframe, config.darsCandleLimit)
             }.getOrDefault(emptyList())
+            if (candles.isEmpty()) report.noCandles += candidate.mint
 
             val evaluation = strategy.evaluate(candidate, candles, emptyList())
             val signal = evaluation.signal
@@ -261,17 +283,21 @@ class StrategyManager(
             if (plan != null) arm(config, candidate, plan, atrFraction(candles, config.atrPeriod, plan.triggerLevel))
             watchBoard?.update(watchItem(config, candidate, candles, evaluation, rangeOk, confidenceOk, plan))
             if (signal == null) continue
+            report.setups += candidate.mint
 
             if (!rangeOk) {
+                report.loss(candidate.mint, EntryLoss.RANGE)
                 activityLog.info("○ ${candidate.symbol}: цена у верха диапазона — пропуск (range-фильтр)")
                 continue
             }
             if (!confidenceOk) {
+                report.loss(candidate.mint, EntryLoss.CONFIDENCE)
                 activityLog.info("○ ${candidate.symbol}: уверенность ${(signal.confidence * 100).toInt()}% < 60%")
                 continue
             }
 
             if (_signalOnly.value) {
+                report.signals += candidate.mint
                 emitSignalOnly(signal, config)
                 continue
             }
@@ -281,20 +307,24 @@ class StrategyManager(
             val outcome = mintLock(candidate.mint).withLock {
                 val alreadyTraded = db.tradeQueries.hasTradedMint(candidate.mint, demoFlag).executeAsOne() > 0L ||
                     db.txJournalQueries.hasPendingBuy(candidate.mint).executeAsOne() > 0L
-                if (alreadyTraded) return@withLock EntryOutcome.SKIPPED
-                if (!riskManager.canTrade(config)) return@withLock EntryOutcome.SKIPPED
-                val fresh = withFreshEntryPrice(signal) ?: return@withLock EntryOutcome.SKIPPED
+                if (alreadyTraded) return@withLock EntryOutcome.Skipped(EntryLoss.ALREADY_TRADED)
+                if (!riskManager.canTrade(config)) return@withLock EntryOutcome.Skipped(EntryLoss.STRATEGY_LIMIT)
+                val fresh = withFreshEntryPrice(signal) ?: return@withLock EntryOutcome.Skipped(EntryLoss.PRICE_RAN)
                 // ATR входа — для ATR-трейлинга (если включён); по тем же свечам, что видела стратегия.
                 executeSignal(fresh, config, candidate, atrFraction(candles, config.atrPeriod, fresh.entryPrice))
             }
             when (outcome) {
-                EntryOutcome.OPENED -> {
+                EntryOutcome.Opened -> {
+                    report.opened++
                     watchBoard?.remove(candidate.mint)
                     mutex.withLock { lastTradeAt[config.id] = now() }
                     return // одна сделка за цикл — дальше кулдаун
                 }
-                EntryOutcome.PORTFOLIO_BLOCKED -> return
-                EntryOutcome.SKIPPED -> Unit
+                EntryOutcome.PortfolioBlocked -> {
+                    report.loss(candidate.mint, EntryLoss.PORTFOLIO)
+                    return
+                }
+                is EntryOutcome.Skipped -> report.loss(candidate.mint, outcome.loss)
             }
         }
     }
@@ -488,20 +518,28 @@ class StrategyManager(
         val outcome = mintLock(s.candidate.mint).withLock {
             val alreadyTraded = db.tradeQueries.hasTradedMint(s.candidate.mint, demoFlag).executeAsOne() > 0L ||
                 db.txJournalQueries.hasPendingBuy(s.candidate.mint).executeAsOne() > 0L
-            if (alreadyTraded || !riskManager.canTrade(config)) return@withLock EntryOutcome.SKIPPED
+            if (alreadyTraded) return@withLock EntryOutcome.Skipped(EntryLoss.ALREADY_TRADED)
+            if (!riskManager.canTrade(config)) return@withLock EntryOutcome.Skipped(EntryLoss.STRATEGY_LIMIT)
             activityLog.success("🎯 ${s.candidate.symbol}: цена ${fmtNum(price)} прошла уровень ${fmtNum(s.plan.triggerLevel)} — вход")
             executeSignal(signal, config, s.candidate, s.atrFrac)
         }
+        // Вход по взводу — тоже вход: воронка видит его, но циклом сканера он не считается.
+        val report = CycleReport(config.id, now(), countsAsCycle = false).apply { setups += s.candidate.mint }
         when (outcome) {
-            EntryOutcome.OPENED -> {
+            EntryOutcome.Opened -> {
+                report.opened++
                 disarm(key, null)
                 watchBoard?.remove(s.candidate.mint)
                 mutex.withLock { lastTradeAt[config.id] = now() }
             }
             // Портфель не пускает — ждём слота, пока не истечёт срок взвода.
-            EntryOutcome.PORTFOLIO_BLOCKED -> Unit
-            EntryOutcome.SKIPPED -> disarm(key, "○ ${s.candidate.symbol}: взведённый вход не состоялся")
+            EntryOutcome.PortfolioBlocked -> report.loss(s.candidate.mint, EntryLoss.PORTFOLIO)
+            is EntryOutcome.Skipped -> {
+                report.loss(s.candidate.mint, outcome.loss)
+                disarm(key, "○ ${s.candidate.symbol}: взведённый вход не состоялся")
+            }
         }
+        entryFunnel?.record(report)
     }
 
     /**
@@ -598,19 +636,19 @@ class StrategyManager(
         )
         if (sizeUsd <= 0) {
             activityLog.warn("⚠️ ${config.name}: нулевой размер позиции (нет баланса?)")
-            return EntryOutcome.SKIPPED
+            return EntryOutcome.Skipped(EntryLoss.NO_SIZE)
         }
         val slot = riskManager.reserveEntry(sizeUsd)
         if (slot is RiskManager.EntrySlot.Denied) {
             activityLog.warn("⏸ ${config.name}: портфель — ${slot.reason}")
-            return EntryOutcome.PORTFOLIO_BLOCKED
+            return EntryOutcome.PortfolioBlocked
         }
         try {
             val verdict = entryGuard?.check(signal.mint, sizeUsd, buySlippageBps(config))
             if (verdict is EntryGuard.Verdict.Reject) {
                 // Повтор отказа из кеша не пишем: стратегия видит тот же сетап каждый цикл.
                 if (!verdict.cached) activityLog.info("🛡 ${signal.symbol}: вход отклонён — ${verdict.reason}")
-                return EntryOutcome.SKIPPED
+                return EntryOutcome.Skipped(EntryLoss.COIN_CHECK)
             }
             val pass = verdict as? EntryGuard.Verdict.Pass
             val check = pass?.roundTripLossPct?.let { " · потери туда-обратно ${fmtNum(it)}%" } ?: ""
@@ -618,7 +656,7 @@ class StrategyManager(
                 "⚡ ${signal.symbol}: сигнал BUY (${(signal.confidence * 100).toInt()}%) — открываю на $${fmtNum(sizeUsd)}$check"
             )
             val tradeId = executor.openTrade(signal, config, sizeUsd, candidate.liquidityUsd, atrFrac, pass?.buyQuote)
-                ?: return EntryOutcome.SKIPPED
+                ?: return EntryOutcome.Skipped(EntryLoss.EXECUTION)
             notifier.sendOpenAlert(
                 symbol = signal.symbol,
                 strategyName = config.name,
@@ -629,7 +667,7 @@ class StrategyManager(
                 isDemo = executor.isDemo(),
                 reason = signal.reason,
             )
-            return if (tradeId.isNotEmpty()) EntryOutcome.OPENED else EntryOutcome.SKIPPED
+            return if (tradeId.isNotEmpty()) EntryOutcome.Opened else EntryOutcome.Skipped(EntryLoss.EXECUTION)
         } finally {
             // Сделка уже в БД (и считается там) или не открылась — бронь больше не нужна.
             riskManager.releaseEntry(slot)
@@ -663,6 +701,7 @@ class StrategyManager(
             activeJobs.remove(strategyId)
         }
         watchBoard?.clearStrategy(strategyId)
+        entryFunnel?.forgetStrategy(strategyId)
         _armed.update { map -> map.filterValues { it.config.id != strategyId } }
     }
 

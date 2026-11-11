@@ -150,6 +150,12 @@ object GeckoTerminalApi {
         store.setKeyBudget(budget.value.view())
     }
 
+    /** Сверка расхода ключа с кабинетом CoinGecko: за месяц потрачено [totalUsed] (см. [KeyBudget.correctMonthUsage]). */
+    fun correctKeyMonthUsage(totalUsed: Int) {
+        budget.value.correctMonthUsage(totalUsed)
+        refreshKeyBudget()
+    }
+
     /** Торговля — всегда без ключа; человек — с ключом, пока ключ в работе и не потрачен дневной лимит. */
     private fun routeFor(lane: RequestLane): RequestRoute =
         if (lane == RequestLane.USER && activeKey() != null && budget.value.canSpend()) keyedRoute else freeRoute

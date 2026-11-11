@@ -86,8 +86,8 @@ private fun LocalDate.monthNumber(): Int = month.ordinal + 1
 
 /** «+12.4» / «−3» — сумма дня без валюты, коротко для клетки. */
 private fun shortPnl(v: Double): String = when {
-    v > 0 -> "+${fmtNum(roundForCell(v))}"
-    v < 0 -> "−${fmtNum(roundForCell(-v))}"
+    v > 0 -> "+${fmtNum(roundForCell(v)).replace('.', ',')}"
+    v < 0 -> "−${fmtNum(roundForCell(-v)).replace('.', ',')}"
     else -> "0"
 }
 
@@ -111,7 +111,7 @@ fun PnlCalendarEntryCard(trades: List<TradeHistoryItem>, today: LocalDate, zone:
     val weekPnl = week.sumOf { byDay[it]?.pnl ?: 0.0 }
     val maxAbs = week.maxOfOrNull { abs(byDay[it]?.pnl ?: 0.0) } ?: 0.0
     Surface(
-        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp).clickable { onOpen() },
+        modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp)).clickable { onOpen() },
         color = SurfaceCard, shape = RoundedCornerShape(16.dp)
     ) {
         Column(Modifier.padding(16.dp)) {
