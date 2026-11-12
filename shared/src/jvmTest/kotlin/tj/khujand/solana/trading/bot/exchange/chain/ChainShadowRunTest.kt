@@ -42,7 +42,7 @@ class ChainShadowRunTest {
         val db = File(System.getenv("CHAIN_DB") ?: "${System.getProperty("user.home")}/.soltradbot/soltradbot.db")
         // Узел: явно заданный, иначе «Solana RPC URL» из настроек бота (там пользователь хранит ключ Helius).
         val rpc = System.getenv("CHAIN_RPC_URL")?.takeIf { it.isNotBlank() }
-            ?: runCatching { readSetting(db, out, "solana.rpc_url") }.getOrNull()?.takeIf { it.isNotBlank() }
+            ?: runCatching { readSetting(db, "solana.rpc_url") }.getOrNull()?.takeIf { it.isNotBlank() }
             ?: "https://api.mainnet-beta.solana.com"
         File(out, "events.log").appendText(
             "${System.currentTimeMillis()} узел: ${ChainCandleService.hostOf(rpc)} (helius=${ChainCandleService.isHelius(rpc)})\n"
@@ -60,7 +60,7 @@ class ChainShadowRunTest {
         val service = ChainCandleService(
             rpcUrl = { rpc },
             watchlist = {
-                runCatching { readWatchlist(db, out) }.onSuccess { lastWatchlist = it }.getOrDefault(lastWatchlist)
+                runCatching { readWatchlist(db) }.onSuccess { lastWatchlist = it }.getOrDefault(lastWatchlist)
             },
             solPriceUsd = { dex.getSolPriceUsd() },
             geckoCandles = { pool, tf, agg, lim ->
@@ -130,34 +130,36 @@ class ChainShadowRunTest {
         "open_ms,open,high,low,close,volume\n" +
             list.joinToString("") { "${it.openTimeMs},${it.open},${it.high},${it.low},${it.close},${it.volume}\n" }
 
-    /** Копия базы бота: читать живую незачем — бот пишет её без WAL, лишняя блокировка ему ни к чему. */
-    private fun copyDb(db: File, out: File): File {
-        val copy = File(out, "watchlist.db")
-        Files.copy(db.toPath(), copy.toPath(), StandardCopyOption.REPLACE_EXISTING)
-        return copy
+    /**
+     * Запрос к копии базы бота: читать живую незачем — бот пишет её без WAL, лишняя блокировка ему ни к чему.
+     * Копия — во временном файле и удаляется сразу после чтения: в базе лежат секреты (seed-фраза, токены).
+     */
+    private fun <T> withDbCopy(db: File, block: (java.sql.Connection) -> T): T {
+        val copy = Files.createTempFile("chain-shadow-", ".db")
+        try {
+            Files.copy(db.toPath(), copy, StandardCopyOption.REPLACE_EXISTING)
+            return DriverManager.getConnection("jdbc:sqlite:${copy.toAbsolutePath().toString().replace('\\', '/')}").use(block)
+        } finally {
+            Files.deleteIfExists(copy)
+        }
     }
 
-    private fun jdbc(copy: File) = "jdbc:sqlite:${copy.absolutePath.replace('\\', '/')}"
-
-    private fun readSetting(db: File, out: File, key: String): String? =
-        DriverManager.getConnection(jdbc(copyDb(db, out))).use { c ->
-            c.prepareStatement("SELECT val_text FROM settings WHERE key = ?").use { st ->
-                st.setString(1, key)
-                st.executeQuery().use { rs -> if (rs.next()) rs.getString(1) else null }
-            }
+    private fun readSetting(db: File, key: String): String? = withDbCopy(db) { c ->
+        c.prepareStatement("SELECT val_text FROM settings WHERE key = ?").use { st ->
+            st.setString(1, key)
+            st.executeQuery().use { rs -> if (rs.next()) rs.getString(1) else null }
         }
+    }
 
     /** Список наблюдения из копии базы бота (рваная копия → исключение → прежний список). */
-    private fun readWatchlist(db: File, out: File): List<WatchedPool> {
-        DriverManager.getConnection(jdbc(copyDb(db, out))).use { c ->
-            c.createStatement().use { st ->
-                val rs = st.executeQuery("SELECT pair_address, mint, symbol, dex_id, volume_h1_usd FROM token_cache")
-                val list = ArrayList<WatchedPool>()
-                while (rs.next()) {
-                    list += WatchedPool(rs.getString(1), rs.getString(2), rs.getString(3), rs.getString(4), rs.getDouble(5))
-                }
-                return list
+    private fun readWatchlist(db: File): List<WatchedPool> = withDbCopy(db) { c ->
+        c.createStatement().use { st ->
+            val rs = st.executeQuery("SELECT pair_address, mint, symbol, dex_id, volume_h1_usd FROM token_cache")
+            val list = ArrayList<WatchedPool>()
+            while (rs.next()) {
+                list += WatchedPool(rs.getString(1), rs.getString(2), rs.getString(3), rs.getString(4), rs.getDouble(5))
             }
+            list
         }
     }
 }
