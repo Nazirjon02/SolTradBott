@@ -1,12 +1,9 @@
 package tj.khujand.solana.trading.bot
 
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.Surface
-import androidx.compose.material3.Text
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.CandlestickChart
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -15,7 +12,6 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import kotlin.math.roundToLong
 import kotlin.time.Instant
 import tj.khujand.solana.trading.bot.core.engine.ActivityLog
@@ -93,7 +89,10 @@ fun ChainCandlesSection() {
     )
 }
 
-/** Содержимое раздела — от состояния, без рантайма (рисуется и в тестах). */
+/**
+ * Содержимое раздела — от состояния, без рантайма (рисуется и в тестах). Карточка в «Подключениях» после
+ * Telegram; в отличие от остальных полей экрана выключатель и лимит применяются сразу, без «Сохранить».
+ */
 @Composable
 internal fun ChainCandlesSectionContent(
     status: ChainCandleStatus,
@@ -102,39 +101,59 @@ internal fun ChainCandlesSectionContent(
     onToggle: (Boolean) -> Unit,
     onLimit: (String) -> Unit,
 ) {
-    FormSection("⛓  Свечи из блокчейна · прототип") {
-        Text(
-            "Теневой режим: свечи 1m/5m строятся из сделок в блокчейне (PumpSwap, Raydium) и раз в час " +
-                "сверяются с GeckoTerminal. Стратегии их не получают — торговля не меняется.",
-            fontSize = 11.sp, color = TextSecondary, lineHeight = 16.sp,
+    DrxCard {
+        CardTitle(
+            "Свечи из блокчейна",
+            icon = Icons.Rounded.CandlestickChart,
+            subtitle = "теневой режим — стратегии их не получают",
+            trailing = { Pill("ПРОТОТИП", Amber) },
+        )
+        Spacer(Modifier.height(10.dp))
+        HintText(
+            "Свечи 1m/5m строятся из сделок в блокчейне (PumpSwap, Raydium) и раз в час сверяются с " +
+                "GeckoTerminal. Торговля от них не меняется."
+        )
+        Spacer(Modifier.height(6.dp))
+        SettingSwitch(
+            "Строить свечи из блокчейна",
+            enabled,
+            description = "Включается и выключается сразу, без «Сохранить»",
+            onChange = onToggle,
+        )
+        if (enabled) {
+            Spacer(Modifier.height(8.dp))
+            val (text, tone) = chainStatusText(status)
+            Banner(text, tone)
+        }
+        Spacer(Modifier.height(12.dp))
+        NumberField(
+            "Лимит кредитов Helius в сутки",
+            limit,
+            onChange = onLimit,
+            allowDecimal = false,
+            hint = "Сохраняется сразу; дорогие пулы отключаются, чтобы сумма уложилась в лимит",
+            error = if (limit.toIntOrNull()?.takeIf { it > 0 } == null) "Целое число больше нуля" else null,
         )
         Spacer(Modifier.height(4.dp))
-        FormToggle("Строить свечи из блокчейна", enabled, onToggle)
-        if (enabled) {
-            val (text, color) = chainStatusText(status)
-            Surface(color = color.copy(alpha = 0.12f), shape = RoundedCornerShape(8.dp), modifier = Modifier.fillMaxWidth()) {
-                Text(text, fontSize = 12.sp, color = color, lineHeight = 17.sp, modifier = Modifier.padding(12.dp))
-            }
-        }
-        FormTextField("Лимит кредитов Helius в сутки", limit, isNumber = true, onChange = onLimit)
-        Text(
-            "Узел — «Solana RPC URL» в разделе кошелька: https://mainnet.helius-rpc.com/?api-key=… (новый адрес " +
-                "подхватывается при следующем включении). Бесплатный Helius — 1 млн кредитов в месяц, WebSocket — " +
-                "2 кредита за 0,1 МБ. На популярные пулы MEV-боты шлют сотни транзакций в секунду, и подписка на " +
-                "такой пул стоит десятки тысяч кредитов в сутки — прототип замеряет цену каждого пула и дорогие " +
-                "отключает сам.",
-            fontSize = 11.sp, color = TextSecondary, lineHeight = 16.sp,
+        HintText(
+            "Узел — «Solana RPC URL» в карточке «Кошелёк Solana»: https://mainnet.helius-rpc.com/?api-key=… " +
+                "(новый адрес подхватывается при следующем включении). Бесплатный Helius — 1 млн кредитов в месяц, " +
+                "WebSocket — 2 кредита за 0,1 МБ. На популярные пулы MEV-боты шлют сотни транзакций в секунду, и " +
+                "подписка на такой пул стоит десятки тысяч кредитов в сутки — прототип замеряет цену каждого пула " +
+                "и дорогие отключает сам."
         )
     }
 }
 
-/** Строки состояния и цвет. */
-private fun chainStatusText(st: ChainCandleStatus): Pair<String, androidx.compose.ui.graphics.Color> {
-    if (!st.running) return "Не запущено${st.error?.let { ": $it" } ?: ""}" to Red
+/** Строки состояния и тон плашки. */
+private fun chainStatusText(st: ChainCandleStatus): Pair<String, Tone> {
+    if (!st.running) return "Не запущено${st.error?.let { ": $it" } ?: ""}" to Tone.BAD
     val lines = ArrayList<String>()
     lines += when {
         !st.connected -> "Подключение к ${st.host}…"
         st.helius -> "Подключено к ${st.host}"
+        st.host.contains("publicnode", ignoreCase = true) -> "Подключено к ${st.host} — PublicNode снимает большинство " +
+            "подписок (замер 2026-11-12: 45 из 54), свечи будут по малой части пулов; для свечей нужен Helius"
         else -> "Подключено к ${st.host} — это не Helius: кредиты посчитаны так, как их считал бы Helius"
     }
     lines += "Пулов: подписано ${st.poolsLive} из ${st.poolsWatched} в наблюдении"
@@ -146,12 +165,15 @@ private fun chainStatusText(st: ChainCandleStatus): Pair<String, androidx.compos
     lines += "Кредиты: сегодня ${st.usage.creditsToday.roundToLong()} из ${st.dailyLimit}; сейчас ~$perDay в сутки (~${perDay * 30} в месяц)"
     if (st.pausedUntilMs > 0) lines += "Лимит на сутки исчерпан — подписки сняты до ${Instant.fromEpochMilliseconds(st.pausedUntilMs)}"
     if (st.reconnects > 0) lines += "Переподключений: ${st.reconnects}"
+    if (st.subscriptionDrops > 0) {
+        lines += "Узел сам снял подписок: ${st.subscriptionDrops} — эти пулы переподписываются, их бары за это время берутся у GeckoTerminal"
+    }
     st.lastReconcile?.let { lines += it.replaceFirstChar { c -> c.uppercase() } }
     st.error?.let { lines += "Ошибка: $it" }
-    val color = when {
-        st.pausedUntilMs > 0 || st.error != null -> Amber
-        st.connected -> Green
-        else -> Amber
+    val tone = when {
+        st.pausedUntilMs > 0 || st.error != null -> Tone.WARN
+        st.connected -> Tone.OK
+        else -> Tone.WARN
     }
-    return lines.joinToString("\n") to color
+    return lines.joinToString("\n") to tone
 }

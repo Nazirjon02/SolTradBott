@@ -53,7 +53,7 @@ class ChainCandlesRenderTest {
             reconnects = 1,
             lastReconcile = "сверка 5m: 24 пулов, 560 баров; close ±1% — 97.5%, объём ±1% — 91.2%; пропущено баров 3, лишних 2",
         )
-        val png = render("chain-running", 1500) {
+        val png = render("chain-running", 1640) {
             ChainCandlesSectionContent(status, enabled = true, limit = "25000", onToggle = {}, onLimit = {})
         }
         assertTrue(png.size > 10_000)

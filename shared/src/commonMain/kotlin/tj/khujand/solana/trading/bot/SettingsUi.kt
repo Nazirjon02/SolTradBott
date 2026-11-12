@@ -638,6 +638,9 @@ private fun ConnectionsSettings(
             modifier = Modifier.fillMaxWidth(),
         )
     }
+
+    // ── Свечи из блокчейна (прототип; применяется сразу, без «Сохранить») ──
+    ChainCandlesSection()
 }
 
 /**
