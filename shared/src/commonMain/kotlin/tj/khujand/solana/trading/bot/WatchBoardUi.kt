@@ -2,7 +2,6 @@ package tj.khujand.solana.trading.bot
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -13,6 +12,8 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.Radar
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -31,6 +32,7 @@ import androidx.compose.ui.unit.sp
 import tj.khujand.solana.trading.bot.core.engine.fmtNum
 import tj.khujand.solana.trading.bot.core.strategy.WatchItem
 import tj.khujand.solana.trading.bot.core.strategy.WatchStatus
+import tj.khujand.solana.trading.bot.util.plural
 
 // Доска наблюдения на главной (порт из MRX): лента отвечает «что бот делал», доска — «чего он ждёт».
 
@@ -56,16 +58,19 @@ fun WatchBoardCard(items: List<WatchItem>, running: Boolean, onClick: (WatchItem
     val shown = if (showAll) items else relevant
     val visible = if (expanded) shown else shown.take(BOARD_ROWS)
 
-    Surface(modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp), color = SurfaceCard, shape = RoundedCornerShape(16.dp)) {
-        Column(Modifier.padding(14.dp)) {
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-                Text("👀 Наблюдение", fontSize = 14.sp, fontWeight = FontWeight.Bold, color = TextPrimary)
+    Surface(modifier = Modifier.fillMaxWidth(), color = SurfaceCard, shape = RoundedCornerShape(16.dp)) {
+        Column(Modifier.padding(16.dp)) {
+            CardTitle(
+                "Наблюдение", icon = Icons.Rounded.Radar,
+                subtitle = "чего ждут стратегии · ${relevant.size} ${plural(relevant.size, "монета", "монеты", "монет")}",
+            ) {
                 Text(
-                    if (showAll) "только важные" else "показать все (${items.size})",
-                    fontSize = 11.sp, color = Blue, modifier = Modifier.clickable { showAll = !showAll }
+                    if (showAll) "только важные" else "все (${items.size})",
+                    fontSize = 13.sp, color = Blue, fontWeight = FontWeight.SemiBold,
+                    modifier = Modifier.clip(RoundedCornerShape(6.dp)).clickable { showAll = !showAll }.padding(horizontal = 4.dp, vertical = 2.dp)
                 )
             }
-            Spacer(Modifier.height(8.dp))
+            Spacer(Modifier.height(10.dp))
             if (visible.isEmpty()) {
                 Text(
                     when {
@@ -97,22 +102,22 @@ private fun WatchRow(w: WatchItem, onClick: () -> Unit) {
     Row(Modifier.fillMaxWidth().clickable { onClick() }, verticalAlignment = Alignment.Top) {
         Surface(color = color.copy(alpha = 0.15f), shape = RoundedCornerShape(6.dp), modifier = Modifier.widthIn(min = 64.dp)) {
             Text(
-                w.status.label, color = color, fontSize = 10.sp, fontWeight = FontWeight.Bold,
+                w.status.label, color = color, fontSize = 11.sp, fontWeight = FontWeight.Bold,
                 modifier = Modifier.padding(horizontal = 6.dp, vertical = 3.dp)
             )
         }
         Spacer(Modifier.width(8.dp))
         Column(Modifier.weight(1f)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(w.symbol, fontSize = 13.sp, fontWeight = FontWeight.Bold, color = TextPrimary, maxLines = 1)
+                Text(w.symbol, fontSize = 14.sp, fontWeight = FontWeight.Bold, color = TextPrimary, maxLines = 1)
                 Spacer(Modifier.width(6.dp))
                 Text(
-                    "${w.strategyName} · ${w.timeframe}", fontSize = 11.sp, color = TextSecondary,
+                    "${w.strategyName} · ${w.timeframe}", fontSize = 12.sp, color = TextSecondary,
                     maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f)
                 )
                 w.distancePct?.let { d ->
                     Text(
-                        "до уровня ${if (d > 0) "+" else ""}${fmtNum(d)}%", fontSize = 11.sp,
+                        "до уровня ${if (d > 0) "+" else ""}${fmtNum(d)}%", fontSize = 12.sp,
                         color = if (kotlin.math.abs(d) <= 2.0) Amber else TextSecondary
                     )
                 }
@@ -122,7 +127,7 @@ private fun WatchRow(w: WatchItem, onClick: () -> Unit) {
             Spacer(Modifier.height(3.dp))
             Text(
                 "${w.passed}/${w.total} · " + (w.missing ?: "всё сошлось — вход по общим фильтрам и проверке монеты"),
-                fontSize = 11.sp, color = TextSecondary, lineHeight = 15.sp, maxLines = 2, overflow = TextOverflow.Ellipsis
+                fontSize = 12.sp, color = TextSecondary, lineHeight = 16.sp, maxLines = 2, overflow = TextOverflow.Ellipsis
             )
         }
     }

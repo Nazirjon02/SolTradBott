@@ -14,6 +14,7 @@ import tj.khujand.solana.trading.bot.core.engine.beginNewRun
 import tj.khujand.solana.trading.bot.core.engine.watchCandleFeed
 import tj.khujand.solana.trading.bot.core.risk.EntryGuard
 import tj.khujand.solana.trading.bot.core.risk.RiskManager
+import tj.khujand.solana.trading.bot.core.strategy.EntryFunnel
 import tj.khujand.solana.trading.bot.core.strategy.StrategyManager
 import tj.khujand.solana.trading.bot.core.strategy.WatchBoard
 import tj.khujand.solana.trading.bot.data.BotStatus
@@ -26,6 +27,8 @@ import tj.khujand.solana.trading.bot.exchange.dex.AccountCache
 import tj.khujand.solana.trading.bot.exchange.dex.DexClient
 import tj.khujand.solana.trading.bot.exchange.dex.GeckoTerminalApi
 import tj.khujand.solana.trading.bot.exchange.dex.JupiterSwapQuotes
+import tj.khujand.solana.trading.bot.exchange.dex.KeyBudget
+import tj.khujand.solana.trading.bot.exchange.dex.RequestLane
 import tj.khujand.solana.trading.bot.exchange.dex.TokenCache
 import tj.khujand.solana.trading.bot.exchange.dex.TokenScanner
 import tj.khujand.solana.trading.bot.exchange.dex.toTokenCandidate
@@ -59,8 +62,9 @@ class DrxRuntime(val db: DrxDatabase) {
         },
         // Скан запускает человек и смотрит на прогресс: пусть монеты дождутся очереди к GeckoTerminal,
         // а не отвалятся с «мало свечей», как только очередь стала длиннее обычного ожидания стратегии.
+        // Разбор запускает человек — свечи идут с ключом CoinGecko, пока хватает его дневного лимита.
         candleSource = { pool, tf, agg, limit ->
-            GeckoTerminalApi.getCandles(pool, tf, agg, limit, maxWaitMs = ANALYSIS_MAX_WAIT_MS)
+            GeckoTerminalApi.getCandles(pool, tf, agg, limit, maxWaitMs = ANALYSIS_MAX_WAIT_MS, lane = RequestLane.USER)
         },
     )
 
@@ -81,11 +85,17 @@ class DrxRuntime(val db: DrxDatabase) {
     // Доска наблюдения: что стратегии видят по каждому кандидату — из того же цикла сканера.
     val watchBoard = WatchBoard()
 
+    // Воронка входа за час — для карточки «почему нет сделок» на главной.
+    val entryFunnel = EntryFunnel()
+
     val strategyManager = StrategyManager(
-        client, riskManager, notifier, db, scanner, executor, activityLog, settingsStore, entryGuard, watchBoard
+        client, riskManager, notifier, db, scanner, executor, activityLog, settingsStore, entryGuard, watchBoard, entryFunnel
     )
     val engine = BotEngine(client, strategyManager, notifier, db, accountCache, executor, settingsStore, activityLog)
     val tradeMonitor = TradeMonitor(client, db, executor, notifier, activityLog, protection = settingsStore::getProtection)
+
+    // Прототип свечей из блокчейна (теневой режим, по умолчанию выключен): стратегии его свечей не получают.
+    val chainCandles = createChainCandles(settingsStore, tokenCache, client, activityLog)
 
     // Собственный scope рантайма: здесь живёт long-polling Telegram-контроллера, чтобы он
     // переживал уход Activity так же, как движок (раньше polling был привязан к Compose и
@@ -96,9 +106,18 @@ class DrxRuntime(val db: DrxDatabase) {
 
     init {
         // Ключ — до первого запроса свечей и до наблюдателя: он сообщает в ленту, с ключом ли работаем.
+        // Счёт расхода ключа живёт в настройках — перезапуск не обнуляет дневной лимит.
+        GeckoTerminalApi.setKeyBudget(
+            KeyBudget(
+                monthlyQuota = settingsStore::getCoinGeckoQuota,
+                load = settingsStore::getCoinGeckoUsage,
+                save = settingsStore::setCoinGeckoUsage,
+            )
+        )
         GeckoTerminalApi.setApiKey(settingsStore.getCoinGeckoKey())
         runtimeScope.watchCandleFeed(GeckoTerminalApi.status, activityLog)
         tradeMonitor.start()
+        if (settingsStore.getChainCandlesEnabled()) chainCandles.start()
         syncTelegramController()
     }
 
@@ -164,6 +183,7 @@ class DrxRuntime(val db: DrxDatabase) {
         telegramJob?.cancel()
         telegramController?.close()
         runtimeScope.cancel()
+        chainCandles.stop()
         marketAnalyzer.close()
         tradeMonitor.close()
         engine.shutdown()

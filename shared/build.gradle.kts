@@ -73,6 +73,8 @@ kotlin {
             // Skia под текущую ОС: нужна тесту, который рендерит график и карточку разбора в PNG
             // без окна. Только для тестов — в рантайм shared не попадает.
             implementation(compose.desktop.currentOs)
+            // Тесты, которые нажимают на вкладки, кнопки и поля настоящего интерфейса (AppInteractionTest).
+            implementation(libs.compose.uiTest)
         }
     }
 }

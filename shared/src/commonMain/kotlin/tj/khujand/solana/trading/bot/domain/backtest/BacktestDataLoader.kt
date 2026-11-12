@@ -8,6 +8,7 @@ import tj.khujand.solana.trading.bot.exchange.dex.GeckoTerminalApi
 import tj.khujand.solana.trading.bot.exchange.dex.GtPool
 import tj.khujand.solana.trading.bot.exchange.dex.GtPoolList
 import tj.khujand.solana.trading.bot.exchange.dex.OhlcvPage
+import tj.khujand.solana.trading.bot.exchange.dex.RequestLane
 
 /**
  * Загрузка истории для бэктеста с GeckoTerminal: список монет (trending / new / top) и свечи
@@ -18,10 +19,11 @@ import tj.khujand.solana.trading.bot.exchange.dex.OhlcvPage
  * Источники и часы инъектируются — для тестов без сети и ожидания.
  */
 class BacktestDataLoader(
+    // Бэктест запускает человек и ждёт результата — история идёт с ключом CoinGecko, пока хватает его лимита.
     private val pageSource: suspend (pool: String, tf: String, agg: Int, limit: Int, beforeSec: Long?) -> OhlcvPage =
-        { pool, tf, agg, limit, before -> GeckoTerminalApi.getCandlesPage(pool, tf, agg, limit, before) },
+        { pool, tf, agg, limit, before -> GeckoTerminalApi.getCandlesPage(pool, tf, agg, limit, before, lane = RequestLane.USER) },
     private val poolSource: suspend (list: GtPoolList, page: Int) -> Pair<List<GtPool>, Int> =
-        { list, page -> GeckoTerminalApi.getPools(list, page) },
+        { list, page -> GeckoTerminalApi.getPools(list, page, lane = RequestLane.USER) },
     private val minRequestIntervalMs: Long = 2_500L,
     private val rateLimitBackoffMs: Long = 30_000L,
     private val nowMs: () -> Long = { Clock.System.now().toEpochMilliseconds() },

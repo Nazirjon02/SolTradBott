@@ -51,6 +51,7 @@ import tj.khujand.solana.trading.bot.core.strategy.toStrategyConfig
 import tj.khujand.solana.trading.bot.domain.backtest.timeframeMs
 import tj.khujand.solana.trading.bot.domain.dars.MarketAnalysis
 import tj.khujand.solana.trading.bot.exchange.dex.Candle
+import tj.khujand.solana.trading.bot.exchange.dex.RequestLane
 import tj.khujand.solana.trading.bot.exchange.dex.toTokenCandidate
 
 // График бота (порт BotChartScreen из MRX): монета глазами стратегии — свечи в реальном времени, любой
@@ -125,8 +126,9 @@ fun BotChartScreen(runtime: DrxRuntime?, target: ChartTarget, onClose: () -> Uni
         val client = runtime?.client ?: return@LaunchedEffect
         while (true) {
             try {
-                // График — с незакрытым баром, когда лимит API это позволяет (ключ CoinGecko); иначе закрытые бары.
-                val c = client.getCandles(target.pairAddress, tf, 200, live = true)
+                // График смотрит человек — запрос идёт с ключом CoinGecko (пока хватает его дневного лимита) и с
+                // незакрытым баром; без ключа — закрытые бары, как у стратегий.
+                val c = client.getCandles(target.pairAddress, tf, 200, live = true, lane = RequestLane.USER)
                 if (c.isNotEmpty()) {
                     candles = c
                     status = ""

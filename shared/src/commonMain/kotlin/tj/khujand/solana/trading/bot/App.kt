@@ -1,12 +1,12 @@
 package tj.khujand.solana.trading.bot
 
-import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -15,35 +15,23 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
-import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.LinearProgressIndicator
-import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Slider
 import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Surface
-import androidx.compose.material3.Switch
-import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
-import androidx.compose.material3.darkColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -56,24 +44,15 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.Path
-import androidx.compose.ui.graphics.StrokeCap
-import androidx.compose.ui.graphics.StrokeJoin
-import androidx.compose.ui.graphics.drawscope.DrawScope
-import androidx.compose.ui.graphics.drawscope.Stroke
-import androidx.compose.ui.platform.LocalClipboardManager
-import androidx.compose.ui.text.AnnotatedString
-import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.input.PasswordVisualTransformation
-import androidx.compose.ui.text.input.VisualTransformation
-import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import app.cash.sqldelight.coroutines.asFlow
+import app.cash.sqldelight.coroutines.mapToList
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.launch
@@ -83,10 +62,7 @@ import kotlinx.datetime.TimeZone
 import kotlinx.datetime.atStartOfDayIn
 import kotlinx.datetime.toLocalDateTime
 import tj.khujand.solana.trading.bot.core.engine.ActivityEvent
-import tj.khujand.solana.trading.bot.core.engine.ActivityLevel
 import tj.khujand.solana.trading.bot.core.engine.ActivityStats
-import tj.khujand.solana.trading.bot.core.engine.EXIT_BLOCKED_AFTER
-import tj.khujand.solana.trading.bot.core.engine.RunSummary
 import tj.khujand.solana.trading.bot.core.engine.fmtNum
 import tj.khujand.solana.trading.bot.core.engine.runStartedAt
 import tj.khujand.solana.trading.bot.core.engine.runSummaries
@@ -96,6 +72,9 @@ import tj.khujand.solana.trading.bot.domain.dars.CoinAnalysis
 import tj.khujand.solana.trading.bot.domain.dars.MarketAnalysis
 import tj.khujand.solana.trading.bot.core.strategy.StrategyType
 import tj.khujand.solana.trading.bot.core.strategy.WatchItem
+import tj.khujand.solana.trading.bot.core.strategy.WatchStatus
+import tj.khujand.solana.trading.bot.core.strategy.diagnoseEntries
+import tj.khujand.solana.trading.bot.data.db.Trade
 import tj.khujand.solana.trading.bot.domain.backtest.BacktestReport
 import tj.khujand.solana.trading.bot.domain.backtest.BacktestRequest
 import tj.khujand.solana.trading.bot.domain.backtest.BacktestService
@@ -103,6 +82,7 @@ import tj.khujand.solana.trading.bot.domain.backtest.BacktestSettings
 import tj.khujand.solana.trading.bot.domain.backtest.BacktestState
 import tj.khujand.solana.trading.bot.domain.backtest.BacktestStats
 import tj.khujand.solana.trading.bot.domain.backtest.backtestHigherTf
+import tj.khujand.solana.trading.bot.exchange.dex.DEFAULT_KEY_MONTHLY_QUOTA
 import tj.khujand.solana.trading.bot.exchange.dex.GeckoTerminalApi
 import tj.khujand.solana.trading.bot.exchange.dex.GtPoolList
 import tj.khujand.solana.trading.bot.data.AccountBalance
@@ -111,47 +91,28 @@ import tj.khujand.solana.trading.bot.data.OpenPosition
 import tj.khujand.solana.trading.bot.data.ProtectionSettings
 import tj.khujand.solana.trading.bot.data.SettingsStore
 import tj.khujand.solana.trading.bot.data.db.DrxDatabase
-import tj.khujand.solana.trading.bot.util.formatDexTime
-import tj.khujand.solana.trading.bot.util.formatLocalTime
-import tj.khujand.solana.trading.bot.util.formatLargeNumber
-import tj.khujand.solana.trading.bot.util.formatNumber
 
-// ─── Палитра (1-в-1 из MRX) ───────────────────────────────────────────────────
-
-internal val BgDark        = Color(0xFF0A0E1A)
-internal val SurfaceCard   = Color(0xFF1A2235)
-internal val Green         = Color(0xFF00D97E)
-internal val GreenDim      = Color(0xFF00D97E).copy(alpha = 0.15f)
-internal val Red           = Color(0xFFFF4757)
-internal val RedDim        = Color(0xFFFF4757).copy(alpha = 0.15f)
-internal val Blue          = Color(0xFF4E9EFF)
-internal val Purple        = Color(0xFF9B7AFF)
-internal val Amber         = Color(0xFFF59E0B)
-internal val TextPrimary   = Color(0xFFEAF0FB)
-internal val TextSecondary = Color(0xFF6B7A99)
-internal val BorderColor   = Color(0xFF1E2D45)
-
-enum class Screen { DASHBOARD, ANALYSIS, HISTORY, STATS, STRATEGIES, SETTINGS }
-
-// ─── Root ─────────────────────────────────────────────────────────────────────
+// ─── Оболочка приложения ──────────────────────────────────────────────────────
 
 @Composable
 fun App(runtime: DrxRuntime? = null) {
-    MaterialTheme(
-        colorScheme = darkColorScheme(
-            primary = Green,
-            background = BgDark,
-            surface = SurfaceCard,
-            onBackground = TextPrimary,
-            onSurface = TextPrimary
-        )
-    ) {
-        DrxApp(runtime)
+    DrxTheme { DrxApp(runtime) }
+}
+
+/**
+ * Оболочка: вкладки, экраны поверх них (форма стратегии, бэктест, график) и общее состояние. На узком экране вкладки
+ * внизу, на широком окне (десктоп, планшет) — боковая панель, а главная и «Сделки» раскладываются в две колонки.
+ * [forceWide] — для рендер-тестов.
+ */
+@Composable
+fun DrxApp(runtime: DrxRuntime? = null, forceWide: Boolean? = null) {
+    BoxWithConstraints(Modifier.fillMaxSize().background(BgDark)) {
+        DrxAppContent(runtime, wide = forceWide ?: (maxWidth >= WideLayoutMinWidth))
     }
 }
 
 @Composable
-fun DrxApp(runtime: DrxRuntime? = null) {
+private fun DrxAppContent(runtime: DrxRuntime?, wide: Boolean) {
     val scope = rememberCoroutineScope()
     var screen by remember { mutableStateOf(Screen.DASHBOARD) }
     val strategies = remember { mutableStateListOf<StrategyConfig>() }
@@ -159,7 +120,7 @@ fun DrxApp(runtime: DrxRuntime? = null) {
     var showForm by remember { mutableStateOf(false) }
     // Открытый бэктест (поверх вкладок); из него можно уйти в форму стратегии и вернуться.
     var backtestFor by remember { mutableStateOf<StrategyConfig?>(null) }
-    // Открытый график бота (поверх вкладок): монета с доски наблюдения или открытая позиция.
+    // Открытый график бота: монета с доски наблюдения или открытая позиция. На широком окне — рядом с главной.
     var chartTarget by remember { mutableStateOf<ChartTarget?>(null) }
     // Ручная покупка из «Анализа» — диалог поверх экрана.
     var manualBuy by remember { mutableStateOf<CoinAnalysis?>(null) }
@@ -168,21 +129,11 @@ fun DrxApp(runtime: DrxRuntime? = null) {
     val settingsStore = runtime?.settingsStore
     val engine = runtime?.engine
 
-    // Настройки из БД (кошелёк, Telegram, RPC)
-    var settings by remember {
-        mutableStateOf(
-            settingsStore?.let { s ->
-                DrxSettings(
-                    rpcUrl = s.getRpcUrl() ?: "https://api.mainnet-beta.solana.com",
-                    walletSeed = s.getWalletSeed() ?: "",
-                    telegramToken = s.getTelegramToken() ?: "",
-                    telegramChatId = s.getTelegramChatId()?.toString() ?: "",
-                    protection = s.getProtection(),
-                    coinGeckoKey = s.getCoinGeckoKey() ?: "",
-                )
-            } ?: DrxSettings()
-        )
-    }
+    // Настройки: сохранённые и черновик правок. Черновик живёт здесь, а не в экране настроек, — переход на другую
+    // вкладку не теряет набранное, а на вкладке «Настройки» горит точка, пока правки не сохранены.
+    var settings by remember { mutableStateOf(loadSettings(settingsStore)) }
+    var settingsDraft by remember { mutableStateOf(settings) }
+    var settingsFormVersion by remember { mutableStateOf(0) }
 
     // Режим DEMO/REAL — применяется сразу (исполнитель читает флаг из БД на каждой сделке).
     var demoMode by remember { mutableStateOf(settingsStore?.getDemoMode() ?: true) }
@@ -195,31 +146,38 @@ fun DrxApp(runtime: DrxRuntime? = null) {
     val fallbackSignalOnly = remember { MutableStateFlow(false) }
     val signalOnly by (runtime?.strategyManager?.signalOnly ?: fallbackSignalOnly).collectAsState()
 
-    // Telegram-контроллером (long-polling команд) владеет DrxRuntime — он живёт вместе с
-    // движком и переживает уход Activity. Здесь его больше не запускаем; при смене токена/чата
-    // UI лишь дёргает runtime.syncTelegramController() в обработчике сохранения настроек.
+    // Telegram-контроллером (long-polling команд) владеет DrxRuntime — он живёт вместе с движком и переживает уход
+    // Activity. При смене токена/чата UI лишь дёргает runtime.syncTelegramController() в обработчике сохранения.
 
-    // Статус бота из движка
     val fallbackStatus = remember { MutableStateFlow(BotStatus.STOPPED) }
     val botStatus by (engine?.status ?: fallbackStatus).collectAsState()
 
-    // Живая лента активности
     val activityFallback = remember { MutableStateFlow<List<ActivityEvent>>(emptyList()) }
     val activity by (runtime?.activityLog?.events ?: activityFallback).collectAsState()
-
-    // Пульс сессии для шапки
     val statsFallback = remember { MutableStateFlow(ActivityStats()) }
     val activityStats by (runtime?.activityLog?.stats ?: statsFallback).collectAsState()
-    // Ошибки сессии — окно по клику на «N ош.» в шапке
     val errorsFallback = remember { MutableStateFlow<List<ActivityEvent>>(emptyList()) }
     val sessionErrors by (runtime?.activityLog?.errors ?: errorsFallback).collectAsState()
 
-    // Доска наблюдения — строки приходят из скан-цикла стратегий
+    // Доска наблюдения — строки приходят из скан-цикла стратегий.
     val watchFallback = remember { MutableStateFlow<List<WatchItem>>(emptyList()) }
     val watchItems by (runtime?.watchBoard?.items ?: watchFallback).collectAsState()
 
-    var balance by remember { mutableStateOf<AccountBalance?>(null) }
+    // Воронка входа: перечитываем после каждого отчёта стратегий и раз в 15 с — окно в час сдвигается и без них.
+    val funnel = runtime?.entryFunnel
+    val funnelFallback = remember { MutableStateFlow(0L) }
+    val funnelVersion by (funnel?.version ?: funnelFallback).collectAsState()
+    var clockTick by remember { mutableStateOf(0) }
+    LaunchedEffect(Unit) {
+        while (true) {
+            delay(15_000)
+            clockTick++
+        }
+    }
+    val funnelSnapshot = remember(funnelVersion, clockTick) { funnel?.snapshot() }
+    val feed by GeckoTerminalApi.status.collectAsState()
 
+    var balance by remember { mutableStateOf<AccountBalance?>(null) }
     LaunchedEffect(engine, demoMode) {
         val e = engine ?: return@LaunchedEffect
         while (true) {
@@ -228,7 +186,7 @@ fun DrxApp(runtime: DrxRuntime? = null) {
         }
     }
 
-    // «Живые» открытые позиции с текущим PnL — для секции на дашборде и ручного закрытия.
+    // «Живые» открытые позиции с текущим PnL — для главной и ручного закрытия.
     val openPositions = remember { mutableStateListOf<OpenPosition>() }
     suspend fun refreshPositions() {
         val e = engine ?: return
@@ -251,56 +209,98 @@ fun DrxApp(runtime: DrxRuntime? = null) {
     }
     LaunchedEffect(runtime) { reload() }
 
-    // Защиту и автоматику могли переключить из Telegram (/settings) — при входе в настройки перечитываем
-    // их из БД, иначе «Сохранить» вернул бы поверх старые значения.
+    // Режим, защиту и автоматику могли переключить из Telegram (/mode, /settings) — при смене вкладки перечитываем
+    // их из БД, иначе экран показывал бы старое, а «Сохранить» вернуло бы старые значения поверх новых.
     LaunchedEffect(screen) {
         val s = settingsStore ?: return@LaunchedEffect
+        demoMode = s.getDemoMode() ?: true
+        shadowMode = s.getShadowQuotes()
         if (screen == Screen.SETTINGS) {
-            settings = settings.copy(protection = s.getProtection())
+            val fresh = s.getProtection()
+            if (fresh != settings.protection) {
+                // Защиту в черновике не правили — свежие значения идут и в него; правили — набранное остаётся.
+                if (settingsDraft.protection == settings.protection) {
+                    settingsDraft = settingsDraft.copy(protection = fresh)
+                    settingsFormVersion++
+                }
+                settings = settings.copy(protection = fresh)
+            }
             resumeOnLaunch = s.getResumeOnLaunch()
         }
     }
 
-    // Закрытые сделки — перечитываются при смене экрана (TradeMonitor закрывает их в БД).
-    val closedTrades = remember(screen) { loadClosedTrades(db) }
+    // Закрытые сделки: SQLDelight сообщает о каждой записи в таблицу сделок — главная и «Сделки» обновляются, как
+    // только монитор закрыл сделку, а не при смене вкладки.
+    var closedTrades by remember { mutableStateOf(loadClosedTrades(db)) }
+    LaunchedEffect(db) {
+        val d = db ?: return@LaunchedEffect
+        d.tradeQueries.getAll().asFlow().mapToList(Dispatchers.Default).collect { rows -> closedTrades = rows.toHistoryItems() }
+    }
+    // Сделка закрылась — позиция ушла: список позиций обновляем сразу, не дожидаясь 15-секундного цикла.
+    LaunchedEffect(closedTrades.size) { refreshPositions() }
 
     // «Новый старт»: итоги главной и «Аналитики» — с начала забега текущего режима (0 — вся история).
     var runVersion by remember { mutableStateOf(0) }
-    val runStart = remember(screen, demoMode, runVersion) { db?.runStartedAt(demoMode) ?: 0L }
-    val runs = remember(screen, demoMode, runVersion) {
+    val runStart = remember(screen, demoMode, runVersion, closedTrades.size) { db?.runStartedAt(demoMode) ?: 0L }
+    val runs = remember(screen, demoMode, runVersion, closedTrades.size) {
         db?.let { runCatching { runSummaries(it, demoMode) }.getOrNull() } ?: emptyList()
     }
     val runTrades = if (runStart > 0) closedTrades.filter { it.isDemo == demoMode && it.closedAt >= runStart } else closedTrades
+    val mode = accountMode(demoMode, shadowMode)
 
-    Column(modifier = Modifier.fillMaxSize().background(BgDark)) {
-        Box(modifier = Modifier.weight(1f)) {
-            if (showForm) {
-                StrategyFormScreen(
-                    initial = editingStrategy,
-                    onSave = { cfg ->
-                        runtime?.strategyStore?.save(cfg)
-                        // Работающий сканер держит старый конфиг — перезапускаем его с новым.
-                        scope.launch { engine?.reloadStrategy(cfg.id) }
-                        reload()
-                        showForm = false
-                        editingStrategy = null
-                        // Правили параметры из бэктеста — возвращаемся к нему с новым конфигом.
-                        backtestFor = backtestFor?.let { bt -> strategies.firstOrNull { it.id == bt.id } }
-                    },
-                    onCancel = { showForm = false; editingStrategy = null }
-                )
-            } else if (chartTarget != null) {
-                BotChartScreen(runtime, chartTarget!!) { chartTarget = null }
-            } else if (backtestFor != null) {
-                BacktestScreen(
-                    config = backtestFor!!,
-                    service = runtime?.backtest,
-                    onEditStrategy = { editingStrategy = backtestFor; showForm = true },
-                    onClose = { backtestFor = null }
-                )
-            } else {
-                when (screen) {
-                    Screen.DASHBOARD -> DashboardScreen(
+    fun select(target: Screen) {
+        screen = target
+        // Переход на вкладку закрывает экраны поверх неё — иначе вкладка «не переключалась бы».
+        chartTarget = null
+        backtestFor = null
+    }
+
+    val onStatusChange: (BotStatus) -> Unit = { target ->
+        scope.launch {
+            when (target) {
+                BotStatus.RUNNING -> {
+                    if (isAndroid()) createServiceController().startMonitoring()
+                    engine?.start()
+                }
+                BotStatus.PAUSED -> engine?.pause()
+                BotStatus.STOPPED -> {
+                    engine?.stop()
+                    if (isAndroid()) createServiceController().stopMonitoring()
+                }
+            }
+        }
+    }
+
+    val body: @Composable () -> Unit = {
+        val chart = chartTarget
+        val bt = backtestFor
+        when {
+            showForm -> StrategyFormScreen(
+                initial = editingStrategy,
+                onSave = { cfg ->
+                    runtime?.strategyStore?.save(cfg)
+                    // Работающий сканер держит старый конфиг — перезапускаем его с новым.
+                    scope.launch { engine?.reloadStrategy(cfg.id) }
+                    reload()
+                    showForm = false
+                    editingStrategy = null
+                    // Правили параметры из бэктеста — возвращаемся к нему с новым конфигом.
+                    backtestFor = backtestFor?.let { b -> strategies.firstOrNull { it.id == b.id } }
+                },
+                onCancel = { showForm = false; editingStrategy = null }
+            )
+            // На широком окне график сделки открывается рядом с главной, а не вместо неё.
+            chart != null && !(wide && screen == Screen.DASHBOARD) -> BotChartScreen(runtime, chart) { chartTarget = null }
+            bt != null -> BacktestScreen(
+                config = bt,
+                service = runtime?.backtest,
+                onEditStrategy = { editingStrategy = backtestFor; showForm = true },
+                onClose = { backtestFor = null }
+            )
+            else -> when (screen) {
+                Screen.DASHBOARD -> {
+                    val now = Clock.System.now().toEpochMilliseconds()
+                    DashboardScreen(
                         botStatus = botStatus,
                         strategies = strategies,
                         balance = balance,
@@ -317,114 +317,153 @@ fun DrxApp(runtime: DrxRuntime? = null) {
                             }
                         },
                         watch = watchItems,
-                        onWatchClick = { w ->
-                            chartTarget = ChartTarget(w.mint, w.symbol, w.pairAddress, strategyId = w.strategyId)
-                        },
+                        onWatchClick = { w -> chartTarget = ChartTarget(w.mint, w.symbol, w.pairAddress, strategyId = w.strategyId) },
                         onPositionChart = { p ->
                             // Пул и стратегию берём из строки сделки: в карточке позиции их нет.
                             db?.tradeQueries?.getById(p.tradeId)?.executeAsOneOrNull()?.let { t ->
                                 chartTarget = ChartTarget(t.mint, t.symbol, t.pair_address, t.strategy_id, t.id)
                             }
                         },
-                    ) { target ->
-                        scope.launch {
-                            when (target) {
-                                BotStatus.RUNNING -> {
-                                    if (isAndroid()) createServiceController().startMonitoring()
-                                    engine?.start()
-                                }
-                                BotStatus.PAUSED -> engine?.pause()
-                                BotStatus.STOPPED -> {
-                                    engine?.stop()
-                                    if (isAndroid()) createServiceController().stopMonitoring()
-                                }
-                            }
-                        }
-                    }
-                    Screen.ANALYSIS -> AnalysisScreen(
-                        candidates = runtime?.tokenCache?.all() ?: emptyList(),
-                        analyzer = runtime?.marketAnalyzer,
-                        darsConfig = strategies.activeDarsConfig(),
-                        settingsStore = settingsStore,
-                        onBuy = if (runtime != null) { a -> manualBuy = a } else null,
-                    )
-                    Screen.HISTORY -> HistoryScreen(closedTrades)
-                    Screen.STATS -> StatsScreen(closedTrades, runs, runStart, demoMode)
-                    Screen.STRATEGIES -> StrategiesScreen(
-                        strategies = strategies,
-                        onCreate = { showForm = true; editingStrategy = null },
-                        onEdit = { cfg -> editingStrategy = cfg; showForm = true },
-                        onDelete = { cfg ->
-                            runtime?.strategyStore?.delete(cfg.id)
-                            // Удалённая стратегия не должна продолжать сканировать и входить.
-                            scope.launch { engine?.reloadStrategy(cfg.id) }
-                            reload()
-                        },
-                        onToggle = { cfg ->
-                            runtime?.strategyStore?.setActive(cfg.id, !cfg.isActive)
-                            scope.launch { engine?.applyStrategyActive(cfg.id, !cfg.isActive) }
-                            reload()
-                        },
-                        onBacktest = { cfg -> backtestFor = cfg }
-                    )
-                    Screen.SETTINGS -> SettingsScreen(
-                        settings = settings,
-                        connected = runtime != null,
-                        demoMode = demoMode,
-                        shadowMode = shadowMode,
-                        demoBalance = balance?.demoUsd ?: 10_000.0,
-                        signalOnly = signalOnly,
-                        resumeOnLaunch = resumeOnLaunch,
-                        onResumeOnLaunchChange = { v ->
-                            resumeOnLaunch = v
-                            settingsStore?.setResumeOnLaunch(v)
-                        },
-                        onDemoModeChange = { v ->
-                            // REAL требует seed-фразы — без неё исполнитель всё равно не откроет сделку.
-                            demoMode = v
-                            settingsStore?.setDemoMode(v)
-                        },
-                        onShadowModeChange = { v ->
-                            shadowMode = v
-                            settingsStore?.setShadowQuotes(v)
-                        },
-                        onSignalOnlyChange = { v ->
-                            val sm = runtime?.strategyManager
-                            if (sm != null) sm.setSignalOnly(v) else fallbackSignalOnly.value = v
-                        },
-                        onResetDemo = { runtime?.executor?.resetDemoBalance() },
-                        onResetBot = { runtime?.resetBotData(); runVersion++ },
-                        onNewRun = { balance ->
-                            val message = runtime?.startNewRun(balance) ?: "Рантайм не подключён"
-                            runVersion++
-                            message
-                        },
-                        onSave = { newSettings ->
-                            settingsStore?.apply {
-                                setRpcUrl(newSettings.rpcUrl.trim())
-                                if (newSettings.walletSeed.isNotBlank()) setWalletSeed(newSettings.walletSeed.trim())
-                                setTelegramToken(newSettings.telegramToken.trim())
-                                setTelegramChatId(newSettings.telegramChatId.trim().toLongOrNull() ?: 0L)
-                                // Защиту читают на каждой проверке — действует со следующего входа/выхода.
-                                setProtection(newSettings.protection)
-                                setCoinGeckoKey(newSettings.coinGeckoKey.trim())
-                            }
-                            // Ключ свечей применяется сразу: следующий запрос уйдёт уже с ним.
-                            GeckoTerminalApi.setApiKey(newSettings.coinGeckoKey)
-                            // Новый токен/чат применяем к живому notifier движка сразу.
-                            runtime?.notifier?.updateCredentials(
-                                newSettings.telegramToken.trim(),
-                                newSettings.telegramChatId.trim().toLongOrNull() ?: 0L
+                        diagnosis = funnelSnapshot?.let { snap ->
+                            diagnoseEntries(
+                                status = botStatus,
+                                activeStrategyIds = strategies.filter { it.isActive }.map { it.id }.toSet(),
+                                funnel = snap,
+                                signalOnly = signalOnly,
+                                nearest = watchItems.firstOrNull { it.status != WatchStatus.NONE },
+                                candlesLimited = feed.lastRateLimitAtMs > 0L && now - feed.lastRateLimitAtMs < 10 * 60_000L,
+                                nowMs = now,
                             )
-                            // И перезапускаем long-polling контроллера под новый токен/чат.
-                            runtime?.syncTelegramController()
-                            settings = newSettings
-                        }
+                        },
+                        funnel = funnelSnapshot,
+                        signalOnly = signalOnly,
+                        lastCycleAgo = funnelSnapshot?.lastCycleAt?.let { agoLabel(it, now) },
+                        modeLabel = mode.label,
+                        wide = wide,
+                        sidePane = if (wide && chart != null) {
+                            { BotChartScreen(runtime, chart) { chartTarget = null } }
+                        } else null,
+                        onOpenTrades = { select(Screen.TRADES) },
+                        onOpenStrategies = { select(Screen.STRATEGIES) },
+                        onStatusChange = onStatusChange,
                     )
                 }
+                Screen.ANALYSIS -> AnalysisScreen(
+                    candidates = runtime?.tokenCache?.all() ?: emptyList(),
+                    analyzer = runtime?.marketAnalyzer,
+                    darsConfig = strategies.activeDarsConfig(),
+                    settingsStore = settingsStore,
+                    onBuy = if (runtime != null) { a -> manualBuy = a } else null,
+                )
+                Screen.TRADES -> TradesScreen(closedTrades, runs, runStart, demoMode, wide)
+                Screen.STRATEGIES -> StrategiesScreen(
+                    strategies = strategies,
+                    onCreate = { showForm = true; editingStrategy = null },
+                    onEdit = { cfg -> editingStrategy = cfg; showForm = true },
+                    onDelete = { cfg ->
+                        runtime?.strategyStore?.delete(cfg.id)
+                        // Удалённая стратегия не должна продолжать сканировать и входить.
+                        scope.launch { engine?.reloadStrategy(cfg.id) }
+                        reload()
+                    },
+                    onToggle = { cfg ->
+                        runtime?.strategyStore?.setActive(cfg.id, !cfg.isActive)
+                        scope.launch { engine?.applyStrategyActive(cfg.id, !cfg.isActive) }
+                        reload()
+                    },
+                    onBacktest = { cfg -> backtestFor = cfg },
+                    wide = wide,
+                )
+                Screen.SETTINGS -> SettingsScreen(
+                    settings = settings,
+                    draft = settingsDraft,
+                    formVersion = settingsFormVersion,
+                    onDraftChange = { settingsDraft = it },
+                    onDiscard = {
+                        settingsDraft = settings
+                        settingsFormVersion++
+                    },
+                    connected = runtime != null,
+                    demoMode = demoMode,
+                    shadowMode = shadowMode,
+                    demoBalance = balance?.demoUsd?.takeIf { it > 0.0 } ?: 10_000.0,
+                    signalOnly = signalOnly,
+                    resumeOnLaunch = resumeOnLaunch,
+                    onResumeOnLaunchChange = { v ->
+                        resumeOnLaunch = v
+                        settingsStore?.setResumeOnLaunch(v)
+                    },
+                    onDemoModeChange = { v ->
+                        // REAL требует seed-фразы — экран не даст выбрать REAL без неё, а исполнитель и так не откроет сделку.
+                        demoMode = v
+                        settingsStore?.setDemoMode(v)
+                    },
+                    onShadowModeChange = { v ->
+                        shadowMode = v
+                        settingsStore?.setShadowQuotes(v)
+                    },
+                    onSignalOnlyChange = { v ->
+                        val sm = runtime?.strategyManager
+                        if (sm != null) sm.setSignalOnly(v) else fallbackSignalOnly.value = v
+                    },
+                    onResetDemo = { runtime?.executor?.resetDemoBalance() },
+                    onResetBot = { runtime?.resetBotData(); runVersion++ },
+                    onNewRun = { newBalance ->
+                        val message = runtime?.startNewRun(newBalance) ?: "Рантайм не подключён"
+                        runVersion++
+                        message
+                    },
+                    onCorrectKeyUsage = { GeckoTerminalApi.correctKeyMonthUsage(it) },
+                    wide = wide,
+                    onSave = { newSettings ->
+                        settingsStore?.apply {
+                            setRpcUrl(newSettings.rpcUrl.trim())
+                            if (newSettings.walletSeed.isNotBlank()) setWalletSeed(newSettings.walletSeed.trim())
+                            setTelegramToken(newSettings.telegramToken.trim())
+                            setTelegramChatId(newSettings.telegramChatId.trim().toLongOrNull() ?: 0L)
+                            // Защиту читают на каждой проверке — действует со следующего входа/выхода.
+                            setProtection(newSettings.protection)
+                            setCoinGeckoKey(newSettings.coinGeckoKey.trim())
+                            setCoinGeckoQuota(newSettings.coinGeckoQuota)
+                        }
+                        // Ключ свечей применяется сразу: следующий запрос уйдёт уже с ним.
+                        GeckoTerminalApi.setApiKey(newSettings.coinGeckoKey)
+                        // Новый токен/чат применяем к живому notifier движка сразу.
+                        runtime?.notifier?.updateCredentials(
+                            newSettings.telegramToken.trim(),
+                            newSettings.telegramChatId.trim().toLongOrNull() ?: 0L
+                        )
+                        // И перезапускаем long-polling контроллера под новый токен/чат.
+                        runtime?.syncTelegramController()
+                        // Пустая seed-фраза при сохранении не стирает сохранённую — в черновике остаётся она же.
+                        val stored = if (newSettings.walletSeed.isBlank()) newSettings.copy(walletSeed = settings.walletSeed) else newSettings
+                        settings = stored
+                        settingsDraft = stored
+                    },
+                )
             }
         }
-        if (!showForm) BottomNav(screen) { screen = it }
+    }
+
+    val badges = if (settingsDraft != settings) setOf(Screen.SETTINGS) else emptySet()
+    if (wide) {
+        Row(Modifier.fillMaxSize()) {
+            if (!showForm) {
+                val (statusColor, statusLabel) = when (botStatus) {
+                    BotStatus.RUNNING -> Green to "работает"
+                    BotStatus.PAUSED -> Amber to "пауза"
+                    BotStatus.STOPPED -> Red to "стоп"
+                }
+                DrxNavRail(screen, statusColor, statusLabel, badges) { select(it) }
+            }
+            // Нижней панели в широком режиме нет — отступ под системную навигацию (планшет) держит сам контент.
+            Box(Modifier.weight(1f).fillMaxHeight().navigationBarsPadding()) { body() }
+        }
+    } else {
+        Column(Modifier.fillMaxSize()) {
+            Box(Modifier.weight(1f).fillMaxWidth()) { body() }
+            if (!showForm) DrxBottomBar(screen, badges) { select(it) }
+        }
     }
 
     manualBuy?.let { coin ->
@@ -450,712 +489,45 @@ fun DrxApp(runtime: DrxRuntime? = null) {
     }
 }
 
+/** «12 с назад», «3 мин назад» — когда стратегии последний раз проходили цикл. */
+private fun agoLabel(ms: Long, nowMs: Long): String {
+    val s = ((nowMs - ms) / 1000).coerceAtLeast(0)
+    return when {
+        s < 60 -> "$s с назад"
+        s < 3600 -> "${s / 60} мин назад"
+        else -> "${s / 3600} ч назад"
+    }
+}
+
 data class DrxSettings(
-    val rpcUrl: String = "https://api.mainnet-beta.solana.com",
+    val rpcUrl: String = DEFAULT_RPC_URL,
     val walletSeed: String = "",
     val telegramToken: String = "",
     val telegramChatId: String = "",
     val protection: ProtectionSettings = ProtectionSettings(),
     /** Demo-ключ CoinGecko для свечей; пусто — без ключа (GeckoTerminal пускает считаные запросы в минуту). */
     val coinGeckoKey: String = "",
+    /** Месячная квота ключа CoinGecko: из неё считается дневной лимит (см. [GeckoTerminalApi]). */
+    val coinGeckoQuota: Int = DEFAULT_KEY_MONTHLY_QUOTA,
 )
 
-// ─── Bottom nav ───────────────────────────────────────────────────────────────
+/** Публичный RPC Solana — когда свой узел не задан. */
+internal const val DEFAULT_RPC_URL = "https://api.mainnet-beta.solana.com"
 
-@Composable
-fun BottomNav(current: Screen, onSelect: (Screen) -> Unit) {
-    Surface(color = SurfaceCard, tonalElevation = 0.dp) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .navigationBarsPadding()
-                .padding(horizontal = 4.dp, vertical = 6.dp),
-            horizontalArrangement = Arrangement.spacedBy(2.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            NavItem(Modifier.weight(1f), "📊", "Главная",   current == Screen.DASHBOARD)  { onSelect(Screen.DASHBOARD) }
-            NavItem(Modifier.weight(1f), "🔬", "Анализ",    current == Screen.ANALYSIS)   { onSelect(Screen.ANALYSIS) }
-            NavItem(Modifier.weight(1f), "📋", "История",   current == Screen.HISTORY)    { onSelect(Screen.HISTORY) }
-            NavItem(Modifier.weight(1f), "📈", "Аналитика", current == Screen.STATS)      { onSelect(Screen.STATS) }
-            NavItem(Modifier.weight(1f), "🤖", "Стратегии", current == Screen.STRATEGIES) { onSelect(Screen.STRATEGIES) }
-            NavItem(Modifier.weight(1f), "⚙️", "Настройки", current == Screen.SETTINGS)   { onSelect(Screen.SETTINGS) }
-        }
-    }
-}
-
-@Composable
-fun NavItem(
-    modifier: Modifier = Modifier,
-    icon: String,
-    label: String,
-    selected: Boolean,
-    onClick: () -> Unit
-) {
-    val color = if (selected) Green else TextSecondary
-    Column(
-        modifier = modifier
-            .clip(RoundedCornerShape(12.dp))
-            .clickable { onClick() }
-            .padding(horizontal = 2.dp, vertical = 8.dp),
-        horizontalAlignment = Alignment.CenterHorizontally
-    ) {
-        Text(icon, fontSize = 20.sp)
-        Spacer(Modifier.height(2.dp))
-        Text(
-            label,
-            fontSize = 10.sp,
-            color = color,
-            maxLines = 1,
-            softWrap = false,
-            overflow = TextOverflow.Ellipsis,
-            textAlign = TextAlign.Center,
-            fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal
-        )
-        Spacer(Modifier.height(4.dp))
-        Box(
-            Modifier.size(4.dp).clip(CircleShape)
-                .background(if (selected) Green else Color.Transparent)
-        )
-    }
-}
-
-// ─── Dashboard ────────────────────────────────────────────────────────────────
-
-@Composable
-fun DashboardScreen(
-    botStatus: BotStatus,
-    strategies: List<StrategyConfig>,
-    balance: AccountBalance? = null,
-    connected: Boolean = false,
-    activity: List<ActivityEvent> = emptyList(),
-    stats: ActivityStats = ActivityStats(),
-    errors: List<ActivityEvent> = emptyList(),
-    trades: List<TradeHistoryItem> = emptyList(),
-    openPositions: List<OpenPosition> = emptyList(),
-    onClosePosition: (String) -> Unit = {},
-    watch: List<WatchItem> = emptyList(),
-    onWatchClick: (WatchItem) -> Unit = {},
-    onPositionChart: ((OpenPosition) -> Unit)? = null,
-    onStatusChange: (BotStatus) -> Unit
-) {
-    val pnlData = equityCurve(trades)
-    val recentTrades = trades.take(3)
-
-    LazyColumn(
-        modifier = Modifier.fillMaxSize(),
-        contentPadding = PaddingValues(bottom = 16.dp)
-    ) {
-        item { DashboardHeader(botStatus, stats, connected, errors) }
-
-        item {
-            Spacer(Modifier.height(12.dp))
-            BalanceCard(balance, connected)
-        }
-
-        item {
-            Spacer(Modifier.height(12.dp))
-            PnlChartCard(pnlData, trades)
-        }
-
-        item {
-            Spacer(Modifier.height(12.dp))
-            StatsRow(trades)
-        }
-
-        item {
-            Spacer(Modifier.height(12.dp))
-            ControlButtons(botStatus, onStatusChange)
-        }
-
-        // Доска наблюдения — над лентой: лента отвечает «что бот делал», доска — «чего он ждёт».
-        item {
-            Spacer(Modifier.height(12.dp))
-            WatchBoardCard(watch, botStatus == BotStatus.RUNNING, onWatchClick)
-        }
-
-        item {
-            Spacer(Modifier.height(12.dp))
-            ActivityFeedCard(activity, botStatus == BotStatus.RUNNING)
-        }
-
-        item {
-            Spacer(Modifier.height(16.dp))
-            SectionHeader("Стратегии", "${strategies.count { it.isActive }} активных")
-        }
-
-        if (strategies.isEmpty()) {
-            item {
-                Spacer(Modifier.height(8.dp))
-                EmptyState("Стратегии не настроены")
-            }
-        } else {
-            items(strategies) { cfg ->
-                Spacer(Modifier.height(6.dp))
-                DashStrategyCard(cfg, trades)
-            }
-        }
-
-        if (openPositions.isNotEmpty()) {
-            item {
-                Spacer(Modifier.height(16.dp))
-                SectionHeader("Открытые позиции", "${openPositions.size} шт.")
-            }
-            items(openPositions, key = { it.tradeId }) { p ->
-                Spacer(Modifier.height(6.dp))
-                PositionCard(p, onClose = { onClosePosition(p.tradeId) }, onChart = onPositionChart?.let { { it(p) } })
-            }
-        }
-
-        item {
-            Spacer(Modifier.height(16.dp))
-            SectionHeader("Последние сделки", "История →")
-        }
-
-        if (recentTrades.isEmpty()) {
-            item {
-                Spacer(Modifier.height(8.dp))
-                EmptyState("Сделок ещё нет")
-            }
-        } else {
-            items(recentTrades) { t ->
-                Spacer(Modifier.height(6.dp))
-                TradeCard(t)
-            }
-        }
-    }
-}
-
-@Composable
-fun DashboardHeader(
-    status: BotStatus,
-    stats: ActivityStats = ActivityStats(),
-    connected: Boolean = false,
-    errors: List<ActivityEvent> = emptyList(),
-) {
-    var showErrors by remember { mutableStateOf(false) }
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .statusBarsPadding()
-            .padding(horizontal = 16.dp, vertical = 16.dp),
-        horizontalArrangement = Arrangement.SpaceBetween,
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        Column {
-            Text("DRX Bot", fontSize = 26.sp, fontWeight = FontWeight.ExtraBold, color = TextPrimary)
-            Spacer(Modifier.height(3.dp))
-            PulseLine(stats, connected) { showErrors = true }
-        }
-        StatusChip(status)
-    }
-    if (showErrors) ErrorsDialog(errors, stats.errorCount) { showErrors = false }
-}
-
-/**
- * Пульс сессии: точка + счётчик запросов + время последнего успешного ответа DEX-API.
- * Счётчик ошибок кликабелен — [onErrorsClick] открывает их список.
- */
-@Composable
-private fun PulseLine(stats: ActivityStats, connected: Boolean, onErrorsClick: () -> Unit) {
-    val lastOk = stats.lastOkAt
-    Row(verticalAlignment = Alignment.CenterVertically) {
-        Box(
-            modifier = Modifier.size(6.dp).clip(CircleShape)
-                .background(if (lastOk != null) Green else TextSecondary)
-        )
-        Spacer(Modifier.width(6.dp))
-        when {
-            !connected -> Text("Рантайм не подключен", fontSize = 12.sp, color = TextSecondary)
-            lastOk != null -> Text(
-                "${stats.okCount} запр. · ответ ${formatClock(lastOk)}",
-                fontSize = 12.sp, color = TextSecondary
-            )
-            else -> Text("ожидание ответа DEX…", fontSize = 12.sp, color = TextSecondary)
-        }
-        if (stats.errorCount > 0) {
-            Spacer(Modifier.width(6.dp))
-            Text(
-                "· ${stats.errorCount} ош. ›", fontSize = 12.sp, color = Red, fontWeight = FontWeight.SemiBold,
-                modifier = Modifier.clickable { onErrorsClick() }
-            )
-        }
-    }
-}
-
-/**
- * Окно со списком ошибок сессии (новые сверху): лента активности держит 60 событий и за минуту
- * сканирования вытесняет ошибку, а здесь — последние 100. [total] — счётчик из шапки: в него входят и
- * сбои запросов без текста, поэтому строк может быть меньше.
- */
-@Composable
-private fun ErrorsDialog(errors: List<ActivityEvent>, total: Int, onDismiss: () -> Unit) {
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        containerColor = SurfaceCard,
-        title = { Text("Ошибки сессии · $total", fontSize = 16.sp, fontWeight = FontWeight.Bold, color = TextPrimary) },
-        text = {
-            if (errors.isEmpty()) {
-                Text(
-                    "Текстов ошибок нет — счётчик растёт и от сбоев запросов, о которых лента уже написала.",
-                    fontSize = 12.sp, color = TextSecondary, lineHeight = 16.sp
-                )
-            } else {
-                Column(
-                    Modifier.heightIn(max = 420.dp).verticalScroll(rememberScrollState()),
-                    verticalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    errors.asReversed().forEach { e ->
-                        Row {
-                            Text(formatClock(e.timestamp), fontSize = 11.sp, color = TextSecondary, fontFamily = FontFamily.Monospace)
-                            Spacer(Modifier.width(8.dp))
-                            Text(e.message, fontSize = 12.sp, color = TextPrimary, lineHeight = 16.sp, modifier = Modifier.weight(1f))
-                        }
-                    }
-                }
-            }
-        },
-        confirmButton = {
-            Text(
-                "Закрыть", color = Green, fontSize = 14.sp, fontWeight = FontWeight.Bold,
-                modifier = Modifier.clickable { onDismiss() }.padding(8.dp)
-            )
-        }
+/** Настройки из БД (кошелёк, Telegram, RPC, защита, ключ свечей). Chat ID 0 — «не задан». */
+internal fun loadSettings(store: SettingsStore?): DrxSettings = store?.let { s ->
+    DrxSettings(
+        rpcUrl = s.getRpcUrl() ?: DEFAULT_RPC_URL,
+        walletSeed = s.getWalletSeed() ?: "",
+        telegramToken = s.getTelegramToken() ?: "",
+        telegramChatId = s.getTelegramChatId()?.takeIf { it != 0L }?.toString() ?: "",
+        protection = s.getProtection(),
+        coinGeckoKey = s.getCoinGeckoKey() ?: "",
+        coinGeckoQuota = s.getCoinGeckoQuota(),
     )
-}
+} ?: DrxSettings()
 
-@Composable
-fun StatusChip(status: BotStatus) {
-    val (bg, fg, label) = when (status) {
-        BotStatus.RUNNING -> Triple(GreenDim,                  Green, "● RUNNING")
-        BotStatus.STOPPED -> Triple(RedDim,                    Red,   "● STOPPED")
-        BotStatus.PAUSED  -> Triple(Amber.copy(alpha = 0.15f), Amber, "⏸ PAUSED")
-    }
-    Surface(color = bg, shape = RoundedCornerShape(20.dp)) {
-        Text(label, color = fg, fontWeight = FontWeight.Bold,
-            modifier = Modifier.padding(horizontal = 14.dp, vertical = 6.dp), fontSize = 13.sp)
-    }
-}
-
-// ─── Balance card ─────────────────────────────────────────────────────────────
-
-@Composable
-fun BalanceCard(balance: AccountBalance?, connected: Boolean) {
-    Surface(
-        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
-        color = SurfaceCard,
-        shape = RoundedCornerShape(16.dp)
-    ) {
-        Row(
-            modifier = Modifier.padding(horizontal = 20.dp, vertical = 16.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.SpaceBetween
-        ) {
-            Column {
-                Text(
-                    if (balance?.isDemo != false) "💰 Баланс (DEMO)" else "💰 Баланс кошелька",
-                    fontSize = 12.sp, color = TextSecondary
-                )
-                Spacer(Modifier.height(4.dp))
-                when {
-                    !connected -> Text(
-                        "Рантайм не подключен",
-                        fontSize = 16.sp, fontWeight = FontWeight.Bold, color = Amber
-                    )
-                    balance == null -> Text(
-                        "Загрузка…",
-                        fontSize = 22.sp, fontWeight = FontWeight.ExtraBold, color = TextSecondary
-                    )
-                    else -> Text(
-                        "${"%.2f".format(balance.totalUsd)} USD",
-                        fontSize = 22.sp, fontWeight = FontWeight.ExtraBold, color = Green
-                    )
-                }
-            }
-            when {
-                balance == null -> {}
-                balance.isDemo -> Surface(color = Purple.copy(alpha = 0.15f), shape = RoundedCornerShape(8.dp)) {
-                    Text("🎮 DEMO", color = Purple, fontSize = 12.sp, fontWeight = FontWeight.Bold,
-                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp))
-                }
-                else -> Column(horizontalAlignment = Alignment.End) {
-                    Text("SOL", fontSize = 11.sp, color = TextSecondary)
-                    Spacer(Modifier.height(2.dp))
-                    Text(
-                        "%.4f".format(balance.sol),
-                        fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = TextPrimary
-                    )
-                }
-            }
-        }
-    }
-}
-
-// ─── Activity feed ────────────────────────────────────────────────────────────
-
-@Composable
-fun ActivityFeedCard(events: List<ActivityEvent>, running: Boolean) {
-    Surface(
-        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
-        color = SurfaceCard,
-        shape = RoundedCornerShape(16.dp)
-    ) {
-        Column(modifier = Modifier.padding(16.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Box(
-                    modifier = Modifier.size(8.dp).clip(CircleShape)
-                        .background(if (running) Green else TextSecondary)
-                )
-                Spacer(Modifier.width(8.dp))
-                Text(
-                    "Активность", fontSize = 13.sp, color = TextSecondary,
-                    fontWeight = FontWeight.SemiBold
-                )
-                Spacer(Modifier.weight(1f))
-                Text(
-                    if (running) "в работе" else "ожидание",
-                    fontSize = 11.sp,
-                    color = if (running) Green else TextSecondary
-                )
-            }
-
-            Spacer(Modifier.height(12.dp))
-
-            if (events.isEmpty()) {
-                Text(
-                    "Журнал пуст — нажмите «Старт», чтобы бот начал сканировать",
-                    fontSize = 12.sp, color = TextSecondary
-                )
-            } else {
-                events.takeLast(8).asReversed().forEach { e ->
-                    ActivityRow(e)
-                    Spacer(Modifier.height(6.dp))
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun ActivityRow(e: ActivityEvent) {
-    val dotColor = when (e.level) {
-        ActivityLevel.SUCCESS -> Green
-        ActivityLevel.WARN    -> Amber
-        ActivityLevel.ERROR   -> Red
-        ActivityLevel.INFO    -> TextSecondary
-    }
-    Row(verticalAlignment = Alignment.Top) {
-        Text(
-            formatClock(e.timestamp),
-            fontSize = 11.sp, color = TextSecondary,
-            modifier = Modifier.width(60.dp)
-        )
-        Spacer(Modifier.width(8.dp))
-        Box(
-            modifier = Modifier.padding(top = 5.dp).size(6.dp)
-                .clip(CircleShape).background(dotColor)
-        )
-        Spacer(Modifier.width(8.dp))
-        Text(
-            e.message,
-            fontSize = 12.sp, color = TextPrimary, lineHeight = 16.sp,
-            modifier = Modifier.weight(1f)
-        )
-    }
-}
-
-private fun formatClock(millis: Long): String {
-    val dt = Instant.fromEpochMilliseconds(millis).toLocalDateTime(TimeZone.currentSystemDefault())
-    fun p(n: Int) = n.toString().padStart(2, '0')
-    return "${p(dt.hour)}:${p(dt.minute)}:${p(dt.second)}"
-}
-
-// ─── PnL Chart ────────────────────────────────────────────────────────────────
-
-@Composable
-fun PnlChartCard(data: List<Double>, trades: List<TradeHistoryItem> = emptyList()) {
-    val totalPnl = trades.sumOf { it.pnl }
-    Surface(
-        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
-        color = SurfaceCard,
-        shape = RoundedCornerShape(16.dp)
-    ) {
-        Column(modifier = Modifier.padding(16.dp)) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Column {
-                    Text("P&L Кривая", fontSize = 13.sp, color = TextSecondary)
-                    Text(
-                        "${if (totalPnl > 0) "+" else ""}${"%.2f".format(totalPnl)} USD",
-                        fontSize = 22.sp, fontWeight = FontWeight.ExtraBold,
-                        color = when {
-                            trades.isEmpty() -> TextSecondary
-                            totalPnl >= 0 -> Green
-                            else -> Red
-                        }
-                    )
-                }
-                Surface(color = SurfaceCard, shape = RoundedCornerShape(8.dp)) {
-                    Text("${trades.size} сделок", color = TextSecondary, fontSize = 12.sp,
-                        fontWeight = FontWeight.Bold,
-                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp))
-                }
-            }
-
-            Spacer(Modifier.height(16.dp))
-
-            if (data.size >= 2) {
-                Canvas(modifier = Modifier.fillMaxWidth().height(120.dp)) {
-                    drawPnlChart(data)
-                }
-            } else {
-                Box(
-                    modifier = Modifier.fillMaxWidth().height(120.dp),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Text("Нет данных", color = TextSecondary, fontSize = 13.sp)
-                }
-            }
-
-            Spacer(Modifier.height(8.dp))
-
-            val chronological = trades.sortedBy { it.closedAt }
-            if (chronological.size >= 2) {
-                val first = chronological.first().closedAt
-                val last = chronological.last().closedAt
-                Row(modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween) {
-                    (0..4).forEach { i ->
-                        Text(dateLabel(first + (last - first) * i / 4),
-                            fontSize = 10.sp, color = TextSecondary)
-                    }
-                }
-            }
-        }
-    }
-}
-
-private fun DrawScope.drawPnlChart(data: List<Double>) {
-    if (data.size < 2) return
-    val w = size.width
-    val h = size.height
-    val pad = 4.dp.toPx()
-    val minVal = data.min()
-    val maxVal = data.max()
-    val range = maxVal - minVal
-
-    fun xOf(i: Int) = w * i / (data.size - 1)
-    fun yOf(v: Double) = if (range == 0.0) h / 2f
-    else (h - pad) - ((v - minVal) / range * (h - 2 * pad)).toFloat()
-
-    // Grid lines
-    repeat(4) { i ->
-        val y = pad + (h - 2 * pad) * i / 3f
-        drawLine(BorderColor, Offset(0f, y), Offset(w, y), strokeWidth = 1f)
-    }
-
-    // Area fill
-    val areaPath = Path().apply {
-        moveTo(xOf(0), yOf(data[0]))
-        data.forEachIndexed { i, v -> if (i > 0) lineTo(xOf(i), yOf(v)) }
-        lineTo(w, h)
-        lineTo(0f, h)
-        close()
-    }
-    drawPath(
-        areaPath,
-        brush = Brush.verticalGradient(
-            colors = listOf(Green.copy(alpha = 0.30f), Green.copy(alpha = 0f)),
-            startY = 0f, endY = h
-        )
-    )
-
-    // Line
-    val linePath = Path().apply {
-        moveTo(xOf(0), yOf(data[0]))
-        data.forEachIndexed { i, v -> if (i > 0) lineTo(xOf(i), yOf(v)) }
-    }
-    drawPath(
-        linePath, Green,
-        style = Stroke(width = 2.5.dp.toPx(), cap = StrokeCap.Round, join = StrokeJoin.Round)
-    )
-
-    // Last point glow
-    val lx = xOf(data.size - 1)
-    val ly = yOf(data.last())
-    drawCircle(Green.copy(alpha = 0.25f), radius = 9.dp.toPx(), center = Offset(lx, ly))
-    drawCircle(Green, radius = 4.5.dp.toPx(), center = Offset(lx, ly))
-}
-
-// ─── Stats row ────────────────────────────────────────────────────────────────
-
-@Composable
-fun StatsRow(trades: List<TradeHistoryItem> = emptyList()) {
-    val totalPnl = trades.sumOf { it.pnl }
-    val wins = trades.count { it.isWin }
-    val winrate = if (trades.isNotEmpty()) wins * 100 / trades.size else 0
-    // Макс. просадка кривой доходности (USD): худший провал от достигнутого пика.
-    val equity = equityCurve(trades)
-    var peak = 0.0
-    var maxDd = 0.0
-    equity.forEach { v ->
-        if (v > peak) peak = v
-        if (v - peak < maxDd) maxDd = v - peak
-    }
-    val pnlColor = when {
-        trades.isEmpty() -> TextSecondary
-        totalPnl >= 0 -> Green
-        else -> Red
-    }
-    Row(
-        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
-        horizontalArrangement = Arrangement.spacedBy(8.dp)
-    ) {
-        StatCard("P&L", "%.2f".format(totalPnl), "USD", pnlColor, Modifier.weight(1f))
-        StatCard("Winrate", "$winrate%", "${trades.size} сделок",
-            if (trades.isEmpty()) TextSecondary else if (winrate >= 50) Green else Red, Modifier.weight(1f))
-        StatCard("Просадка", "%.2f".format(maxDd), "USD макс.",
-            if (maxDd < 0) Red else TextSecondary, Modifier.weight(1f))
-    }
-}
-
-@Composable
-fun StatCard(
-    title: String, value: String, sub: String,
-    color: Color, modifier: Modifier = Modifier
-) {
-    Surface(modifier = modifier, color = SurfaceCard, shape = RoundedCornerShape(14.dp)) {
-        Column(
-            modifier = Modifier.padding(12.dp),
-            horizontalAlignment = Alignment.CenterHorizontally
-        ) {
-            Text(title, fontSize = 11.sp, color = TextSecondary, textAlign = TextAlign.Center)
-            Spacer(Modifier.height(6.dp))
-            Text(value, fontSize = 15.sp, fontWeight = FontWeight.ExtraBold,
-                color = color, textAlign = TextAlign.Center)
-            Text(sub, fontSize = 10.sp, color = TextSecondary, textAlign = TextAlign.Center)
-        }
-    }
-}
-
-// ─── Control buttons ──────────────────────────────────────────────────────────
-
-@Composable
-fun ControlButtons(status: BotStatus, onStatusChange: (BotStatus) -> Unit) {
-    Row(
-        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
-        horizontalArrangement = Arrangement.spacedBy(8.dp)
-    ) {
-        Button(
-            onClick = { onStatusChange(BotStatus.RUNNING) },
-            modifier = Modifier.weight(1f),
-            colors = ButtonDefaults.buttonColors(containerColor = Green),
-            shape = RoundedCornerShape(12.dp),
-            enabled = status != BotStatus.RUNNING,
-            contentPadding = PaddingValues(vertical = 14.dp)
-        ) { Text("▶ Старт", fontWeight = FontWeight.Bold, color = Color.Black) }
-
-        Button(
-            onClick = { onStatusChange(BotStatus.PAUSED) },
-            modifier = Modifier.weight(1f),
-            colors = ButtonDefaults.buttonColors(containerColor = Amber),
-            shape = RoundedCornerShape(12.dp),
-            enabled = status == BotStatus.RUNNING,
-            contentPadding = PaddingValues(vertical = 14.dp)
-        ) { Text("⏸ Пауза", fontWeight = FontWeight.Bold, color = Color.Black) }
-
-        Button(
-            onClick = { onStatusChange(BotStatus.STOPPED) },
-            modifier = Modifier.weight(1f),
-            colors = ButtonDefaults.buttonColors(containerColor = Red),
-            shape = RoundedCornerShape(12.dp),
-            enabled = status != BotStatus.STOPPED,
-            contentPadding = PaddingValues(vertical = 14.dp)
-        ) { Text("■ Стоп", fontWeight = FontWeight.Bold) }
-    }
-}
-
-// ─── Section header ───────────────────────────────────────────────────────────
-
-@Composable
-fun SectionHeader(title: String, action: String = "") {
-    Row(
-        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
-        horizontalArrangement = Arrangement.SpaceBetween,
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        Text(title, fontSize = 16.sp, fontWeight = FontWeight.Bold, color = TextPrimary)
-        if (action.isNotEmpty()) Text(action, fontSize = 12.sp, color = Blue)
-    }
-}
-
-// ─── Strategy card (Dashboard) ────────────────────────────────────────────────
-
-@Composable
-fun DashStrategyCard(cfg: StrategyConfig, trades: List<TradeHistoryItem>) {
-    val own = trades.filter { it.strategy == cfg.name }
-    val pnl = own.sumOf { it.pnl }
-    val winrate = if (own.isNotEmpty()) own.count { it.isWin } * 100 / own.size else 0
-    Surface(
-        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
-        color = SurfaceCard, shape = RoundedCornerShape(14.dp)
-    ) {
-        Row(modifier = Modifier.padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
-            Box(
-                modifier = Modifier
-                    .size(40.dp)
-                    .clip(RoundedCornerShape(10.dp))
-                    .background(if (cfg.isActive) GreenDim else RedDim),
-                contentAlignment = Alignment.Center
-            ) {
-                Text(
-                    if (cfg.isActive) "✓" else "✗",
-                    color = if (cfg.isActive) Green else Red,
-                    fontWeight = FontWeight.Bold, fontSize = 18.sp
-                )
-            }
-            Spacer(Modifier.width(12.dp))
-            Column(Modifier.weight(1f)) {
-                Text(cfg.name.ifEmpty { cfg.type.toTypeLabel() }, fontWeight = FontWeight.SemiBold,
-                    color = TextPrimary, fontSize = 14.sp)
-                Spacer(Modifier.height(4.dp))
-                Row(
-                    modifier = Modifier.horizontalScroll(rememberScrollState()),
-                    horizontalArrangement = Arrangement.spacedBy(6.dp)
-                ) {
-                    Tag("🔍 СКАНЕР", Green)
-                    Tag(cfg.timeframe, Purple)
-                    Tag(cfg.type.toTypeLabel(), Amber)
-                }
-            }
-            Column(horizontalAlignment = Alignment.End) {
-                Text(
-                    "${if (pnl >= 0) "+" else ""}${"%.2f".format(pnl)} USD",
-                    color = if (own.isEmpty()) TextSecondary else if (pnl >= 0) Green else Red,
-                    fontWeight = FontWeight.Bold, fontSize = 14.sp
-                )
-                Text("WR: $winrate%", color = TextSecondary, fontSize = 11.sp)
-            }
-        }
-    }
-}
-
-@Composable
-fun Tag(text: String, color: Color) {
-    Surface(color = color.copy(alpha = 0.15f), shape = RoundedCornerShape(4.dp)) {
-        Text(
-            text, color = color, fontSize = 10.sp, fontWeight = FontWeight.Medium,
-            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
-        )
-    }
-}
-
-private fun String.toTypeLabel(): String =
-    StrategyType.entries.firstOrNull { it.name == this }?.displayName ?: this
-
-// ─── Trade card ───────────────────────────────────────────────────────────────
+// ─── Закрытые сделки и общие форматы ──────────────────────────────────────────
 
 data class TradeHistoryItem(
     val symbol: String,
@@ -1176,960 +548,75 @@ data class TradeHistoryItem(
     val openedAt: Long = 0L
 )
 
+/** Строки таблицы сделок → закрытые сделки для истории (новые сверху — как отдаёт запрос). */
+internal fun List<Trade>.toHistoryItems(): List<TradeHistoryItem> = filter { it.status == "CLOSED" }.map { t ->
+    TradeHistoryItem(
+        symbol = t.symbol,
+        strategy = t.strategy_name,
+        entryPrice = t.entry_price,
+        exitPrice = t.exit_price ?: t.entry_price,
+        pnl = t.pnl ?: 0.0,
+        pnlPercent = t.pnl_percent ?: 0.0,
+        sizeUsd = t.size_usd,
+        isDemo = t.is_demo == 1L,
+        duration = formatTradeDuration((t.closed_at ?: t.opened_at) - t.opened_at),
+        isWin = (t.pnl ?: 0.0) > 0,
+        openReason = t.open_reason,
+        closeReason = t.close_reason ?: "—",
+        closedAt = t.closed_at ?: t.opened_at,
+        fee = t.fee ?: 0.0,
+        mint = t.mint,
+        openedAt = t.opened_at
+    )
+}
+
 /** Закрытые сделки из БД (новые сверху) → элементы истории. */
 private fun loadClosedTrades(db: DrxDatabase?): List<TradeHistoryItem> {
     if (db == null) return emptyList()
-    return runCatching {
-        db.tradeQueries.getAll().executeAsList()
-            .filter { it.status == "CLOSED" }
-            .map { t ->
-                TradeHistoryItem(
-                    symbol = t.symbol,
-                    strategy = t.strategy_name,
-                    entryPrice = t.entry_price,
-                    exitPrice = t.exit_price ?: t.entry_price,
-                    pnl = t.pnl ?: 0.0,
-                    pnlPercent = t.pnl_percent ?: 0.0,
-                    sizeUsd = t.size_usd,
-                    isDemo = t.is_demo == 1L,
-                    duration = formatTradeDuration((t.closed_at ?: t.opened_at) - t.opened_at),
-                    isWin = (t.pnl ?: 0.0) > 0,
-                    openReason = t.open_reason,
-                    closeReason = t.close_reason ?: "—",
-                    closedAt = t.closed_at ?: t.opened_at,
-                    fee = t.fee ?: 0.0,
-                    mint = t.mint,
-                    openedAt = t.opened_at
-                )
-            }
-    }.getOrDefault(emptyList())
+    return runCatching { db.tradeQueries.getAll().executeAsList().toHistoryItems() }.getOrDefault(emptyList())
 }
 
 private fun formatTradeDuration(ms: Long): String {
     val totalMin = (ms / 60_000).coerceAtLeast(0)
     val h = totalMin / 60
     val m = totalMin % 60
-    return if (h > 0) "${h}ч ${m}м" else "${m}м"
+    return if (h > 0) "${h} ч ${m} мин" else "${m} мин"
 }
 
 /** Кривая доходности: кумулятивный PnL по закрытым сделкам в хронологическом порядке. */
-private fun equityCurve(trades: List<TradeHistoryItem>): List<Double> {
+internal fun equityCurve(trades: List<TradeHistoryItem>): List<Double> {
     var acc = 0.0
     return trades.sortedBy { it.closedAt }.map { acc += it.pnl; acc }
 }
 
-private fun startOfTodayMillis(): Long {
+internal fun startOfTodayMillis(): Long {
     val tz = TimeZone.currentSystemDefault()
     return Clock.System.now().toLocalDateTime(tz).date.atStartOfDayIn(tz).toEpochMilliseconds()
 }
 
-private fun dateLabel(ms: Long): String {
+internal fun dateLabel(ms: Long): String {
     val dt = Instant.fromEpochMilliseconds(ms).toLocalDateTime(TimeZone.currentSystemDefault())
     return "${dt.day.toString().padStart(2, '0')}.${(dt.month.ordinal + 1).toString().padStart(2, '0')}"
 }
 
+internal fun formatClock(millis: Long): String {
+    val dt = Instant.fromEpochMilliseconds(millis).toLocalDateTime(TimeZone.currentSystemDefault())
+    fun p(n: Int) = n.toString().padStart(2, '0')
+    return "${p(dt.hour)}:${p(dt.minute)}:${p(dt.second)}"
+}
+
 /** «Ab3dEf…7xYz» — короткий вид адреса контракта. */
-private fun shortMint(mint: String): String =
+internal fun shortMint(mint: String): String =
     if (mint.length <= 14) mint else "${mint.take(6)}…${mint.takeLast(6)}"
 
-/** Цены мемкоинов крошечные — до 8 значащих знаков после точки, без хвостовых нулей. */
-private fun fmtPrice(v: Double): String {
+/** Цены мемкоинов крошечные — до 8 значащих знаков после запятой, без хвостовых нулей. */
+internal fun fmtPrice(v: Double): String {
     if (v == 0.0) return "0"
-    if (v >= 1) return "%.4f".format(v).trimEnd('0').trimEnd('.')
-    return "%.8f".format(v).trimEnd('0').trimEnd('.')
+    return formatNumberRu(v, if (v >= 1) 4 else 8).trimEnd('0').trimEnd(',')
 }
 
-/** Карточка «живой» открытой позиции: текущий PnL + ручное закрытие с подтверждением. */
-@Composable
-fun PositionCard(pos: OpenPosition, onClose: () -> Unit, onChart: (() -> Unit)? = null) {
-    val pnlColor = if (pos.pnlUsd >= 0) Green else Red
-    var confirm by remember(pos.tradeId) { mutableStateOf(false) }
-
-    Surface(
-        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
-        color = SurfaceCard, shape = RoundedCornerShape(14.dp)
-    ) {
-        Column(modifier = Modifier.padding(14.dp)) {
-
-            // Строка 1: OPEN + символ + режим + PnL%
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    Surface(color = GreenDim, shape = RoundedCornerShape(6.dp)) {
-                        Text(
-                            "OPEN", color = Green, fontWeight = FontWeight.Bold, fontSize = 12.sp,
-                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
-                        )
-                    }
-                    Text(pos.symbol, fontWeight = FontWeight.ExtraBold, color = TextPrimary, fontSize = 15.sp)
-                    Tag(pos.execMode.ifEmpty { if (pos.isDemo) "DEMO" else "REAL" }, if (pos.isDemo) Purple else Amber)
-                }
-                Text(
-                    "${if (pos.pnlPercent >= 0) "+" else ""}${"%.1f".format(pos.pnlPercent)}%",
-                    color = pnlColor, fontWeight = FontWeight.Bold, fontSize = 14.sp
-                )
-            }
-
-            Spacer(Modifier.height(10.dp))
-
-            // Строка 2: Вход → Сейчас + P&L
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween
-            ) {
-                PriceCol("Вход", fmtPrice(pos.entryPrice), pos.openedAt)
-                Text(
-                    "→", color = TextSecondary, fontSize = 16.sp,
-                    modifier = Modifier.align(Alignment.CenterVertically)
-                )
-                PriceCol("Сейчас", fmtPrice(pos.currentPrice))
-                Column(horizontalAlignment = Alignment.End) {
-                    Text("P&L", fontSize = 10.sp, color = TextSecondary)
-                    Text(
-                        "${if (pos.pnlUsd > 0) "+" else ""}${"%.2f".format(pos.pnlUsd)} USD",
-                        fontWeight = FontWeight.ExtraBold, color = pnlColor, fontSize = 14.sp
-                    )
-                }
-            }
-
-            Spacer(Modifier.height(8.dp))
-            Text(
-                "SL ${fmtPrice(pos.stopLoss)}  •  TP ${fmtPrice(pos.takeProfit)}",
-                fontSize = 11.sp, color = TextSecondary
-            )
-
-            // Продажа не прошла: монитор повторяет с бо́льшим slippage, после EXIT_BLOCKED_AFTER подряд — с паузой.
-            if (pos.exitFailures > 0) {
-                val blocked = pos.exitFailures >= EXIT_BLOCKED_AFTER
-                Spacer(Modifier.height(8.dp))
-                Surface(
-                    color = if (blocked) RedDim else Amber.copy(alpha = 0.12f),
-                    shape = RoundedCornerShape(8.dp),
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Text(
-                        "${if (blocked) "🚫 Продажа заблокирована" else "⚠️ Продажа не прошла"} " +
-                            "(${pos.exitFailures} подряд): ${pos.exitNote}",
-                        color = if (blocked) Red else Amber, fontSize = 12.sp,
-                        modifier = Modifier.padding(10.dp)
-                    )
-                }
-            }
-
-            Spacer(Modifier.height(8.dp))
-            // Строка 3: кол-во токенов • текущая стоимость • вложено
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween
-            ) {
-                InfoChip("🪙", formatLargeNumber(pos.qtyRemaining))
-                InfoChip("💰", "$${formatNumber(pos.valueUsd, 2)}")
-                InfoChip("📥", "$${formatNumber(pos.sizeUsd, 2)}")
-            }
-
-            Spacer(Modifier.height(6.dp))
-            // Строка 4: стратегия входа
-            InfoChip("📊", pos.strategyName)
-
-            // Строка 5: адрес токена (mint) — тап копирует полный адрес
-            if (pos.mint.isNotEmpty()) {
-                Spacer(Modifier.height(6.dp))
-                MintCopyRow(pos.mint)
-            }
-
-            Spacer(Modifier.height(10.dp))
-
-            // График бота: как он ведёт эту сделку — стоп сейчас и при входе, +1R, безубыток, трейлинг, цель.
-            if (onChart != null) {
-                Surface(
-                    color = Blue.copy(alpha = 0.12f), shape = RoundedCornerShape(10.dp),
-                    modifier = Modifier.fillMaxWidth().clickable { onChart() }
-                ) {
-                    Text(
-                        "📈 График и ведение сделки", color = Blue, fontSize = 13.sp, fontWeight = FontWeight.Bold,
-                        modifier = Modifier.padding(10.dp), textAlign = TextAlign.Center
-                    )
-                }
-                Spacer(Modifier.height(8.dp))
-            }
-
-            // Ручное закрытие: рыночный выход необратим — подтверждаем вторым тапом.
-            if (!confirm) {
-                Surface(
-                    color = RedDim, shape = RoundedCornerShape(10.dp),
-                    modifier = Modifier.fillMaxWidth().clickable { confirm = true }
-                ) {
-                    Text(
-                        "🔴 Закрыть позицию", color = Red, fontSize = 13.sp, fontWeight = FontWeight.Bold,
-                        modifier = Modifier.padding(10.dp), textAlign = TextAlign.Center
-                    )
-                }
-            } else {
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Surface(
-                        color = Red, shape = RoundedCornerShape(10.dp),
-                        modifier = Modifier.weight(1f).clickable { confirm = false; onClose() }
-                    ) {
-                        Text(
-                            "Да, закрыть", color = Color.White, fontSize = 13.sp, fontWeight = FontWeight.Bold,
-                            modifier = Modifier.padding(10.dp), textAlign = TextAlign.Center
-                        )
-                    }
-                    Surface(
-                        color = BgDark, shape = RoundedCornerShape(10.dp),
-                        modifier = Modifier.weight(1f).clickable { confirm = false }
-                    ) {
-                        Text(
-                            "Отмена", color = TextSecondary, fontSize = 13.sp,
-                            modifier = Modifier.padding(10.dp), textAlign = TextAlign.Center
-                        )
-                    }
-                }
-            }
-        }
-    }
-}
-
-@Composable
-fun TradeCard(item: TradeHistoryItem) {
-    val pnlColor = if (item.isWin) Green else Red
-
-    Surface(
-        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
-        color = SurfaceCard, shape = RoundedCornerShape(14.dp)
-    ) {
-        Column(modifier = Modifier.padding(14.dp)) {
-
-            // Строка 1: бейджи + символ + режим + WIN/LOSS
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    Surface(color = GreenDim, shape = RoundedCornerShape(6.dp)) {
-                        Text(
-                            "LONG", color = Green, fontWeight = FontWeight.Bold,
-                            fontSize = 12.sp,
-                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
-                        )
-                    }
-                    Text(item.symbol, fontWeight = FontWeight.ExtraBold,
-                        color = TextPrimary, fontSize = 15.sp)
-                    Tag(if (item.isDemo) "DEMO" else "REAL", if (item.isDemo) Purple else Amber)
-                }
-                Surface(
-                    color = if (item.isWin) GreenDim else RedDim,
-                    shape = RoundedCornerShape(6.dp)
-                ) {
-                    Text(
-                        if (item.isWin) "WIN" else "LOSS",
-                        color = pnlColor, fontWeight = FontWeight.Bold, fontSize = 11.sp,
-                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
-                    )
-                }
-            }
-
-            Spacer(Modifier.height(10.dp))
-
-            // Строка 2: Вход → Выход → P&L
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween
-            ) {
-                PriceCol("Вход", fmtPrice(item.entryPrice), item.openedAt)
-                Text(
-                    "→", color = TextSecondary, fontSize = 16.sp,
-                    modifier = Modifier.align(Alignment.CenterVertically)
-                )
-                PriceCol("Выход", fmtPrice(item.exitPrice), item.closedAt)
-                Column(horizontalAlignment = Alignment.End) {
-                    Text("P&L", fontSize = 10.sp, color = TextSecondary)
-                    Text(
-                        "${if (item.pnl > 0) "+" else ""}${"%.2f".format(item.pnl)} USD",
-                        fontWeight = FontWeight.ExtraBold, color = pnlColor, fontSize = 14.sp
-                    )
-                    Text(
-                        "${if (item.pnlPercent > 0) "+" else ""}${"%.2f".format(item.pnlPercent)}%",
-                        color = pnlColor.copy(alpha = 0.70f), fontSize = 11.sp
-                    )
-                }
-            }
-
-            Spacer(Modifier.height(10.dp))
-            Box(Modifier.fillMaxWidth().height(1.dp).background(BorderColor))
-            Spacer(Modifier.height(8.dp))
-
-            // Строка 3: стратегия, время, причина закрытия
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween
-            ) {
-                InfoChip("📊", item.strategy)
-                InfoChip("⏱", item.duration)
-                InfoChip("🎯", item.closeReason)
-            }
-
-            // Строка 4: причина открытия
-            Spacer(Modifier.height(6.dp))
-            Text(
-                "Сигнал: ${item.openReason}",
-                fontSize = 11.sp, color = TextSecondary,
-                maxLines = 1, overflow = TextOverflow.Ellipsis
-            )
-
-            // Строка 5: смарт-контракт — тап по строке копирует полный адрес
-            if (item.mint.isNotEmpty()) {
-                Spacer(Modifier.height(6.dp))
-                MintCopyRow(item.mint)
-            }
-        }
-    }
-}
-
-/** Адрес контракта (mint) с копированием по тапу и индикацией «Скопировано». */
-@Composable
-fun MintCopyRow(mint: String) {
-    val clipboard = LocalClipboardManager.current
-    var copied by remember(mint) { mutableStateOf(false) }
-    LaunchedEffect(copied) {
-        if (copied) { delay(2_000); copied = false }
-    }
-    Row(
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(6.dp),
-        modifier = Modifier.clickable {
-            clipboard.setText(AnnotatedString(mint))
-            copied = true
-        }
-    ) {
-        Text("📋", fontSize = 11.sp)
-        Text(
-            if (copied) "✓ Скопировано" else shortMint(mint),
-            fontSize = 11.sp,
-            fontFamily = FontFamily.Monospace,
-            color = if (copied) Green else TextSecondary,
-            maxLines = 1, overflow = TextOverflow.Ellipsis
-        )
-    }
-}
-
-/**
- * Колонка «Вход/Выход»: цена + две метки времени одного момента [ms]:
- *  • DEX  — в UTC, как на сайте/графике DexScreener;
- *  • наше — в локальной таймзоне (реальное время исполнения у нас).
- */
-@Composable
-fun PriceCol(label: String, value: String, ms: Long? = null) {
-    Column {
-        Text(label, fontSize = 10.sp, color = TextSecondary)
-        Text(value, fontWeight = FontWeight.SemiBold, color = TextPrimary, fontSize = 13.sp)
-        if (ms != null) {
-            Text("DEX ${formatDexTime(ms)}", fontSize = 9.sp, color = TextSecondary)
-            Text("наше ${formatLocalTime(ms)}", fontSize = 9.sp, color = TextSecondary)
-        }
-    }
-}
-
-@Composable
-fun InfoChip(icon: String, text: String) {
-    Row(
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(4.dp)
-    ) {
-        Text(icon, fontSize = 11.sp)
-        Text(text, fontSize = 11.sp, color = TextSecondary,
-            maxLines = 1, overflow = TextOverflow.Ellipsis)
-    }
-}
-
-// ─── History screen ───────────────────────────────────────────────────────────
-
-@Composable
-fun HistoryScreen(allTrades: List<TradeHistoryItem> = emptyList()) {
-    var filter by remember { mutableStateOf("Все") }
-    val filterOptions = listOf("Все", "WIN", "LOSS", "DEMO", "REAL")
-
-    val filtered = when (filter) {
-        "WIN"  -> allTrades.filter { it.isWin }
-        "LOSS" -> allTrades.filter { !it.isWin }
-        "DEMO" -> allTrades.filter { it.isDemo }
-        "REAL" -> allTrades.filter { !it.isDemo }
-        else   -> allTrades
-    }
-
-    Column(modifier = Modifier.fillMaxSize()) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .statusBarsPadding()
-                .padding(horizontal = 16.dp, vertical = 16.dp),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Text("История сделок", fontSize = 22.sp,
-                fontWeight = FontWeight.ExtraBold, color = TextPrimary)
-            Surface(color = SurfaceCard, shape = RoundedCornerShape(8.dp)) {
-                Text("${filtered.size} сделок", fontSize = 12.sp, color = TextSecondary,
-                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp))
-            }
-        }
-
-        // Фильтры
-        LazyRow(
-            contentPadding = PaddingValues(horizontal = 16.dp),
-            horizontalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
-            items(filterOptions) { f ->
-                HistoryFilterChip(f, filter == f) { filter = f }
-            }
-        }
-
-        Spacer(Modifier.height(12.dp))
-
-        // Мини-итоги
-        Row(
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
-            horizontalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
-            val wins = filtered.count { it.isWin }
-            val losses = filtered.count { !it.isWin }
-            val totalPnl = filtered.sumOf { it.pnl }
-            MiniStat("Прибыльных", "$wins", Green, Modifier.weight(1f))
-            MiniStat("Убыточных", "$losses", Red, Modifier.weight(1f))
-            MiniStat("Итого", "${if (totalPnl >= 0) "+" else ""}${"%.1f".format(totalPnl)}",
-                if (totalPnl >= 0) Green else Red, Modifier.weight(1f))
-        }
-
-        Spacer(Modifier.height(12.dp))
-
-        if (filtered.isEmpty()) {
-            EmptyState("Сделок нет")
-        } else {
-            LazyColumn(
-                contentPadding = PaddingValues(bottom = 16.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                items(filtered) { trade -> TradeCard(trade) }
-            }
-        }
-    }
-}
-
-@Composable
-fun HistoryFilterChip(label: String, selected: Boolean, onClick: () -> Unit) {
-    Surface(
-        color = if (selected) Green else SurfaceCard,
-        shape = RoundedCornerShape(20.dp),
-        modifier = Modifier.clickable { onClick() }
-    ) {
-        Text(
-            label,
-            color = if (selected) Color.Black else TextSecondary,
-            fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal,
-            fontSize = 13.sp,
-            modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
-        )
-    }
-}
-
-@Composable
-fun MiniStat(label: String, value: String, color: Color, modifier: Modifier = Modifier) {
-    Surface(modifier = modifier, color = SurfaceCard, shape = RoundedCornerShape(12.dp)) {
-        Column(
-            modifier = Modifier.padding(10.dp),
-            horizontalAlignment = Alignment.CenterHorizontally
-        ) {
-            Text(label, fontSize = 10.sp, color = TextSecondary, textAlign = TextAlign.Center)
-            Spacer(Modifier.height(4.dp))
-            Text(value, fontSize = 13.sp, fontWeight = FontWeight.Bold, color = color)
-        }
-    }
-}
-
-// ─── Stats screen ─────────────────────────────────────────────────────────────
-
-/**
- * «Аналитика». После «Нового старта» ([runStartedAt] > 0) по умолчанию показывает текущий забег режима
- * ([demoMode]); «Вся история» — все закрытые сделки, как раньше. Календарь P&L открывается поверх.
- */
-@Composable
-fun StatsScreen(
-    allTrades: List<TradeHistoryItem> = emptyList(),
-    runs: List<RunSummary> = emptyList(),
-    runStartedAt: Long = 0L,
-    demoMode: Boolean = true,
-) {
-    var currentRunOnly by remember { mutableStateOf(true) }
-    var showCalendar by remember { mutableStateOf(false) }
-    val scoped = runStartedAt > 0 && currentRunOnly
-    val trades = if (scoped) allTrades.filter { it.isDemo == demoMode && it.closedAt >= runStartedAt } else allTrades
-    val zone = remember { TimeZone.currentSystemDefault() }
-    val todayDate = remember { Clock.System.now().toLocalDateTime(zone).date }
-    val runNumber = runs.lastOrNull()?.number ?: 0
-
-    if (showCalendar) {
-        PnlCalendarScreen(
-            trades = trades,
-            runStarts = runs.filter { it.number > 0 }.map { it.startedAt },
-            today = todayDate,
-            zone = zone,
-            scopeLabel = if (scoped) "Забег №$runNumber (${if (demoMode) "DEMO" else "REAL"})" else "Вся история",
-            onClose = { showCalendar = false },
-        )
-        return
-    }
-
-    val pnlData = equityCurve(trades)
-    val totalPnl = trades.sumOf { it.pnl }
-    val wins = trades.count { it.isWin }
-    val losses = trades.size - wins
-    val winrate = if (trades.isNotEmpty()) wins * 100 / trades.size else 0
-    val totalFees = trades.sumOf { it.fee }
-
-    val todayStart = remember { startOfTodayMillis() }
-    val today = trades.filter { it.closedAt >= todayStart }
-    val todayPnl = today.sumOf { it.pnl }
-    val todayWins = today.count { it.isWin }
-    val todayWinrate = if (today.isNotEmpty()) todayWins * 100 / today.size else 0
-
-    val best = trades.maxByOrNull { it.pnl }
-    val worst = trades.minByOrNull { it.pnl }
-
-    val chronological = trades.sortedBy { it.closedAt }
-    val dateLabels = if (chronological.size >= 2) {
-        val first = chronological.first().closedAt
-        val last = chronological.last().closedAt
-        (0..4).map { i -> dateLabel(first + (last - first) * i / 4) }
-    } else emptyList()
-
-    LazyColumn(
-        modifier = Modifier.fillMaxSize(),
-        contentPadding = PaddingValues(bottom = 16.dp)
-    ) {
-        item {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .statusBarsPadding()
-                    .padding(horizontal = 16.dp, vertical = 16.dp),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Text("Аналитика", fontSize = 22.sp,
-                    fontWeight = FontWeight.ExtraBold, color = TextPrimary)
-                Surface(color = GreenDim, shape = RoundedCornerShape(8.dp)) {
-                    Text("${trades.size} сделок", fontSize = 12.sp, color = Green,
-                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp))
-                }
-            }
-        }
-
-        // Забег («Новый старт») или вся история
-        if (runStartedAt > 0) {
-            item {
-                RunScopeChips(currentRunOnly, runNumber) { currentRunOnly = it }
-                Spacer(Modifier.height(12.dp))
-            }
-        }
-
-        // Кривая доходности
-        item {
-            Surface(
-                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
-                color = SurfaceCard, shape = RoundedCornerShape(16.dp)
-            ) {
-                Column(modifier = Modifier.padding(16.dp)) {
-                    Text("Кривая доходности", fontSize = 13.sp, color = TextSecondary)
-                    Spacer(Modifier.height(4.dp))
-                    Text(
-                        "${if (totalPnl > 0) "+" else ""}${"%.2f".format(totalPnl)} USD",
-                        fontSize = 20.sp, fontWeight = FontWeight.ExtraBold,
-                        color = when {
-                            trades.isEmpty() -> TextSecondary
-                            totalPnl >= 0 -> Green
-                            else -> Red
-                        }
-                    )
-                    Spacer(Modifier.height(12.dp))
-                    if (pnlData.size >= 2) {
-                        Canvas(modifier = Modifier.fillMaxWidth().height(140.dp)) {
-                            drawPnlChart(pnlData)
-                        }
-                    } else {
-                        Box(
-                            modifier = Modifier.fillMaxWidth().height(140.dp),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Text("Нет данных", color = TextSecondary, fontSize = 13.sp)
-                        }
-                    }
-                    Spacer(Modifier.height(8.dp))
-                    if (dateLabels.isNotEmpty()) {
-                        Row(modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween) {
-                            dateLabels.forEach { d ->
-                                Text(d, fontSize = 10.sp, color = TextSecondary)
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        item { Spacer(Modifier.height(12.dp)) }
-
-        // Календарь P&L: кривая выше — сумма нарастающим итогом, календарь — каждый день отдельно.
-        item {
-            PnlCalendarEntryCard(trades, todayDate, zone) { showCalendar = true }
-            Spacer(Modifier.height(12.dp))
-        }
-
-        // Сегодня vs. Всё время
-        item {
-            Row(
-                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                StatsPanel(
-                    "Сегодня",
-                    listOf(
-                        "P&L" to "${"%.2f".format(todayPnl)} USD",
-                        "Сделок" to "${today.size}",
-                        "Winrate" to "$todayWinrate%",
-                        "Комиссия" to "${"%.2f".format(today.sumOf { it.fee })} USD"
-                    ),
-                    Modifier.weight(1f)
-                )
-                StatsPanel(
-                    "Всё время",
-                    listOf(
-                        "P&L" to "${"%.2f".format(totalPnl)} USD",
-                        "Сделок" to "${trades.size}",
-                        "Winrate" to "$winrate%",
-                        "Комиссия" to "${"%.2f".format(totalFees)} USD"
-                    ),
-                    Modifier.weight(1f)
-                )
-            }
-        }
-
-        item { Spacer(Modifier.height(12.dp)) }
-
-        // Лучшая / Худшая
-        item {
-            Surface(
-                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
-                color = SurfaceCard, shape = RoundedCornerShape(16.dp)
-            ) {
-                Column(modifier = Modifier.padding(16.dp)) {
-                    Text("Экстремальные сделки", fontSize = 14.sp,
-                        fontWeight = FontWeight.Bold, color = TextPrimary)
-                    Spacer(Modifier.height(12.dp))
-                    if (best != null) {
-                        ExtremeRow(
-                            "🏆 Лучшая", "${best.symbol} LONG",
-                            "${if (best.pnl > 0) "+" else ""}${"%.2f".format(best.pnl)} USD",
-                            if (best.pnl >= 0) Green else Red
-                        )
-                    } else {
-                        ExtremeRow("🏆 Лучшая", "—", "—", TextSecondary)
-                    }
-                    Spacer(Modifier.height(8.dp))
-                    Box(Modifier.fillMaxWidth().height(1.dp).background(BorderColor))
-                    Spacer(Modifier.height(8.dp))
-                    if (worst != null) {
-                        ExtremeRow(
-                            "💀 Худшая", "${worst.symbol} LONG",
-                            "${if (worst.pnl > 0) "+" else ""}${"%.2f".format(worst.pnl)} USD",
-                            if (worst.pnl >= 0) Green else Red
-                        )
-                    } else {
-                        ExtremeRow("💀 Худшая", "—", "—", TextSecondary)
-                    }
-                }
-            }
-        }
-
-        item { Spacer(Modifier.height(12.dp)) }
-
-        // Win/Loss distribution
-        item {
-            Surface(
-                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
-                color = SurfaceCard, shape = RoundedCornerShape(16.dp)
-            ) {
-                Column(modifier = Modifier.padding(16.dp)) {
-                    Text("Распределение Win / Loss", fontSize = 14.sp,
-                        fontWeight = FontWeight.Bold, color = TextPrimary)
-                    Spacer(Modifier.height(12.dp))
-                    WinLossBar(wins = wins, losses = losses)
-                    Spacer(Modifier.height(10.dp))
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceAround
-                    ) {
-                        LegendDot("WIN  $wins ($winrate%)", if (trades.isEmpty()) TextSecondary else Green)
-                        LegendDot("LOSS  $losses (${if (trades.isEmpty()) 0 else 100 - winrate}%)", if (trades.isEmpty()) TextSecondary else Red)
-                    }
-                }
-            }
-        }
-
-        // Забеги: прошлые итоги рядом — ради этого «Новый старт» и не удаляет сделки.
-        if (runs.isNotEmpty()) {
-            item {
-                Spacer(Modifier.height(12.dp))
-                RunsCard(runs, if (demoMode) "DEMO" else "REAL")
-            }
-        }
-    }
-}
-
-@Composable
-fun StatsPanel(title: String, rows: List<Pair<String, String>>, modifier: Modifier = Modifier) {
-    Surface(modifier = modifier, color = SurfaceCard, shape = RoundedCornerShape(16.dp)) {
-        Column(modifier = Modifier.padding(14.dp)) {
-            Text(title, fontSize = 12.sp, color = TextSecondary, fontWeight = FontWeight.Medium)
-            Spacer(Modifier.height(10.dp))
-            rows.forEach { (label, value) ->
-                Row(modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween) {
-                    Text(label, fontSize = 12.sp, color = TextSecondary)
-                    Text(value, fontSize = 12.sp, color = TextPrimary,
-                        fontWeight = FontWeight.SemiBold)
-                }
-                Spacer(Modifier.height(6.dp))
-            }
-        }
-    }
-}
-
-@Composable
-fun ExtremeRow(label: String, trade: String, pnl: String, color: Color) {
-    Row(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.SpaceBetween,
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        Column {
-            Text(label, fontSize = 11.sp, color = TextSecondary)
-            Text(trade, fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = TextPrimary)
-        }
-        Text(pnl, fontSize = 15.sp, fontWeight = FontWeight.ExtraBold, color = color)
-    }
-}
-
-@Composable
-fun WinLossBar(wins: Int, losses: Int) {
-    val total = wins + losses
-    val winFraction = if (total == 0) 0.5f else wins.toFloat() / total
-    Row(modifier = Modifier.fillMaxWidth().height(8.dp).clip(RoundedCornerShape(4.dp))) {
-        Box(Modifier.weight(winFraction.coerceAtLeast(0.01f)).fillMaxHeight().background(if (total == 0) BorderColor else Green))
-        Box(Modifier.weight((1f - winFraction).coerceAtLeast(0.01f)).fillMaxHeight().background(if (total == 0) BorderColor else Red))
-    }
-}
-
-@Composable
-fun LegendDot(label: String, color: Color) {
-    Row(verticalAlignment = Alignment.CenterVertically) {
-        Box(Modifier.size(8.dp).clip(CircleShape).background(color))
-        Spacer(Modifier.width(6.dp))
-        Text(label, fontSize = 12.sp, color = TextSecondary)
-    }
-}
-
-@Composable
-fun EmptyState(message: String) {
-    Box(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 16.dp)
-            .height(80.dp),
-        contentAlignment = Alignment.Center
-    ) {
-        Text(message, color = TextSecondary, fontSize = 14.sp)
-    }
-}
-
-// ─── Strategies screen ────────────────────────────────────────────────────────
-
-@Composable
-fun StrategiesScreen(
-    strategies: List<StrategyConfig>,
-    onCreate: () -> Unit,
-    onEdit: (StrategyConfig) -> Unit,
-    onDelete: (StrategyConfig) -> Unit,
-    onToggle: (StrategyConfig) -> Unit,
-    onBacktest: (StrategyConfig) -> Unit = {}
-) {
-    Box(Modifier.fillMaxSize()) {
-        Column(Modifier.fillMaxSize()) {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .statusBarsPadding()
-                    .padding(horizontal = 16.dp, vertical = 16.dp),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Text("Стратегии", fontSize = 22.sp,
-                    fontWeight = FontWeight.ExtraBold, color = TextPrimary)
-                Surface(color = SurfaceCard, shape = RoundedCornerShape(8.dp)) {
-                    Text(
-                        "${strategies.count { it.isActive }} активных",
-                        fontSize = 12.sp, color = TextSecondary,
-                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
-                    )
-                }
-            }
-
-            if (strategies.isEmpty()) {
-                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                        Text("🤖", fontSize = 48.sp)
-                        Spacer(Modifier.height(12.dp))
-                        Text("Стратегий нет", fontSize = 18.sp,
-                            fontWeight = FontWeight.Bold, color = TextPrimary)
-                        Spacer(Modifier.height(8.dp))
-                        Text("Нажмите + чтобы создать первую стратегию",
-                            fontSize = 13.sp, color = TextSecondary)
-                    }
-                }
-            } else {
-                LazyColumn(contentPadding = PaddingValues(bottom = 80.dp)) {
-                    items(strategies) { cfg ->
-                        Spacer(Modifier.height(8.dp))
-                        StrategyConfigCard(cfg, onEdit, onDelete, onToggle, onBacktest)
-                    }
-                }
-            }
-        }
-
-        FloatingActionButton(
-            onClick = onCreate,
-            modifier = Modifier.align(Alignment.BottomEnd).padding(16.dp),
-            containerColor = Green,
-            contentColor = Color.Black
-        ) {
-            Text("+", fontSize = 28.sp, fontWeight = FontWeight.Bold)
-        }
-    }
-}
-
-@Composable
-fun StrategyConfigCard(
-    cfg: StrategyConfig,
-    onEdit: (StrategyConfig) -> Unit,
-    onDelete: (StrategyConfig) -> Unit,
-    onToggle: (StrategyConfig) -> Unit,
-    onBacktest: (StrategyConfig) -> Unit = {}
-) {
-    Surface(
-        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
-        color = SurfaceCard, shape = RoundedCornerShape(14.dp)
-    ) {
-        Column(Modifier.padding(14.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Box(
-                    modifier = Modifier
-                        .size(40.dp)
-                        .clip(RoundedCornerShape(10.dp))
-                        .background(if (cfg.isActive) GreenDim else RedDim),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Text(
-                        if (cfg.isActive) "✓" else "✗",
-                        color = if (cfg.isActive) Green else Red,
-                        fontWeight = FontWeight.Bold, fontSize = 18.sp
-                    )
-                }
-                Spacer(Modifier.width(12.dp))
-                Column(Modifier.weight(1f)) {
-                    Text(
-                        cfg.name.ifEmpty { cfg.type.toTypeLabel() },
-                        fontWeight = FontWeight.SemiBold, color = TextPrimary, fontSize = 14.sp
-                    )
-                    Spacer(Modifier.height(4.dp))
-                    Row(
-                        modifier = Modifier.horizontalScroll(rememberScrollState()),
-                        horizontalArrangement = Arrangement.spacedBy(6.dp)
-                    ) {
-                        Tag("🔍 СКАНЕР", Green)
-                        Tag(cfg.timeframe, Purple)
-                        Tag(cfg.type.toTypeLabel(), Amber)
-                    }
-                    Spacer(Modifier.height(3.dp))
-                    Text(
-                        "мемкоины: LIQ ≥ ${fmtShortUsd(cfg.minLiquidityUsd)}, MC ${fmtShortUsd(cfg.minMarketCap)}–${fmtShortUsd(cfg.maxMarketCap)}",
-                        fontSize = 10.sp, color = TextSecondary
-                    )
-                }
-                Switch(
-                    checked = cfg.isActive,
-                    onCheckedChange = { onToggle(cfg) },
-                    colors = SwitchDefaults.colors(
-                        checkedThumbColor = Color.Black,
-                        checkedTrackColor = Green
-                    )
-                )
-            }
-            Spacer(Modifier.height(10.dp))
-            Box(Modifier.fillMaxWidth().height(1.dp).background(BorderColor))
-            Spacer(Modifier.height(8.dp))
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                // Чипы прокручиваются, чтобы три кнопки справа не выталкивались на узком экране.
-                Row(
-                    modifier = Modifier.weight(1f).horizontalScroll(rememberScrollState()),
-                    horizontalArrangement = Arrangement.spacedBy(12.dp)
-                ) {
-                    InfoChip("🛡", "SL ${cfg.stopLossPercent}%")
-                    InfoChip("🎯", "TP ${cfg.takeProfitPercent}%")
-                    InfoChip("📦", "${cfg.positionSize}%")
-                    if (cfg.trailingStopEnabled || cfg.atrTrailEnabled) InfoChip("📈", "трейл")
-                }
-                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    SmallIconBtn("🧪") { onBacktest(cfg) }
-                    SmallIconBtn("✏️") { onEdit(cfg) }
-                    SmallIconBtn("🗑") { onDelete(cfg) }
-                }
-            }
-        }
-    }
-}
-
-@Composable
-fun SmallIconBtn(icon: String, onClick: () -> Unit) {
-    Surface(
-        color = BgDark, shape = RoundedCornerShape(8.dp),
-        modifier = Modifier.size(34.dp)
-            .border(1.dp, BorderColor, RoundedCornerShape(8.dp))
-            .clickable { onClick() }
-    ) {
-        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-            Text(icon, fontSize = 14.sp)
-        }
-    }
-}
-
-private fun fmtShortUsd(v: Double): String = when {
-    v >= 1_000_000 -> "$${"%.1f".format(v / 1_000_000).trimEnd('0').trimEnd('.')}M"
-    v >= 1_000 -> "$${"%.0f".format(v / 1_000)}K"
-    else -> "$${"%.0f".format(v)}"
-}
+internal fun String.toTypeLabel(): String =
+    StrategyType.entries.firstOrNull { it.name == this }?.displayName ?: this
 
 // ─── Backtest screen ──────────────────────────────────────────────────────────
 
@@ -3290,367 +1777,6 @@ fun StrategyFormScreen(
     }
 }
 
-// ─── Settings screen ──────────────────────────────────────────────────────────
-
-@Composable
-fun SettingsScreen(
-    settings: DrxSettings,
-    connected: Boolean = false,
-    demoMode: Boolean = true,
-    shadowMode: Boolean = false,
-    demoBalance: Double = 10_000.0,
-    signalOnly: Boolean = false,
-    resumeOnLaunch: Boolean = false,
-    onDemoModeChange: (Boolean) -> Unit = {},
-    onShadowModeChange: (Boolean) -> Unit = {},
-    onSignalOnlyChange: (Boolean) -> Unit = {},
-    onResumeOnLaunchChange: (Boolean) -> Unit = {},
-    onResetDemo: () -> Unit = {},
-    onResetBot: () -> Unit = {},
-    onNewRun: (Double?) -> String = { "" },
-    onSave: (DrxSettings) -> Unit
-) {
-    var rpcUrl by remember(settings) { mutableStateOf(settings.rpcUrl) }
-    var walletSeed by remember(settings) { mutableStateOf(settings.walletSeed) }
-    var showSeed by remember { mutableStateOf(false) }
-    var telegramToken by remember(settings) { mutableStateOf(settings.telegramToken) }
-    var telegramChatId by remember(settings) { mutableStateOf(settings.telegramChatId) }
-    var protection by remember(settings) { mutableStateOf(settings.protection) }
-    var coinGeckoKey by remember(settings) { mutableStateOf(settings.coinGeckoKey) }
-    var saved by remember { mutableStateOf(false) }
-    var confirmReset by remember { mutableStateOf(false) }
-
-    Column(Modifier.fillMaxSize().background(BgDark)) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .statusBarsPadding()
-                .padding(horizontal = 16.dp, vertical = 16.dp),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Column {
-                Text("Настройки", fontSize = 22.sp,
-                    fontWeight = FontWeight.ExtraBold, color = TextPrimary)
-                Text("Управление DRX", fontSize = 12.sp, color = TextSecondary)
-            }
-            if (saved) {
-                Surface(color = GreenDim, shape = RoundedCornerShape(8.dp)) {
-                    Text("✓ Сохранено", color = Green, fontSize = 12.sp,
-                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp))
-                }
-            }
-        }
-
-        Column(
-            modifier = Modifier
-                .weight(1f)
-                .verticalScroll(rememberScrollState())
-                .padding(horizontal = 16.dp),
-            verticalArrangement = Arrangement.spacedBy(10.dp)
-        ) {
-            // ── Режим торговли ────────────────────────────────────────────
-            FormSection("🎮  Режим торговли") {
-                Surface(
-                    color = if (demoMode) Purple.copy(alpha = 0.12f) else Red.copy(alpha = 0.12f),
-                    shape = RoundedCornerShape(8.dp),
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Text(
-                        when {
-                            !demoMode -> "💸  REAL — реальные свопы через Jupiter с вашего кошелька!"
-                            shadowMode -> "🎮  DEMO · SHADOW — счёт виртуальный (${"%.0f".format(demoBalance)} USD), " +
-                                "вход и выход по реальным котировкам Jupiter"
-                            else -> "🎮  DEMO — сделки виртуальные (счёт ${"%.0f".format(demoBalance)} USD)"
-                        },
-                        fontSize = 12.sp,
-                        color = if (demoMode) Purple else Red,
-                        modifier = Modifier.padding(12.dp)
-                    )
-                }
-                Spacer(Modifier.height(4.dp))
-                FormToggle("Режим DEMO (paper-trading)", demoMode) { onDemoModeChange(it) }
-                if (demoMode) {
-                    FormToggle("SHADOW: исполнять по котировкам Jupiter", shadowMode) { onShadowModeChange(it) }
-                    Text(
-                        "Без SHADOW DEMO покупает и продаёт по цене графика — без комиссий пулов и проскальзывания, " +
-                            "поэтому результат лучше реального. SHADOW берёт суммы из настоящих котировок Jupiter " +
-                            "на ваш размер (транзакции не отправляются): монету без маршрута продажи не продать и тут.",
-                        fontSize = 11.sp, color = TextSecondary, lineHeight = 16.sp
-                    )
-                }
-                if (!demoMode) {
-                    Surface(color = Red.copy(alpha = 0.1f), shape = RoundedCornerShape(8.dp)) {
-                        Text("⚠ Реальная торговля — реальные деньги! Убедитесь, что seed-фраза задана и на кошельке есть SOL.",
-                            color = Red, fontSize = 12.sp,
-                            modifier = Modifier.padding(12.dp))
-                    }
-                }
-                Spacer(Modifier.height(4.dp))
-                Surface(
-                    color = BgDark, shape = RoundedCornerShape(10.dp),
-                    modifier = Modifier.fillMaxWidth()
-                        .border(1.dp, BorderColor, RoundedCornerShape(10.dp))
-                        .clickable { onResetDemo() }
-                ) {
-                    Text("🔄 Сбросить демо-счёт к $10 000", color = TextSecondary, fontSize = 13.sp,
-                        modifier = Modifier.padding(12.dp), textAlign = TextAlign.Center)
-                }
-                Spacer(Modifier.height(4.dp))
-                // Применяется сразу и синхронизируется с Telegram.
-                FormToggle("Только сигнал (без сделок)", signalOnly) { onSignalOnlyChange(it) }
-                if (signalOnly) {
-                    Surface(color = Blue.copy(alpha = 0.1f), shape = RoundedCornerShape(8.dp)) {
-                        Text("📣 Бот только присылает сигнал и параметры входа — сделки не открываются",
-                            color = Blue, fontSize = 12.sp,
-                            modifier = Modifier.padding(12.dp))
-                    }
-                }
-                Spacer(Modifier.height(8.dp))
-                FormToggle("Возобновлять торговлю при запуске приложения", resumeOnLaunch) { onResumeOnLaunchChange(it) }
-                Text(
-                    "Бот вернётся в то состояние, в котором его оставили (работает или на паузе), после " +
-                        "перезапуска приложения или перезагрузки телефона. Сервер возобновляет торговлю всегда. " +
-                        "Не включайте на десктопе, если ту же базу (DB_PATH) использует сервер: на одном счёте " +
-                        "торговали бы два бота.",
-                    fontSize = 11.sp, color = TextSecondary, lineHeight = 16.sp
-                )
-            }
-
-            // ── Защита сделок ─────────────────────────────────────────────
-            ProtectionSection(protection) { protection = it; saved = false }
-
-            // ── Кошелёк Solana ────────────────────────────────────────────
-            FormSection("🔑  Кошелёк Solana") {
-                Surface(
-                    color = if (settings.walletSeed.isNotBlank()) GreenDim else RedDim,
-                    shape = RoundedCornerShape(8.dp),
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Text(
-                        if (settings.walletSeed.isNotBlank()) "✅  Seed-фраза сохранена (нужна для REAL-режима)"
-                        else "⚠️  Seed-фраза не задана — REAL-режим недоступен",
-                        fontSize = 12.sp,
-                        color = if (settings.walletSeed.isNotBlank()) Green else Red,
-                        modifier = Modifier.padding(12.dp)
-                    )
-                }
-                Spacer(Modifier.height(4.dp))
-                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                    OutlinedTextField(
-                        value = walletSeed,
-                        onValueChange = { walletSeed = it; saved = false },
-                        label = { Text("Seed-фраза (12/24 слова)", color = TextSecondary) },
-                        modifier = Modifier.weight(1f),
-                        visualTransformation = if (showSeed) VisualTransformation.None
-                        else PasswordVisualTransformation(),
-                        colors = settingsFieldColors(),
-                        shape = RoundedCornerShape(10.dp),
-                        singleLine = true
-                    )
-                    Spacer(Modifier.width(8.dp))
-                    Surface(
-                        color = SurfaceCard, shape = RoundedCornerShape(10.dp),
-                        modifier = Modifier.size(52.dp)
-                            .border(1.dp, BorderColor, RoundedCornerShape(10.dp))
-                            .clickable { showSeed = !showSeed }
-                    ) {
-                        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                            Text(if (showSeed) "🙈" else "👁", fontSize = 20.sp)
-                        }
-                    }
-                }
-                Spacer(Modifier.height(4.dp))
-                FormTextField("Solana RPC URL", rpcUrl) { rpcUrl = it; saved = false }
-                Text("Смена RPC применяется после перезапуска приложения.",
-                    fontSize = 11.sp, color = TextSecondary)
-            }
-
-            // ── Данные рынка ──────────────────────────────────────────────
-            MarketDataSection(coinGeckoKey) { coinGeckoKey = it; saved = false }
-
-            // ── Telegram ──────────────────────────────────────────────────
-            FormSection("📲  Telegram") {
-                FormTextField("Bot Token", telegramToken) { telegramToken = it; saved = false }
-                FormTextField("Chat ID", telegramChatId, isNumber = true) { telegramChatId = it; saved = false }
-                Text(
-                    "Управление ботом и алерты о сделках. Токен — у @BotFather, свой ID — у @userinfobot.",
-                    fontSize = 11.sp, color = TextSecondary, lineHeight = 16.sp
-                )
-            }
-
-            // ── Сброс ─────────────────────────────────────────────────────
-            NewRunSection(demoMode, onNewRun)
-
-            FormSection("🚨  Сброс бота") {
-                Text(
-                    "Удаляет все сделки, кеш токенов и балансов, сбрасывает демо-счёт. Стратегии и настройки остаются.",
-                    fontSize = 11.sp, color = TextSecondary, lineHeight = 16.sp
-                )
-                Spacer(Modifier.height(8.dp))
-                if (!confirmReset) {
-                    Surface(
-                        color = RedDim, shape = RoundedCornerShape(10.dp),
-                        modifier = Modifier.fillMaxWidth().clickable { confirmReset = true }
-                    ) {
-                        Text("🗑 Полный сброс данных…", color = Red, fontSize = 13.sp,
-                            fontWeight = FontWeight.Bold,
-                            modifier = Modifier.padding(12.dp), textAlign = TextAlign.Center)
-                    }
-                } else {
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Surface(
-                            color = Red, shape = RoundedCornerShape(10.dp),
-                            modifier = Modifier.weight(1f).clickable {
-                                onResetBot(); confirmReset = false
-                            }
-                        ) {
-                            Text("Да, стереть всё", color = Color.White, fontSize = 13.sp,
-                                fontWeight = FontWeight.Bold,
-                                modifier = Modifier.padding(12.dp), textAlign = TextAlign.Center)
-                        }
-                        Surface(
-                            color = SurfaceCard, shape = RoundedCornerShape(10.dp),
-                            modifier = Modifier.weight(1f).clickable { confirmReset = false }
-                        ) {
-                            Text("Отмена", color = TextSecondary, fontSize = 13.sp,
-                                modifier = Modifier.padding(12.dp), textAlign = TextAlign.Center)
-                        }
-                    }
-                }
-            }
-
-            Spacer(Modifier.height(8.dp))
-        }
-
-        Button(
-            onClick = {
-                onSave(DrxSettings(
-                    rpcUrl = rpcUrl,
-                    walletSeed = walletSeed,
-                    telegramToken = telegramToken,
-                    telegramChatId = telegramChatId,
-                    protection = protection,
-                    coinGeckoKey = coinGeckoKey,
-                ))
-                saved = true
-            },
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 16.dp, vertical = 12.dp),
-            colors = ButtonDefaults.buttonColors(containerColor = Green),
-            shape = RoundedCornerShape(14.dp),
-            contentPadding = PaddingValues(vertical = 16.dp)
-        ) {
-            Text("💾  Сохранить настройки", fontWeight = FontWeight.Bold, color = Color.Black, fontSize = 16.sp)
-        }
-    }
-}
-
-/**
- * «Данные рынка» — ключ CoinGecko для свечей. Без него GeckoTerminal пускает считаные запросы в минуту
- * (см. [GeckoTerminalApi]), и разбор монет идёт по очереди; строка состояния показывает, с ключом ли бот сейчас.
- * Сохраняется общей кнопкой настроек.
- */
-@Composable
-private fun MarketDataSection(key: String, onKey: (String) -> Unit) {
-    val feed by GeckoTerminalApi.status.collectAsState()
-    FormSection("📡  Данные рынка") {
-        val (text, color) = when {
-            feed.keyRejected -> "⚠️  Ключ отклонён сервером — запросы идут без ключа. Проверьте ключ и сохраните заново." to Red
-            feed.keyExhaustedUntilMs > 0L -> "⏸  Ключ упирается в лимит — похоже, кончилась месячная квота. Свечи идут " +
-                "без ключа (бесплатно, но медленнее), ключ бот попробует снова ${formatLocalTime(feed.keyExhaustedUntilMs)}." to Amber
-            feed.usingKey -> "✅  Свечи идут с ключом CoinGecko — до 60 запросов в минуту. У бесплатного ключа 10 000 " +
-                "запросов в месяц — это один-два дня работы бота; когда кончатся, он сам продолжит без ключа." to Green
-            else -> "Без ключа GeckoTerminal даёт около 4 запросов свечей в минуту без месячного предела: монеты " +
-                "разбираются по очереди, на ТФ 1m — с отставанием." to Amber
-        }
-        Surface(color = color.copy(alpha = 0.12f), shape = RoundedCornerShape(8.dp), modifier = Modifier.fillMaxWidth()) {
-            Text(text, fontSize = 12.sp, color = color, modifier = Modifier.padding(12.dp))
-        }
-        Spacer(Modifier.height(4.dp))
-        FormTextField("Ключ CoinGecko (Demo API)", key) { onKey(it) }
-        Text(
-            "Бесплатный ключ: coingecko.com → Developer Dashboard → Add New Key (план Demo). " +
-                "Применяется сразу после сохранения.",
-            fontSize = 11.sp, color = TextSecondary, lineHeight = 16.sp
-        )
-    }
-}
-
-/**
- * «Защита сделок» — глобальные правила для всех стратегий (см. [ProtectionSettings]): проверка монеты
- * перед покупкой, лимиты портфеля и продажа при сбоях. Сохраняется общей кнопкой настроек.
- */
-@Composable
-private fun ProtectionSection(p: ProtectionSettings, onChange: (ProtectionSettings) -> Unit) {
-    FormSection("🛡  Защита сделок (все стратегии)") {
-        FormToggle("Проверять монету перед покупкой", p.guardEnabled) { onChange(p.copy(guardEnabled = it)) }
-        if (p.guardEnabled) {
-            FormToggle("Mint/freeze authority должны быть отозваны", p.requireRevokedAuthorities) {
-                onChange(p.copy(requireRevokedAuthorities = it))
-            }
-            FormToggle("Отклонять опасный Token-2022", p.rejectRiskyToken2022) {
-                onChange(p.copy(rejectRiskyToken2022 = it))
-            }
-            DecimalSettingField("Макс. влияние покупки на цену, %", p.maxPriceImpactPct) {
-                onChange(p.copy(maxPriceImpactPct = it))
-            }
-            DecimalSettingField("Макс. потери «купить и сразу продать», %", p.maxRoundTripLossPct) {
-                onChange(p.copy(maxRoundTripLossPct = it))
-            }
-            Text(
-                "Перед любой покупкой бот спрашивает у Jupiter котировку на свой размер и обратную продажу: " +
-                    "нет маршрута продажи — монету не покупаем. Token-2022 отклоняется при комиссии перевода, " +
-                    "перманентном делегате, хуке перевода, паузе или заморозке счетов. 0 — лимит выключен.",
-                fontSize = 11.sp, color = TextSecondary, lineHeight = 16.sp
-            )
-        }
-        Spacer(Modifier.height(8.dp))
-        FormToggle("Лимиты портфеля", p.portfolioEnabled) { onChange(p.copy(portfolioEnabled = it)) }
-        if (p.portfolioEnabled) {
-            IntSettingField("Открытых позиций всего", p.maxOpenPositions) { onChange(p.copy(maxOpenPositions = it)) }
-            DecimalSettingField("В позициях, % капитала", p.maxExposurePct) { onChange(p.copy(maxExposurePct = it)) }
-            DecimalSettingField("Убыток за день, % капитала", p.maxDailyLossPct) { onChange(p.copy(maxDailyLossPct = it)) }
-            DecimalSettingField("Убыток за 7 дней, % капитала", p.maxWeeklyLossPct) { onChange(p.copy(maxWeeklyLossPct = it)) }
-            IntSettingField("Пауза после N убыточных сделок подряд", p.lossStreakLimit) {
-                onChange(p.copy(lossStreakLimit = it))
-            }
-            IntSettingField("Длительность паузы, мин", p.lossStreakPauseMinutes) {
-                onChange(p.copy(lossStreakPauseMinutes = it))
-            }
-            DecimalSettingField("Просадка портфеля от пика, %", p.maxDrawdownPct) { onChange(p.copy(maxDrawdownPct = it)) }
-            FormToggle("Останавливать бота при лимите убытка", p.autoStopOnLimit) {
-                onChange(p.copy(autoStopOnLimit = it))
-            }
-            Text(
-                "Считаются все стратегии текущего режима (DEMO или REAL) вместе; капитал — свободный баланс " +
-                    "плюс позиции, убыток — закрытые сделки и открытые по последней цене. 0 — лимит выключен. " +
-                    "Просадка — от лучшей точки кривой PnL по сделкам (пополнение кошелька и цена SOL не считаются) " +
-                    "и сама не отпускает. С остановкой при лимите убытка (день, 7 дней, просадка) бот не ждёт " +
-                    "следующего дня, а останавливается целиком — запуск только вручную.",
-                fontSize = 11.sp, color = TextSecondary, lineHeight = 16.sp
-            )
-        }
-        Spacer(Modifier.height(8.dp))
-        DecimalSettingField("Потолок slippage продажи, %", p.maxSellSlippagePct) { onChange(p.copy(maxSellSlippagePct = it)) }
-        Text(
-            "Продажа не прошла — следующая попытка с бо́льшим slippage (3% → 6% → 12%… до потолка). " +
-                "После $EXIT_BLOCKED_AFTER неудач подряд позиция помечается «продажа заблокирована»: попытки идут " +
-                "с паузой, в Telegram приходит предупреждение.",
-            fontSize = 11.sp, color = TextSecondary, lineHeight = 16.sp
-        )
-        Spacer(Modifier.height(8.dp))
-        FormToggle("Выход по развороту рынка", p.reversalExitEnabled) { onChange(p.copy(reversalExitEnabled = it)) }
-        Text(
-            "Открытая сделка продаётся, не дожидаясь стопа, когда на закрытых барах рабочего ТФ стратегии " +
-                "EMA(21) ушла ниже EMA(50), а после входа сложились нижние максимум и минимум. Проверка — раз " +
-                "на закрытый бар, через 20 с после его закрытия.",
-            fontSize = 11.sp, color = TextSecondary, lineHeight = 16.sp
-        )
-    }
-}
-
 /**
  * «🎯 Вход по касанию уровня» в форме «Пробоя + отката» и «Мем-плейбука»: всё сошлось, кроме бара-триггера,
  * — бот следит за ценой и входит, как только она пройдёт максимум прошлого бара (см. StrategyConfig.armedEntryEnabled).
@@ -3670,33 +1796,13 @@ private fun ArmedEntryFields(enabled: Boolean, expiry: String, onEnabled: (Boole
     }
 }
 
-/** Дробное поле настроек: текст хранится как набран, в модель уходит только то, что разобралось в число. */
-@Composable
-private fun DecimalSettingField(label: String, value: Double, onValue: (Double) -> Unit) {
-    var text by remember { mutableStateOf(if (value % 1.0 == 0.0) value.toLong().toString() else value.toString()) }
-    FormTextField(label, text, isNumber = true) { v ->
-        text = v
-        v.toDoubleOrNull()?.let { onValue(it.coerceAtLeast(0.0)) }
-    }
-}
-
-/** Целое поле настроек (см. [DecimalSettingField]). */
-@Composable
-private fun IntSettingField(label: String, value: Int, onValue: (Int) -> Unit) {
-    var text by remember { mutableStateOf(value.toString()) }
-    FormTextField(label, text, isNumber = true) { v ->
-        text = v
-        v.toIntOrNull()?.let { onValue(it.coerceAtLeast(0)) }
-    }
-}
-
-// ─── Form helpers (в стиле MRX) ───────────────────────────────────────────────
+// ─── Поля форм (форма стратегии, бэктест, ручная покупка) ─────────────────────
 
 @Composable
 fun FormSection(title: String, content: @Composable () -> Unit) {
-    Surface(color = SurfaceCard, shape = RoundedCornerShape(14.dp), modifier = Modifier.fillMaxWidth()) {
-        Column(Modifier.padding(14.dp)) {
-            Text(title, fontSize = 14.sp, fontWeight = FontWeight.Bold, color = TextPrimary)
+    Surface(color = SurfaceCard, shape = RoundedCornerShape(16.dp), modifier = Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(16.dp)) {
+            Text(title, fontSize = 15.sp, fontWeight = FontWeight.Bold, color = TextPrimary)
             Spacer(Modifier.height(10.dp))
             content()
         }
@@ -3707,83 +1813,54 @@ fun FormSection(title: String, content: @Composable () -> Unit) {
 fun FormTextField(label: String, value: String, isNumber: Boolean = false, onChange: (String) -> Unit) {
     OutlinedTextField(
         value = value,
-        onValueChange = { v -> onChange(if (isNumber) v.filter { it.isDigit() || it == '.' || it == '-' } else v) },
-        label = { Text(label, color = TextSecondary) },
+        onValueChange = { v -> onChange(if (isNumber) v.replace(',', '.').filter { it.isDigit() || it == '.' || it == '-' } else v) },
+        label = { Text(label, maxLines = 1, overflow = TextOverflow.Ellipsis) },
         modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
         colors = settingsFieldColors(),
-        shape = RoundedCornerShape(10.dp),
-        singleLine = true
+        shape = RoundedCornerShape(12.dp),
+        singleLine = true,
+        keyboardOptions = if (isNumber) KeyboardOptions(keyboardType = KeyboardType.Decimal) else KeyboardOptions.Default,
     )
 }
 
 @Composable
 fun FormToggle(label: String, checked: Boolean, onChange: (Boolean) -> Unit) {
-    Row(
-        modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
-        horizontalArrangement = Arrangement.SpaceBetween,
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        Text(label, fontSize = 13.sp, color = TextPrimary, modifier = Modifier.weight(1f))
-        Switch(
-            checked = checked,
-            onCheckedChange = onChange,
-            colors = SwitchDefaults.colors(
-                checkedThumbColor = Color.Black,
-                checkedTrackColor = Green
-            )
-        )
-    }
+    SettingSwitch(label, checked, onChange = onChange)
 }
 
 @Composable
 fun FormSlider(label: String, value: Float, min: Float, max: Float, valueLabel: String, onChange: (Float) -> Unit) {
     Column(Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween
-        ) {
-            Text(label, fontSize = 12.sp, color = TextSecondary)
-            Text(valueLabel, fontSize = 12.sp, color = Green, fontWeight = FontWeight.SemiBold)
+        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+            Text(label, fontSize = 13.sp, color = TextSecondary)
+            Text(valueLabel, fontSize = 13.sp, color = Green, fontWeight = FontWeight.SemiBold)
         }
         Slider(
             value = value,
             onValueChange = onChange,
             valueRange = min..max,
-            colors = SliderDefaults.colors(
-                thumbColor = Green,
-                activeTrackColor = Green,
-                inactiveTrackColor = BorderColor
-            )
+            colors = SliderDefaults.colors(thumbColor = Green, activeTrackColor = Green, inactiveTrackColor = BorderColor)
         )
     }
 }
 
+/** Выбор одного из вариантов (тип стратегии, таймфрейм, период бэктеста). */
 @Composable
 fun ChoiceChip(label: String, selected: Boolean, onClick: () -> Unit) {
     Surface(
-        color = if (selected) Blue else BgDark,
-        shape = RoundedCornerShape(8.dp),
+        color = if (selected) Blue.copy(alpha = 0.18f) else BgDark,
+        shape = RoundedCornerShape(10.dp),
         modifier = Modifier
-            .border(1.dp, if (selected) Blue else BorderColor, RoundedCornerShape(8.dp))
+            .border(1.dp, if (selected) Blue else BorderColor, RoundedCornerShape(10.dp))
+            .clip(RoundedCornerShape(10.dp))
             .clickable { onClick() }
     ) {
         Text(
             label,
             modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
-            color = if (selected) Color.White else TextPrimary,
-            fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal,
+            color = if (selected) Blue else TextPrimary,
+            fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
             fontSize = 13.sp
         )
     }
 }
-
-@Composable
-fun settingsFieldColors() = OutlinedTextFieldDefaults.colors(
-    focusedBorderColor = Green,
-    unfocusedBorderColor = BorderColor,
-    focusedTextColor = TextPrimary,
-    unfocusedTextColor = TextPrimary,
-    cursorColor = Green,
-    focusedContainerColor = BgDark,
-    unfocusedContainerColor = BgDark,
-)

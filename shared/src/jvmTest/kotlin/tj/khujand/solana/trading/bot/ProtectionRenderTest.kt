@@ -40,7 +40,7 @@ class ProtectionRenderTest {
 
     @Test fun settingsWithProtectionSectionRender() {
         val png = render("settings-shadow-phone", 780, 6400) {
-            SettingsScreen(settings = DrxSettings(), demoMode = true, shadowMode = true, onSave = {})
+            SettingsScreen(settings = DrxSettings(), demoMode = true, shadowMode = true, initialCategory = SettingsCategory.PROTECTION, onSave = {})
         }
         assertTrue(png.size > 10_000)
     }

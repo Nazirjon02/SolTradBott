@@ -172,7 +172,7 @@ SOLANA_RPC_URL=          # RPC-эндпоинт (дефолт mainnet-beta)
 DEMO_MODE=true           # true = paper-trading, REAL только когда уверен
 TG_BOT_TOKEN=            # Telegram-бот
 TG_CHAT_ID=0             # единственный разрешённый chat_id
-COINGECKO_API_KEY=       # бесплатный Demo-ключ CoinGecko для свечей (без него ~4 запроса в минуту)
+COINGECKO_API_KEY=       # бесплатный Demo-ключ CoinGecko: ускоряет бэктест и «Анализ» (торговля идёт без ключа)
 PORT=8080
 SOLTRAD_API_KEY=                 # Bearer для REST; пусто — сервер сгенерирует ключ и напечатает в лог
 DB_PATH=soltradbot.db
@@ -192,42 +192,46 @@ DB_PATH=soltradbot.db
 
 ---
 
-## 7. UI — дизайн 1-в-1 как MRX
+## 7. UI — палитра MRX, пять вкладок, телефон и десктоп
 
-### Палитра (точные цвета MRX)
+### Палитра
+
+Основа — палитра MRX (`shared/.../DrxTheme.kt`). Цвета текста подняты до контраста WCAG AA (4.5:1) на карточке:
+серый был 3.7:1.
 
 ```kotlin
 BgDark        = Color(0xFF0A0E1A)   // фон
 SurfaceCard   = Color(0xFF1A2235)   // карточки
+SurfaceRaised = Color(0xFF232D44)   // диалоги, выбранный сегмент
 Green         = Color(0xFF00D97E)   // прибыль / активно
-Red           = Color(0xFFFF4757)   // убыток / стоп
-Blue          = Color(0xFF4E9EFF)
-Purple        = Color(0xFF9B7AFF)
+Red           = Color(0xFFFF6672)   // убыток / стоп
+Blue          = Color(0xFF5AA5FF)
+Purple        = Color(0xFFA98FFF)
 Amber         = Color(0xFFF59E0B)
 TextPrimary   = Color(0xFFEAF0FB)
-TextSecondary = Color(0xFF6B7A99)
+TextSecondary = Color(0xFF8E9BB8)   // 5.7:1 на карточке
 BorderColor   = Color(0xFF1E2D45)
 ```
 
-### Экраны: `enum Screen { DASHBOARD, HISTORY, STATS, STRATEGIES, SETTINGS }`
+### Экраны: `enum Screen { DASHBOARD, ANALYSIS, TRADES, STRATEGIES, SETTINGS }`
 
-Текущие 4 таба (Strategies/Portfolio/Statistics/Settings) заменяются на 5 экранов MRX с нижней навигацией:
+Desktop и Android рендерят один и тот же `shared/App.kt` (оболочка) и экраны из отдельных файлов. На узком экране
+вкладки внизу, от 840 dp (десктоп, планшет) — боковая панель, главная и «Сделки» в две колонки.
 
-1. **DASHBOARD** (структура MRX DashboardScreen):
-   - Header: «SolTrad Bot» + PulseLine (точка коннекта, счётчик запросов, время последнего ответа DexScreener) + StatusChip;
-   - BalanceCard — SOL/USDC баланс;
-   - PnlChartCard — equity curve по сделкам;
-   - StatsRow — сделки/winrate/PnL за день;
-   - ControlButtons — Старт/Стоп/Пауза;
-   - ActivityFeedCard — живая лента событий (скан, сигналы, входы, выходы);
-   - Карточки стратегий (активность, символ/режим сканера, PnL, winrate);
-   - Последние 3 сделки.
-2. **HISTORY** — журнал сделок с фильтрами (как MRX HistoryScreen), карточка сделки: токен, вход→выход, PnL, причина выхода.
-3. **STATS** — winrate, profit factor, средняя прибыль/убыток, распределение по стратегиям, лучшая/худшая сделка (как MRX StatsScreen).
-4. **STRATEGIES** — список + **StrategyFormScreen** (полноэкранная форма как в MRX): основное, размер позиции, SL (+trailing, break-even), TP (+partial), фильтры токенов (ликвидность/MC/возраст/объём), параметры Dars/индикаторов, риск.
-5. **SETTINGS** — как MRX SettingsScreen: кошелёк/RPC, URL сервера, Telegram, глобальный риск (дневной убыток, просадка, макс позиций, авто-стоп), управление ботом (интервалы, кулдаун), уведомления (по типам), DEMO/REAL переключатель, сброс бота.
+1. **Главная** (`DashboardUi.kt`): баланс с кнопками Старт/Пауза/Стоп → открытые позиции (путь цены от стопа к
+   цели, график, закрытие с подтверждением) → «Почему нет сделок» (`FunnelUi.kt`, воронка входа за час) →
+   доска наблюдения → лента активности → доходность → стратегии → последние сделки. На широком окне график сделки
+   открывается рядом с позициями.
+2. **Анализ** (`AnalysisScreen.kt`) — разбор монет по методике Dars, поиск, избранное, ручная покупка.
+3. **Сделки** (`TradesUi.kt`) — история с фильтрами и аналитика (кривая, календарь P&L, забеги); на широком окне рядом.
+4. **Стратегии** (`StrategiesUi.kt`) — карточки сеткой, бэктест, правка, удаление с подтверждением; форма стратегии.
+5. **Настройки** (`SettingsUi.kt`) — разделы Торговля, Защита, Подключения, Данные; черновик правок с панелью
+   «Сохранить», секреты скрыты, REAL и сбросы — с подтверждением.
 
-Desktop и Android рендерят один и тот же `shared/App.kt` (как в MRX).
+Общие элементы (карточки, баннеры, кнопки, поля, диалоги) — `DrxComponents.kt`; навигация — `Navigation.kt`.
+Рендер-тест `DesignRenderTest` рисует экраны на телефоне и на широком окне в `shared/build/design-render/`;
+`AppInteractionTest` сам нажимает на вкладки, поля и кнопки приложения с настоящим рантаймом (база в памяти);
+`PaletteContrastTest` следит, чтобы текст палитры держал контраст 4.5:1.
 
 ---
 

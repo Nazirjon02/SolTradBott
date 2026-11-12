@@ -49,6 +49,7 @@ import tj.khujand.solana.trading.bot.exchange.dex.AccountCache
 import tj.khujand.solana.trading.bot.exchange.dex.DexClient
 import tj.khujand.solana.trading.bot.exchange.dex.GeckoTerminalApi
 import tj.khujand.solana.trading.bot.exchange.dex.JupiterSwapQuotes
+import tj.khujand.solana.trading.bot.exchange.dex.KeyBudget
 import tj.khujand.solana.trading.bot.exchange.dex.TokenCache
 import tj.khujand.solana.trading.bot.exchange.dex.TokenScanner
 import tj.khujand.solana.trading.bot.seedDefaultStrategies
@@ -78,7 +79,15 @@ fun main() {
     if (config.coinGeckoKey.isNotBlank() && settingsStore.getCoinGeckoKey() == null) {
         settingsStore.setCoinGeckoKey(config.coinGeckoKey)
     }
-    // Ключ свечей — до первого запроса: без него GeckoTerminal пускает считаные запросы в минуту.
+    // Ключ свечей и счёт его расхода — до первого запроса. Торговля идёт без ключа; ключ тратят только запросы
+    // человека (бэктест, «Анализ», график), которых у сервера без UI почти нет.
+    GeckoTerminalApi.setKeyBudget(
+        KeyBudget(
+            monthlyQuota = settingsStore::getCoinGeckoQuota,
+            load = settingsStore::getCoinGeckoUsage,
+            save = settingsStore::setCoinGeckoUsage,
+        )
+    )
     GeckoTerminalApi.setApiKey(settingsStore.getCoinGeckoKey())
 
     val rpcUrl = settingsStore.getRpcUrl() ?: config.rpcUrl

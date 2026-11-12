@@ -62,6 +62,7 @@ import kotlin.math.abs
 import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.roundToInt
+import tj.khujand.solana.trading.bot.util.plural
 
 // График свечей с разметкой разбора (порт CandleChart из MRX). Рисуется на Compose Canvas без
 // внешних библиотек: любая графическая библиотека сузила бы набор таргетов KMP, а экран один
@@ -193,18 +194,6 @@ fun setupCaption(overlay: SetupOverlay): String {
 private fun fmtOne(v: Double): String {
     val r = kotlin.math.round(v * 10).toLong()
     return "${r / 10}.${abs(r % 10)}"
-}
-
-/** «бар / бара / баров» — русское склонение по числу. */
-internal fun plural(n: Int, one: String, few: String, many: String): String {
-    val n100 = abs(n) % 100
-    val n10 = n100 % 10
-    return when {
-        n100 in 11..14 -> many
-        n10 == 1 -> one
-        n10 in 2..4 -> few
-        else -> many
-    }
 }
 
 // ─── Окно просмотра ───────────────────────────────────────────────────────────
