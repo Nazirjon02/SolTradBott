@@ -35,6 +35,7 @@ import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.longOrNull
@@ -58,6 +59,8 @@ data class ChainCandleStatus(
     val dailyLimit: Int = 0,
     val pausedUntilMs: Long = 0,
     val reconnects: Int = 0,
+    /** Подписки, которые узел снял сам после подтверждения или вместо него (PublicNode: «Subscription timed out»). */
+    val subscriptionDrops: Int = 0,
     val lastReconcile: String? = null,
     val error: String? = null,
 )
@@ -141,6 +144,10 @@ class ChainCandleService(
         var subId: Long? = null
         var reqId: Long? = null
         var subAttempts = 0
+        /** Когда узел подтвердил текущую подписку. */
+        var subAckAt = 0L
+        /** Последнее уведомление по пулу (любое — сделка, шум, ошибка). */
+        var lastDataAt = 0L
         var reserve0 = meta.reserve0
         var reserve1 = meta.reserve1
         var trades = 0L
@@ -174,6 +181,7 @@ class ChainCandleService(
     private var tradesDay = 0L
     private var unparsed = 0L
     private var reconnects = 0
+    private var subscriptionDrops = 0
     private var pausedUntil = 0L
     private var lastReconcileText: String? = null
 
@@ -491,6 +499,8 @@ class ChainCandleService(
                 usage.onMessage(bytes)
                 val st = sub?.let { subToPool[it] }?.let { pools[it] } ?: return@withLock
                 st.rate.add(bytes, now)
+                st.lastDataAt = now
+                st.subAttempts = 0 // подписка работает: неудачи «подряд» считаются заново
                 if (text.contains("\"err\":null")) st.noise++ else st.failedTx++
             }
             return
@@ -503,8 +513,52 @@ class ChainCandleService(
         when {
             root == null -> lock.withLock { usage.onMessage(bytes) }
             root["method"]?.jsonPrimitive?.content == "logsNotification" -> onNotification(root, bytes, now)
+            (root["params"] as? JsonObject)?.get("error") != null -> onSubscriptionDropped(root, bytes, now)
             else -> onResponse(root, bytes, now)
         }
+    }
+
+    /**
+     * Узел снял подписку сам. PublicNode сообщает так (`"method":"eth_subscription"`, `params.error` —
+     * «Subscription timed out», номера подписки и запроса), что подписка не работает: часто уже после
+     * подтверждения, и по ней с подтверждения не пришло ничего (замер 2026-11-12: 45 из 54 подписок,
+     * сообщение — через 5–10 мин). Покрытие закрывается по последнему уведомлению пула: не было ни одного —
+     * отрезок с подтверждения отменяется, и бары этого времени не считаются полными. Подписка просится заново;
+     * после [MAX_SUBSCRIBE_ATTEMPTS] неудач подряд пул откладывается на час.
+     */
+    private suspend fun onSubscriptionDropped(root: JsonObject, bytes: Int, now: Long) {
+        val params = root["params"] as? JsonObject
+        val sub = params?.get("subscription")?.jsonPrimitive?.longOrNull
+        val id = root["id"]?.jsonPrimitive?.longOrNull
+        val reason = (params?.get("error") as? JsonObject)?.get("message")?.jsonPrimitive?.contentOrNull
+        val out = ArrayList<String>()
+        val symbol = lock.withLock {
+            usage.onMessage(bytes)
+            val pool = sub?.let { subToPool[it] } ?: id?.let { pendingSubs[it] } ?: return@withLock null
+            val st = pools[pool] ?: return@withLock null
+            if ((sub == null || st.subId != sub) && (id == null || st.reqId != id)) return@withLock null
+            subscriptionDrops++
+            st.reqId?.let {
+                pendingSubs.remove(it)
+                pendingSentAt.remove(it)
+            }
+            st.subId?.let { subToPool.remove(it) }
+            if (st.subId != null) st.coverage.close(maxOf(st.lastDataAt, st.subAckAt))
+            st.subId = null
+            st.reqId = null
+            if (st.admitted) {
+                if (st.subAttempts >= MAX_SUBSCRIBE_ATTEMPTS) {
+                    st.admitted = false
+                    st.subAttempts = 0
+                    banned[pool] = (now + RETRY_FAILED_MS) to SkipReason.SUBSCRIBE_FAILED
+                } else {
+                    out += subscribeRequest(st)
+                }
+            }
+            st.symbol
+        } ?: return
+        onDiagnostic("узел снял подписку ($symbol): ${reason ?: "без причины"}")
+        sendPaced(out)
     }
 
     private suspend fun onResponse(root: JsonObject, bytes: Int, now: Long) = lock.withLock {
@@ -522,7 +576,9 @@ class ChainCandleService(
             return@withLock
         }
         st.subId = sub
-        st.subAttempts = 0
+        // Попытки не обнуляются: PublicNode подтверждает подписку, а через минуты снимает — неудачей считается
+        // подписка без единого уведомления (счётчик обнуляют уведомления).
+        st.subAckAt = now
         subToPool[sub] = pool
         st.rate.start(now)
         if (st.coverage.openSince() == null) {
@@ -551,6 +607,8 @@ class ChainCandleService(
             usage.onMessage(bytes)
             val st = subToPool[sub]?.let { pools[it] } ?: return@withLock
             st.rate.add(bytes, now)
+            st.lastDataAt = now
+            st.subAttempts = 0 // подписка работает: неудачи «подряд» считаются заново
             if (failed) {
                 st.failedTx++
                 return@withLock
@@ -776,6 +834,7 @@ class ChainCandleService(
                 .take(decision.admit)
             for (st in candidates) {
                 st.admitted = true
+                st.subAttempts = 0
                 out += subscribeRequest(st)
             }
         }
@@ -897,6 +956,7 @@ class ChainCandleService(
                 failedTx = pools.values.sumOf { it.failedTx },
                 noise = pools.values.sumOf { it.noise },
                 reconnects = reconnects,
+                drops = subscriptionDrops,
             )
             Triple(list, summary, ChainReport.render(list, t, u, stats, nowMs()))
         }
@@ -933,6 +993,7 @@ class ChainCandleService(
                 dailyLimit = dailyCreditLimit(),
                 pausedUntilMs = pausedUntil.takeIf { it > now } ?: 0L,
                 reconnects = reconnects,
+                subscriptionDrops = subscriptionDrops,
                 lastReconcile = lastReconcileText,
                 error = lastError,
             )

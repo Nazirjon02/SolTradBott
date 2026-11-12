@@ -14,6 +14,8 @@ object ChainReport {
         val failedTx: Long,
         val noise: Long,
         val reconnects: Int,
+        /** Подписки, которые узел снял сам (PublicNode: «Subscription timed out»). */
+        val drops: Int = 0,
     )
 
     fun render(
@@ -25,7 +27,7 @@ object ChainReport {
     ): String = buildString {
         appendLine("## Сверка 5m-свечей из цепочки с GeckoTerminal — ${Instant.fromEpochMilliseconds(nowMs)}")
         appendLine()
-        appendLine("- Работа: ${hours(u.runningMs)} ч, переподключений ${s.reconnects}")
+        appendLine("- Работа: ${hours(u.runningMs)} ч, переподключений ${s.reconnects}, подписок снято узлом ${s.drops}")
         appendLine(
             "- Трафик: ${mb(u.bytesTotal)} МБ, HTTP-вызовов ${u.httpCallsTotal}, соединений ${u.connectionsTotal} → " +
                 "${u.creditsTotal.roundToLong()} кредитов; в сутки: в среднем ${u.creditsPerDayAvg.roundToLong()}, " +
