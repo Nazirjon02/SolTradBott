@@ -27,7 +27,6 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
@@ -277,7 +276,7 @@ private fun PulseLine(stats: ActivityStats, connected: Boolean, onErrorsClick: (
 private fun ErrorsDialog(errors: List<ActivityEvent>, total: Int, onDismiss: () -> Unit) {
     AlertDialog(
         onDismissRequest = onDismiss,
-        containerColor = SurfaceRaised,
+        containerColor = SurfaceCard,
         title = { Text("Ошибки сессии · $total", fontSize = 16.sp, fontWeight = FontWeight.Bold, color = TextPrimary) },
         text = {
             if (errors.isEmpty()) {

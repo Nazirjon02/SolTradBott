@@ -204,7 +204,7 @@ BgDark        = Color(0xFF0A0E1A)   // фон
 SurfaceCard   = Color(0xFF1A2235)   // карточки
 SurfaceRaised = Color(0xFF232D44)   // диалоги, выбранный сегмент
 Green         = Color(0xFF00D97E)   // прибыль / активно
-Red           = Color(0xFFFF6370)   // убыток / стоп
+Red           = Color(0xFFFF6672)   // убыток / стоп
 Blue          = Color(0xFF5AA5FF)
 Purple        = Color(0xFFA98FFF)
 Amber         = Color(0xFFF59E0B)
@@ -229,7 +229,9 @@ Desktop и Android рендерят один и тот же `shared/App.kt` (о�
    «Сохранить», секреты скрыты, REAL и сбросы — с подтверждением.
 
 Общие элементы (карточки, баннеры, кнопки, поля, диалоги) — `DrxComponents.kt`; навигация — `Navigation.kt`.
-Рендер-тест `DesignRenderTest` рисует экраны на телефоне и на широком окне в `shared/build/design-render/`.
+Рендер-тест `DesignRenderTest` рисует экраны на телефоне и на широком окне в `shared/build/design-render/`;
+`AppInteractionTest` сам нажимает на вкладки, поля и кнопки приложения с настоящим рантаймом (база в памяти);
+`PaletteContrastTest` следит, чтобы текст палитры держал контраст 4.5:1.
 
 ---
 

@@ -16,8 +16,10 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.ReceiptLong
 import androidx.compose.material.icons.automirrored.rounded.ReceiptLong
@@ -38,6 +40,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -55,6 +58,9 @@ enum class Screen(val label: String, val icon: ImageVector, val selectedIcon: Im
     STRATEGIES("Стратегии", Icons.Outlined.SmartToy, Icons.Rounded.SmartToy),
     SETTINGS("Настройки", Icons.Outlined.Settings, Icons.Rounded.Settings),
 }
+
+/** Метка вкладки в навигации — по ней вкладку находят тесты интерфейса. */
+internal fun navTag(screen: Screen): String = "nav-${screen.name}"
 
 /**
  * Нижняя панель навигации (телефон). [badges] — вкладки с точкой-напоминанием (например, несохранённые
@@ -93,7 +99,9 @@ fun DrxNavRail(
     Surface(color = SurfaceCard, modifier = Modifier.fillMaxHeight()) {
         Row {
             Column(
-                Modifier.fillMaxHeight().width(92.dp).statusBarsPadding().navigationBarsPadding().padding(vertical = 16.dp),
+                // Прокрутка — для телефона в альбомной ориентации: по высоте пять вкладок там не помещаются.
+                Modifier.fillMaxHeight().width(92.dp).statusBarsPadding().navigationBarsPadding()
+                    .verticalScroll(rememberScrollState()).padding(vertical = 16.dp),
                 horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = Arrangement.spacedBy(6.dp),
             ) {
@@ -117,7 +125,7 @@ fun DrxNavRail(
 private fun NavItem(screen: Screen, selected: Boolean, badge: Boolean, modifier: Modifier = Modifier, onClick: () -> Unit) {
     val color = if (selected) Green else TextSecondary
     Column(
-        modifier = modifier.clip(RoundedCornerShape(14.dp)).clickable { onClick() }.padding(vertical = 4.dp),
+        modifier = modifier.testTag(navTag(screen)).clip(RoundedCornerShape(14.dp)).clickable { onClick() }.padding(vertical = 4.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
         // Выбранная вкладка — «пилюля» под иконкой, как в Material 3, в цвете приложения.

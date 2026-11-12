@@ -107,7 +107,8 @@ fun StrategiesScreen(
             modifier = Modifier.align(Alignment.BottomEnd).padding(16.dp),
             containerColor = Green,
             contentColor = Color.Black,
-            icon = { Icon(Icons.Rounded.Add, contentDescription = null) },
+            // Подпись — на иконке: текст кнопки Material от читалок экрана прячет.
+            icon = { Icon(Icons.Rounded.Add, contentDescription = "Новая стратегия") },
             text = { Text("Стратегия", fontWeight = FontWeight.Bold) },
         )
     }

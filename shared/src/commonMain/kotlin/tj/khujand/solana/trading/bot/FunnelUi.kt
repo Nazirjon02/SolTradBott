@@ -102,7 +102,7 @@ fun WhyNoTradesCard(
 
 @Composable
 private fun RowScope.FunnelStep(label: String, value: Int, color: Color) {
-    Surface(color = color.copy(alpha = if (value > 0) 0.12f else 0.05f), shape = RoundedCornerShape(10.dp), modifier = Modifier.weight(1f)) {
+    Surface(color = color.copy(alpha = if (value > 0) 0.10f else 0.05f), shape = RoundedCornerShape(10.dp), modifier = Modifier.weight(1f)) {
         Column(Modifier.padding(vertical = 8.dp), horizontalAlignment = Alignment.CenterHorizontally) {
             Text("$value", fontSize = 18.sp, fontWeight = FontWeight.ExtraBold, color = if (value > 0) color else TextSecondary)
             Text(label, fontSize = 11.sp, color = TextSecondary, textAlign = TextAlign.Center, maxLines = 1)

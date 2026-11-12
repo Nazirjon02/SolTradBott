@@ -169,7 +169,7 @@ fun CardTitle(
 /** Сообщение на подложке своего цвета: состояние, предупреждение, подсказка. */
 @Composable
 fun Banner(text: String, tone: Tone = Tone.INFO, modifier: Modifier = Modifier, icon: ImageVector? = tone.icon()) {
-    Surface(color = tone.color.copy(alpha = 0.12f), shape = RoundedCornerShape(10.dp), modifier = modifier.fillMaxWidth()) {
+    Surface(color = tone.color.copy(alpha = BannerTintAlpha), shape = RoundedCornerShape(10.dp), modifier = modifier.fillMaxWidth()) {
         Row(Modifier.padding(horizontal = 12.dp, vertical = 10.dp), verticalAlignment = Alignment.Top) {
             if (icon != null) {
                 Icon(icon, contentDescription = null, tint = tone.color, modifier = Modifier.size(18.dp))
@@ -189,7 +189,7 @@ fun HintText(text: String, modifier: Modifier = Modifier, color: Color = TextSec
 /** Плашка-метка: «DEMO», «5m», «ГОТОВ». */
 @Composable
 fun Pill(text: String, color: Color, modifier: Modifier = Modifier, icon: ImageVector? = null) {
-    Surface(color = color.copy(alpha = 0.15f), shape = RoundedCornerShape(6.dp), modifier = modifier) {
+    Surface(color = color.copy(alpha = PillTintAlpha), shape = RoundedCornerShape(6.dp), modifier = modifier) {
         Row(Modifier.padding(horizontal = 7.dp, vertical = 3.dp), verticalAlignment = Alignment.CenterVertically) {
             if (icon != null) {
                 Icon(icon, contentDescription = null, tint = color, modifier = Modifier.size(12.dp))
@@ -434,7 +434,8 @@ fun ConfirmDialog(
 ) {
     AlertDialog(
         onDismissRequest = onDismiss,
-        containerColor = SurfaceRaised,
+        // Фон карточки, а не приподнятый: на нём цветные сообщения внутри диалога держат тот же контраст, что на экране.
+        containerColor = SurfaceCard,
         icon = icon?.let { { Icon(it, contentDescription = null, tint = confirmColor) } },
         title = { Text(title, fontSize = 18.sp, fontWeight = FontWeight.Bold, color = TextPrimary, textAlign = TextAlign.Center) },
         text = {

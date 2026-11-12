@@ -3,9 +3,7 @@
 package tj.khujand.solana.trading.bot
 
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -66,6 +64,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
@@ -109,6 +108,9 @@ enum class SettingsCategory(val title: String, val subtitle: String, val icon: I
     CONNECTIONS("Подключения", "кошелёк, данные, Telegram", Icons.Rounded.Hub),
     MAINTENANCE("Данные", "забеги и сброс", Icons.Rounded.Storage),
 }
+
+/** Метка раздела настроек — по ней раздел находят тесты интерфейса. */
+internal fun settingsCategoryTag(c: SettingsCategory): String = "settings-${c.name}"
 
 /** Ширина колонки настроек: поля шире этого читать и заполнять неудобно. */
 private val SettingsMaxWidth = 720.dp
@@ -264,7 +266,7 @@ private fun CategoryTabs(selected: SettingsCategory, dirty: Set<SettingsCategory
         SettingsCategory.entries.forEach { c ->
             val isSelected = c == selected
             Column(
-                Modifier.weight(1f).clip(RoundedCornerShape(10.dp))
+                Modifier.weight(1f).testTag(settingsCategoryTag(c)).clip(RoundedCornerShape(10.dp))
                     .background(if (isSelected) SurfaceRaised else Color.Transparent)
                     .clickable { onSelect(c) }.padding(vertical = 8.dp),
                 horizontalAlignment = Alignment.CenterHorizontally,
@@ -289,7 +291,7 @@ private fun CategoryRow(c: SettingsCategory, selected: Boolean, dirty: Boolean, 
     Surface(
         color = if (selected) SurfaceCard else Color.Transparent,
         shape = RoundedCornerShape(12.dp),
-        modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).clickable { onClick() },
+        modifier = Modifier.fillMaxWidth().testTag(settingsCategoryTag(c)).clip(RoundedCornerShape(12.dp)).clickable { onClick() },
     ) {
         Row(Modifier.padding(horizontal = 12.dp, vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
             Icon(c.icon, contentDescription = null, tint = if (selected) Green else TextSecondary, modifier = Modifier.size(20.dp))
