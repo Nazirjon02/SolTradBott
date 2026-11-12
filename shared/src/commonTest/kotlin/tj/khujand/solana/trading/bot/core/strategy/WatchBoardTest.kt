@@ -3,6 +3,7 @@ package tj.khujand.solana.trading.bot.core.strategy
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertIs
+import kotlin.test.assertTrue
 
 /** Доска наблюдения: шаги детекторов, статус строки и жизнь строк на доске. */
 class WatchBoardTest {
@@ -58,5 +59,18 @@ class WatchBoardTest {
         now += 61_000L // строка «a» не обновлялась дольше TTL — уходит при следующем обновлении доски
         board.update(item("s1", "c", WatchStatus.WAITING, now))
         assertEquals(listOf("c"), board.items.value.map { it.mint })
+    }
+
+    @Test
+    fun removeAllDropsListedCoinsAndLeavesBoardAloneOtherwise() {
+        val board = WatchBoard(ttlMs = 60_000L, nowMs = { 1_000_000L })
+        board.update(item("s1", "a", WatchStatus.NEAR, 1_000_000L))
+        board.update(item("s2", "a", WatchStatus.WAITING, 1_000_000L))
+        board.update(item("s1", "b", WatchStatus.WAITING, 1_000_000L))
+        val before = board.items.value
+        board.removeAll(setOf("x", "y"))
+        assertTrue(before === board.items.value, "монет с доски в наборе нет — список тот же, подписчики не дёргаются")
+        board.removeAll(setOf("a", "x"))
+        assertEquals(listOf("b"), board.items.value.map { it.mint }, "монета уходит со строк всех стратегий")
     }
 }

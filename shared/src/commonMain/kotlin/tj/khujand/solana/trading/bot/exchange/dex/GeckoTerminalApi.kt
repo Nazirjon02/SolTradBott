@@ -91,6 +91,9 @@ object GeckoTerminalApi {
     /** Без ключа — 4 запроса в минуту: чуть ниже порога, который сервер к тому же двигает под нагрузкой. */
     private const val KEYLESS_INTERVAL_MS = 15_000L
 
+    /** Столько запросов свечей в минуту получает торговля (без ключа) — с этим сравнивается спрос стратегий. */
+    const val KEYLESS_REQUESTS_PER_MINUTE = 60_000.0 / KEYLESS_INTERVAL_MS
+
     /** С ключом — 60 в минуту при лимите 100: запас на бэктест и второе приложение с тем же ключом. */
     private const val KEYED_INTERVAL_MS = 1_000L
 

@@ -333,6 +333,7 @@ private fun DrxAppContent(runtime: DrxRuntime?, wide: Boolean) {
                                 nearest = watchItems.firstOrNull { it.status != WatchStatus.NONE },
                                 candlesLimited = feed.lastRateLimitAtMs > 0L && now - feed.lastRateLimitAtMs < 10 * 60_000L,
                                 nowMs = now,
+                                candleBudgetPerMinute = GeckoTerminalApi.KEYLESS_REQUESTS_PER_MINUTE,
                             )
                         },
                         funnel = funnelSnapshot,

@@ -161,4 +161,34 @@ class EntryDiagnosisTest {
         assertEquals("монета", plural(21, "монета", "монеты", "монет"))
         assertEquals("монет", plural(112, "монета", "монеты", "монет"))
     }
+
+    @Test
+    fun candleShortageIsTheFirstHintWhileRunning() {
+        val demand = CandleDemand(pools = 20, requestsPerMinute = 7.2, poolsByTimeframeMs = mapOf(60_000L to 4, 5 * 60_000L to 16))
+        val near = WatchItem("m", "BONKX", "p", "s1", "Пробой + откат", "5m", 1.0, 1.02, 5, 6, "триггер не закрылся", WatchStatus.NEAR, now)
+        val d = diagnoseEntries(BotStatus.RUNNING, active, snapshot().copy(candleDemand = demand), false, near, false, now, candleBudgetPerMinute = 4.0)
+        assertTrue(d.headline.startsWith("Сетапов нет"), "главная причина прежняя: ${d.headline}")
+        assertEquals(
+            "Свечей не хватает: стратегиям нужно около 7,2 запроса в минуту (20 монет), источник даёт 4 — часть монет " +
+                "разбирается по свечам с опозданием. Больше всего просит ТФ 1m (4 монеты): перенесите эту стратегию на ТФ " +
+                "крупнее или выключите её.",
+            d.hints.first(),
+        )
+        assertTrue(d.hints[1].startsWith("Ближе всех: BONKX"))
+    }
+
+    @Test
+    fun noShortageHintWhenSourceKeepsUpOrBotStands() {
+        val enough = CandleDemand(pools = 10, requestsPerMinute = 2.0, poolsByTimeframeMs = mapOf(5 * 60_000L to 10))
+        assertTrue(candleShortageHint(enough, 4.0) == null)
+        val tooMuch = CandleDemand(pools = 30, requestsPerMinute = 6.0, poolsByTimeframeMs = mapOf(5 * 60_000L to 30))
+        assertEquals(
+            "Свечей не хватает: стратегиям нужно около 6 запросов в минуту (30 монет), источник даёт 4 — часть монет " +
+                "разбирается по свечам с опозданием. Сократите число стратегий или монет либо возьмите ТФ крупнее.",
+            candleShortageHint(tooMuch, 4.0),
+        )
+        // Бот стоит — свечи никто не просит, подсказка не нужна.
+        val stopped = diagnoseEntries(BotStatus.STOPPED, active, snapshot().copy(candleDemand = tooMuch), false, null, false, now, 4.0)
+        assertTrue(stopped.hints.none { it.startsWith("Свечей не хватает") })
+    }
 }

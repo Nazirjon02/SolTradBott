@@ -47,6 +47,16 @@ class CycleReport(val strategyId: String, val atMs: Long, val countsAsCycle: Boo
     val signals = LinkedHashSet<String>()
     var opened = 0
 
+    /** Рабочий ТФ стратегии (мс) и пулы, по которым она в этом цикле запрашивала свечи. */
+    var candleTfMs = 0L
+        private set
+    val candlePools = LinkedHashSet<String>()
+
+    fun candles(timeframeMs: Long, pools: Collection<String>) {
+        candleTfMs = timeframeMs
+        candlePools += pools
+    }
+
     fun block(reason: CycleBlock, detail: String) {
         block = reason
         blockDetail = detail
@@ -61,6 +71,18 @@ class CycleReport(val strategyId: String, val atMs: Long, val countsAsCycle: Boo
 data class StrategyCycle(val atMs: Long, val block: CycleBlock?, val detail: String)
 
 /**
+ * Спрос стратегий на свечи. По каждому пулу нужен один запрос на бар самого мелкого ТФ, на котором его разбирает
+ * хоть одна стратегия: старшие ТФ собираются из младшего без запроса. Оценка снизу — без редких запросов старшего
+ * ТФ, который из младшего не собрать.
+ */
+data class CandleDemand(
+    val pools: Int = 0,
+    val requestsPerMinute: Double = 0.0,
+    /** ТФ (мс) → сколько пулов разбирается на нём как на самом мелком. */
+    val poolsByTimeframeMs: Map<Long, Int> = emptyMap(),
+)
+
+/**
  * Воронка входа за последние [windowMinutes] минут: сколько монет стратегии получили от сканера, у скольких
  * сложился сетап и что с ним стало. Монеты считаются без повторов — стратегия видит одну монету каждые 30 с.
  */
@@ -70,6 +92,7 @@ data class FunnelSnapshot(
     val blockedCycles: Map<CycleBlock, Int> = emptyMap(),
     val emptyScans: Int = 0,
     val coins: Int = 0,
+    /** Монеты под фильтрами, которые уже торговались: считаются, только когда других кандидатов не осталось. */
     val alreadyTraded: Int = 0,
     val noCandles: Int = 0,
     val setups: Int = 0,
@@ -80,6 +103,8 @@ data class FunnelSnapshot(
     val opened: Int = 0,
     val lastCycleAt: Long? = null,
     val strategies: Map<String, StrategyCycle> = emptyMap(),
+    /** Сколько свечей стратегии просят сейчас (по их последним циклам). */
+    val candleDemand: CandleDemand = CandleDemand(),
 )
 
 /**
@@ -105,10 +130,14 @@ class EntryFunnel(
         val opened: Int = 0,
     )
 
+    /** Свечи, которые стратегия запрашивала в своём последнем цикле со сканированием. */
+    private data class CandleNeed(val atMs: Long, val timeframeMs: Long, val pools: Set<String>)
+
     private data class State(
         val buckets: List<Bucket> = emptyList(),
         val strategies: Map<String, StrategyCycle> = emptyMap(),
         val lastCycleAt: Long? = null,
+        val candles: Map<String, CandleNeed> = emptyMap(),
     )
 
     // Отчёты приходят из корутин разных стратегий — состояние неизменяемое, обновление атомарное.
@@ -130,6 +159,8 @@ class EntryFunnel(
                 strategies = if (r.countsAsCycle) s.strategies + (r.strategyId to StrategyCycle(r.atMs, r.block, r.blockDetail))
                              else s.strategies,
                 lastCycleAt = if (r.countsAsCycle) maxOf(s.lastCycleAt ?: 0L, r.atMs) else s.lastCycleAt,
+                candles = if (r.candlePools.isEmpty() || r.candleTfMs <= 0L) s.candles
+                          else s.candles + (r.strategyId to CandleNeed(r.atMs, r.candleTfMs, r.candlePools.toSet())),
             )
         }
         _version.update { it + 1 }
@@ -137,7 +168,7 @@ class EntryFunnel(
 
     /** Стратегию выключили — её последний цикл больше не говорит о том, почему нет входов. */
     fun forgetStrategy(strategyId: String) {
-        state.update { it.copy(strategies = it.strategies - strategyId) }
+        state.update { it.copy(strategies = it.strategies - strategyId, candles = it.candles - strategyId) }
         _version.update { it + 1 }
     }
 
@@ -164,6 +195,18 @@ class EntryFunnel(
             opened = inWindow.sumOf { it.opened },
             lastCycleAt = s.lastCycleAt,
             strategies = s.strategies,
+            candleDemand = demand(s.candles.values.filter { now - it.atMs <= DEMAND_FRESH_MS }),
+        )
+    }
+
+    private fun demand(needs: Collection<CandleNeed>): CandleDemand {
+        val finest = HashMap<String, Long>()
+        needs.forEach { n -> n.pools.forEach { pool -> finest[pool] = minOf(finest[pool] ?: Long.MAX_VALUE, n.timeframeMs) } }
+        if (finest.isEmpty()) return CandleDemand()
+        return CandleDemand(
+            pools = finest.size,
+            requestsPerMinute = finest.values.sumOf { 60_000.0 / it },
+            poolsByTimeframeMs = finest.values.groupingBy { it }.eachCount(),
         )
     }
 
@@ -182,5 +225,10 @@ class EntryFunnel(
             signals = signals + r.signals,
             opened = opened + r.opened,
         )
+    }
+
+    private companion object {
+        /** Стратегия, которая столько не сканировала (кулдаун, лимит, выключена), свечей сейчас не просит. */
+        const val DEMAND_FRESH_MS = 5 * 60_000L
     }
 }

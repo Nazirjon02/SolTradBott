@@ -91,4 +91,30 @@ class EntryFunnelTest {
         cycle { }
         assertEquals(before + 2, funnel.version.value)
     }
+
+    @Test
+    fun candleDemandCountsEachPoolOnceOnItsFinestTimeframe() {
+        // s1 разбирает A и B на 5m, s2 — B и C на 1m: B нужен раз в минуту (5m собирается из 1m), A — раз в 5 минут.
+        cycle("s1") { candles(5 * 60_000L, listOf("A", "B")) }
+        cycle("s2") { candles(60_000L, listOf("B", "C")) }
+        val d = funnel.snapshot().candleDemand
+        assertEquals(3, d.pools)
+        assertEquals(2.2, d.requestsPerMinute, 1e-9)
+        assertEquals(mapOf(60_000L to 2, 5 * 60_000L to 1), d.poolsByTimeframeMs)
+
+        // Стратегия давно не сканировала (кулдаун, лимит) — её пулы спросом не считаются; выключенная — тоже.
+        now += 6 * 60_000L
+        cycle("s2") { candles(60_000L, listOf("B", "C")) }
+        assertEquals(2, funnel.snapshot().candleDemand.pools)
+        funnel.forgetStrategy("s2")
+        assertEquals(0, funnel.snapshot().candleDemand.pools)
+    }
+
+    @Test
+    fun blockedCycleKeepsPreviousCandleDemand() {
+        cycle("s1") { candles(5 * 60_000L, listOf("A")) }
+        now += 30_000
+        cycle("s1") { block(CycleBlock.COOLDOWN, "ещё 60 с") } // в этом цикле свечей не просили
+        assertEquals(1, funnel.snapshot().candleDemand.pools)
+    }
 }

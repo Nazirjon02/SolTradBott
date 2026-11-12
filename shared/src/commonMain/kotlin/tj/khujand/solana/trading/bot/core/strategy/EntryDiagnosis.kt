@@ -19,8 +19,65 @@ private const val FRESH_CYCLE_MS = 3 * 60_000L
  * @param activeStrategyIds включённые стратегии; их последний цикл говорит, стоят ли они на кулдауне или лимите.
  * @param nearest лучшая строка доски наблюдения — «кто ближе всех к входу».
  * @param candlesLimited источник свечей недавно отказывал по лимиту запросов.
+ * @param candleBudgetPerMinute сколько запросов свечей в минуту даёт источник; null — не сравнивать. Стратегии
+ *   просят больше — к диагнозу добавляется подсказка: часть монет разбирается по свечам с опозданием.
  */
 fun diagnoseEntries(
+    status: BotStatus,
+    activeStrategyIds: Set<String>,
+    funnel: FunnelSnapshot,
+    signalOnly: Boolean,
+    nearest: WatchItem?,
+    candlesLimited: Boolean,
+    nowMs: Long,
+    candleBudgetPerMinute: Double? = null,
+): EntryDiagnosis {
+    val base = baseDiagnosis(status, activeStrategyIds, funnel, signalOnly, nearest, candlesLimited, nowMs)
+    val shortage = candleBudgetPerMinute
+        ?.takeIf { status == BotStatus.RUNNING }
+        ?.let { candleShortageHint(funnel.candleDemand, it) }
+        ?: return base
+    // Нехватка свечей — причина, которую видно раньше остальных: с ней стратегии решают по устаревшим барам.
+    return base.copy(hints = listOf(shortage) + base.hints)
+}
+
+/**
+ * Подсказка о нехватке свечей или null, когда источник успевает (с запасом 10% — оценка спроса приблизительная).
+ * Называет ТФ, который просит больше всего, если на него приходится больше половины запросов.
+ */
+internal fun candleShortageHint(demand: CandleDemand, budgetPerMinute: Double): String? {
+    if (demand.pools == 0 || demand.requestsPerMinute <= budgetPerMinute * 1.1) return null
+    val need = kotlin.math.round(demand.requestsPerMinute * 10) / 10
+    // После дробного числа — «запроса» (7,2 запроса), после целого — по обычному правилу.
+    val word = if (need % 1.0 != 0.0) "запроса" else plural(need.toInt(), "запрос", "запроса", "запросов")
+    val head = "Свечей не хватает: стратегиям нужно около ${oneDecimal(need)} $word в минуту " +
+        "(${demand.pools} ${plural(demand.pools, "монета", "монеты", "монет")}), источник даёт ${oneDecimal(budgetPerMinute)} — " +
+        "часть монет разбирается по свечам с опозданием."
+    val heaviest = demand.poolsByTimeframeMs.maxByOrNull { (tfMs, pools) -> pools * 60_000.0 / tfMs }
+    val advice = if (heaviest != null && heaviest.value * 60_000.0 / heaviest.key > demand.requestsPerMinute / 2 &&
+        demand.poolsByTimeframeMs.size > 1
+    ) {
+        " Больше всего просит ТФ ${timeframeLabel(heaviest.key)} (${heaviest.value} ${plural(heaviest.value, "монета", "монеты", "монет")}): " +
+            "перенесите эту стратегию на ТФ крупнее или выключите её."
+    } else {
+        " Сократите число стратегий или монет либо возьмите ТФ крупнее."
+    }
+    return head + advice
+}
+
+/** «1m», «5m», «1h» — как ТФ называется в настройках стратегии. */
+private fun timeframeLabel(tfMs: Long): String {
+    val minutes = tfMs / 60_000L
+    return if (minutes >= 60 && minutes % 60 == 0L) "${minutes / 60}h" else "${minutes}m"
+}
+
+/** Число с одним знаком после запятой, без «,0». */
+private fun oneDecimal(v: Double): String {
+    val r = kotlin.math.round(v * 10) / 10
+    return if (r % 1.0 == 0.0) r.toLong().toString() else r.toString().replace('.', ',')
+}
+
+private fun baseDiagnosis(
     status: BotStatus,
     activeStrategyIds: Set<String>,
     funnel: FunnelSnapshot,

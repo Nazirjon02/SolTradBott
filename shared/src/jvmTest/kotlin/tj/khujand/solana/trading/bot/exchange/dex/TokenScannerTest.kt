@@ -75,6 +75,17 @@ class TokenScannerTest {
     private val open = ScanFilters(filtersEnabled = false)
 
     @Test
+    fun excludedCoinsDoNotTakePlacesAmongTheBest() = runBlocking {
+        // Две лучшие монеты уже торговались: их места в тройке достаются следующим по баллу, а не пустеют.
+        discover(*(1..12).map { pair("M$it", liquidity = 5_000.0 * it) }.toTypedArray())
+        val s = scanner()
+        val top = s.scan(open.copy(maxCandidates = 3), exclude = setOf("M12", "M11"))
+        assertEquals(listOf("M10", "M9", "M8"), top.map { it.mint })
+        // Без исключений — прежняя тройка: пул от исключений не меняется.
+        assertEquals(listOf("M12", "M11", "M10"), s.scan(open.copy(maxCandidates = 3)).map { it.mint })
+    }
+
+    @Test
     fun strategyGetsBestByScoreNotFirstFound() = runBlocking {
         // 12 монет, балл растёт с ликвидностью: лучшие — последние в выдаче источника.
         discover(*(1..12).map { pair("M$it", liquidity = 5_000.0 * it) }.toTypedArray())

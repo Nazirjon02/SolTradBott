@@ -116,8 +116,11 @@ class TokenScanner(
     /**
      * Кандидаты под фильтры стратегии, лучшие по баллу первыми.
      * @param force true — опросить источники сейчас, не дожидаясь срока.
+     * @param exclude монеты, которые стратегии не нужны (уже торговались, покупка в полёте). В число лучших они не
+     *   входят — их места достаются следующим по баллу. Раньше такие монеты занимали места в десятке и отбрасывались
+     *   уже после отбора: из десяти кандидатов стратегия разбирала шесть.
      */
-    suspend fun scan(filters: ScanFilters, force: Boolean = false): List<TokenCandidate> = lock.withLock {
+    suspend fun scan(filters: ScanFilters, force: Boolean = false, exclude: Set<String> = emptySet()): List<TokenCandidate> = lock.withLock {
         val now = nowMs()
         restoreOnce(now)
         try {
@@ -135,7 +138,7 @@ class TokenScanner(
             println("TokenScanner: ошибка обновления пула — ${e.message}")
         }
         pool.values.map { it.candidate }
-            .filter(filters::passes)
+            .filter { it.mint !in exclude && filters.passes(it) }
             .sortedByDescending { it.score }
             .take(filters.maxCandidates.coerceAtLeast(1))
     }

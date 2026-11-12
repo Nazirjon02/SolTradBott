@@ -97,6 +97,12 @@ class WatchBoard(
     /** Монету купили (или она уже торговалась) — ждать по ней больше нечего. */
     fun remove(mint: String) = _items.update { list -> list.filter { it.mint != mint } }
 
+    /** То же для набора монет; если ни одной из них на доске нет, доска не меняется (и подписчики не дёргаются). */
+    fun removeAll(mints: Set<String>) {
+        if (mints.isEmpty()) return
+        _items.update { list -> if (list.none { it.mint in mints }) list else list.filter { it.mint !in mints } }
+    }
+
     /** Стратегию остановили — её строки устарели. */
     fun clearStrategy(strategyId: String) = _items.update { list -> list.filter { it.strategyId != strategyId } }
 

@@ -235,31 +235,38 @@ class StrategyManager(
             }
         }
 
-        activityLog.info("🔍 ${config.name}: сканирую кандидатов…")
-        val candidates = scanner.scan(config.scanFilters())
-        activityLog.requestOk()
-        if (candidates.isEmpty()) {
-            report.emptyScan = true
-            activityLog.info("○ ${config.name}: подходящих токенов нет")
-            return
-        }
-        activityLog.success("✓ ${config.name}: кандидатов ${candidates.size}")
-
-        // «Одна монета — одна сделка»: пропускаем все монеты, по которым уже была сделка
-        // в текущем режиме (demo/real) — открытая ИЛИ уже закрытая. Повторно не входим.
-        // И монеты с REAL-покупкой «в полёте» (итог по подписи ещё неизвестен): вторая покупка
-        // по потерянному ответу RPC — ровно тот случай, от которого защищает журнал транзакций.
+        // «Одна монета — одна сделка»: монеты, по которым уже была сделка в текущем режиме (demo/real) — открытая
+        // ИЛИ уже закрытая, — стратегии не нужны. И монеты с REAL-покупкой «в полёте» (итог по подписи ещё
+        // неизвестен): вторая покупка по потерянному ответу RPC — ровно тот случай, от которого защищает журнал
+        // транзакций. Сканер таких в кандидаты не даёт: иначе они занимали бы места среди лучших по баллу, и из
+        // десяти кандидатов стратегия разбирала бы шесть.
         val demoFlag = if (executor.isDemo()) 1L else 0L
         val tradedMints = db.tradeQueries.tradedMints(demoFlag).executeAsList().toSet() +
             db.txJournalQueries.pendingBuyMints().executeAsList()
+        watchBoard?.removeAll(tradedMints)
+
+        activityLog.info("🔍 ${config.name}: сканирую кандидатов…")
+        val candidates = scanner.scan(config.scanFilters(), exclude = tradedMints)
+        activityLog.requestOk()
+        if (candidates.isEmpty()) {
+            // Под фильтры монеты есть, но все уже торговались — это не «фильтры слишком строгие»: воронка
+            // должна сказать именно об этом.
+            val traded = scanner.scan(config.scanFilters()).map { it.mint }
+            if (traded.isEmpty()) {
+                report.emptyScan = true
+                activityLog.info("○ ${config.name}: подходящих токенов нет")
+            } else {
+                report.coins += traded
+                report.alreadyTraded += traded
+                activityLog.info("○ ${config.name}: все подходящие монеты уже торговались — жду новых")
+            }
+            return
+        }
+        activityLog.success("✓ ${config.name}: кандидатов ${candidates.size}")
+        report.candles(timeframeMs(config.timeframe), candidates.map { it.pairAddress })
 
         for (candidate in candidates) {
             report.coins += candidate.mint
-            if (candidate.mint in tradedMints) {
-                report.alreadyTraded += candidate.mint
-                watchBoard?.remove(candidate.mint)
-                continue
-            }
 
             val candles = runCatching {
                 client.getCandles(candidate.pairAddress, config.timeframe, config.darsCandleLimit)
