@@ -285,12 +285,19 @@ class ChainCandleService(
         }
     }
 
+    /** Отрезки покрытия подпиской (конец открытого — Long.MAX_VALUE): прогон сверки пишет их в файлы. */
+    suspend fun coverage(pool: String): List<LongRange> = lock.withLock { pools[pool]?.coverage?.spans().orEmpty() }
+
     /**
      * Сверка сейчас: для каждого пула с полными 5m-барами — свежие бары GeckoTerminal и сравнение. Обычно
      * сверка идёт сама раз в [reconcileEveryMs]; напрямую её зовёт прогон сверки перед итоговым отчётом.
+     * @param only какие пулы сверять (null — все с полными барами): суточному прогону незачем заново сверять
+     *   пулы, сверенные при выходе из списка, — новая сверка заменила бы их итог окном, где их баров уже нет.
      */
-    suspend fun reconcileNow(): List<ReconcileResult> {
-        val targets = lock.withLock { pools.values.filter { hasCompleteBars(it) }.map { it.meta.address } }
+    suspend fun reconcileNow(only: Set<String>? = null): List<ReconcileResult> {
+        val targets = lock.withLock {
+            pools.values.filter { (only == null || it.meta.address in only) && hasCompleteBars(it) }.map { it.meta.address }
+        }
         for (p in targets) {
             val gecko = runCatching { geckoCandles(p, "minute", 5, GECKO_LIMIT_5M) }.getOrDefault(emptyList())
             if (gecko.isNotEmpty()) applyReconcile(p, gecko)
@@ -928,13 +935,17 @@ class ChainCandleService(
         val st = pools[pool] ?: return@withLock
         st.m5.putGecko(gecko)
         val cutoff = nowMs() - RECONCILE_SETTLE_MS
-        val lastGecko = gecko.maxOfOrNull { it.openTimeMs } ?: return@withLock
+        val firstGecko = gecko.minOfOrNull { it.openTimeMs } ?: return@withLock
+        val lastGecko = gecko.maxOf { it.openTimeMs }
         results[pool] = CandleReconciler.compare(
             pool = pool,
             label = "${st.symbol} (${st.meta.dex.label})",
             chain = st.m5.bars(cutoff, st.coverage),
             gecko = gecko,
             covered = { open -> st.coverage.covers(open, open + st.m5.barMs) },
+            // Сравнимо только окно ответа GeckoTerminal (200 баров 5m — до ~17 ч): наш бар старше его первого
+            // бара не «лишний», а вне ответа — так бывает у пула, который долго в списке, и в суточном прогоне.
+            fromMs = firstGecko,
             toMs = minOf(cutoff - st.m5.barMs, lastGecko),
         )
     }

@@ -7,6 +7,8 @@ import java.sql.DriverManager
 import kotlin.math.roundToLong
 import kotlin.test.Test
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import tj.khujand.solana.trading.bot.exchange.dex.Candle
 import tj.khujand.solana.trading.bot.exchange.dex.DexClient
@@ -85,23 +87,29 @@ class ChainShadowRunTest {
             pingIntervalMs = System.getenv("CHAIN_PING_MS")?.toLongOrNull() ?: ChainCandleService.PING_INTERVAL_MS,
         )
         service.start()
-        val end = System.currentTimeMillis() + minutes * 60_000L
-        while (System.currentTimeMillis() < end) {
-            delay(60_000L)
-            val s = service.status.value
-            statusLog.appendText(
-                "${System.currentTimeMillis()} connected=${s.connected} live=${s.poolsLive}/${s.poolsWatched} " +
-                    "skipped=${s.skipped} trades=${s.tradesTotal} reconnects=${s.reconnects} " +
-                    "MB=${s.usage.bytesTotal / 1_000_000.0} credits=${s.usage.creditsTotal.roundToLong()} " +
-                    "perDayNow=${s.usage.creditsPerDayNow.roundToLong()} perDayAvg=${s.usage.creditsPerDayAvg.roundToLong()} " +
-                    "error=${s.error}\n"
-            )
-            writePoolStats(service, File(out, "pools.csv"))
+        // Состояние — раз в минуту и во время итоговой сверки: подписки живут и тратят кредиты до самого конца,
+        // а по строкам с отметкой времени расход сверяется с панелью Helius на любой момент прогона.
+        val logger = launch {
+            while (isActive) {
+                delay(60_000L)
+                // Сбой записи строки состояния не должен оборвать суточный прогон.
+                runCatching {
+                    logStatus(service, statusLog)
+                    writePoolStats(service, File(out, "pools.csv"))
+                }
+            }
         }
-        // Итог: бары из цепочки — в файлы, затем сверка (GeckoTerminal — по запросу на пул).
+        // Конец — по настенным часам: монотонные могут стоять, пока компьютер спит.
+        val end = System.currentTimeMillis() + minutes * 60_000L
+        while (System.currentTimeMillis() < end) delay(minOf(60_000L, end - System.currentTimeMillis()).coerceAtLeast(1L))
+        // Итог: бары из цепочки и покрытие подпиской — в файлы (без покрытия пропуски потом только оценка),
+        // затем сверка (GeckoTerminal — по запросу на пул).
         for ((pool, symbol) in service.poolSymbols()) {
+            val spans = service.coverage(pool).joinToString(";") {
+                "${it.first}-${if (it.last == Long.MAX_VALUE) "open" else it.last.toString()}"
+            }
             File(out, "chain-$pool-5.csv").writeText(
-                "# $symbol\nopen_ms,open,high,low,close,volume,source,trades,open_reliable\n" +
+                "# $symbol\n# coverage_ms: $spans\nopen_ms,open,high,low,close,volume,source,trades,open_reliable\n" +
                     service.bars(pool, 5).joinToString("") { b ->
                         val c = b.candle
                         "${c.openTimeMs},${c.open},${c.high},${c.low},${c.close},${c.volume},${b.source},${b.trades},${b.openReliable}\n"
@@ -109,10 +117,29 @@ class ChainShadowRunTest {
             )
         }
         writePoolStats(service, File(out, "pools.csv"))
-        service.reconcileNow()
+        // Выбывшие из списка пулы сверены при выходе; сверять их заново незачем — за сутки их бары уходят из окна
+        // ответа GeckoTerminal. Заново — только пулы, которые ещё в списке, и те, чья сверка не удалась.
+        val stillWatched = lastWatchlist.map { it.address }.toSet()
+        val reconciled = service.reconcileResults().map { it.pool }.toSet()
+        service.reconcileNow(only = service.poolSymbols().keys.filter { it in stillWatched || it !in reconciled }.toSet())
         writePoolStats(service, File(out, "pools.csv"))
+        logger.cancel()
+        logStatus(service, statusLog)
         service.stop()
         dex.close()
+    }
+
+    private fun logStatus(service: ChainCandleService, file: File) {
+        val s = service.status.value
+        val u = s.usage
+        file.appendText(
+            "${System.currentTimeMillis()} connected=${s.connected} live=${s.poolsLive}/${s.poolsWatched} " +
+                "skipped=${s.skipped} trades=${s.tradesTotal} reconnects=${s.reconnects} drops=${s.subscriptionDrops} " +
+                "MB=${u.bytesTotal / 1_000_000.0} bytes=${u.bytesTotal} http=${u.httpCallsTotal} conns=${u.connectionsTotal} " +
+                "credits=${u.creditsTotal.roundToLong()} today=${u.creditsToday.roundToLong()} " +
+                "perDayNow=${u.creditsPerDayNow.roundToLong()} perDayAvg=${u.creditsPerDayAvg.roundToLong()} " +
+                "paused=${s.pausedUntilMs} error=${s.error}\n"
+        )
     }
 
     private suspend fun writePoolStats(service: ChainCandleService, file: File) {

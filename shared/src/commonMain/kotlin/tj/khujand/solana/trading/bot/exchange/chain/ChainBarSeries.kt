@@ -52,6 +52,9 @@ class Coverage {
     /** Начало текущего отрезка; null — подписки нет. */
     fun openSince(): Long? = spans.lastOrNull()?.takeIf { it[1] == Long.MAX_VALUE }?.get(0)
 
+    /** Все отрезки по порядку (конец открытого — Long.MAX_VALUE). */
+    fun spans(): List<LongRange> = spans.map { it[0]..it[1] }
+
     private companion object {
         const val MAX_SPANS = 256
     }
