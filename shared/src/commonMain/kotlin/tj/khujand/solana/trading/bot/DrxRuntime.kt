@@ -94,7 +94,7 @@ class DrxRuntime(val db: DrxDatabase) {
     val engine = BotEngine(client, strategyManager, notifier, db, accountCache, executor, settingsStore, activityLog)
     val tradeMonitor = TradeMonitor(client, db, executor, notifier, activityLog, protection = settingsStore::getProtection)
 
-    // Прототип свечей из блокчейна (теневой режим, по умолчанию выключен): стратегии его свечей не получают.
+    // Прототип свечей из блокчейна (по умолчанию выключен); стратегиям — только по второй настройке ([syncChainBars]).
     val chainCandles = createChainCandles(settingsStore, tokenCache, client, activityLog)
 
     // Собственный scope рантайма: здесь живёт long-polling Telegram-контроллера, чтобы он
@@ -118,7 +118,17 @@ class DrxRuntime(val db: DrxDatabase) {
         runtimeScope.watchCandleFeed(GeckoTerminalApi.status, activityLog)
         tradeMonitor.start()
         if (settingsStore.getChainCandlesEnabled()) chainCandles.start()
+        syncChainBars()
         syncTelegramController()
+    }
+
+    /**
+     * Свечи из блокчейна — стратегиям, если это включено в настройках (по умолчанию нет): у пулов с полным покрытием
+     * подпиской [GeckoTerminalApi] продлевает ими прежний ответ вместо нового запроса. Выключенный сервис свечей
+     * ничего не отдаёт — тогда всё идёт к GeckoTerminal, как раньше.
+     */
+    fun syncChainBars() {
+        GeckoTerminalApi.setChainBars(chainCandles.takeIf { settingsStore.getChainCandlesToStrategies() })
     }
 
     // Авто-возобновление при запуске приложения — один раз на процесс: не спорить с пользователем,
@@ -183,6 +193,7 @@ class DrxRuntime(val db: DrxDatabase) {
         telegramJob?.cancel()
         telegramController?.close()
         runtimeScope.cancel()
+        GeckoTerminalApi.setChainBars(null)
         chainCandles.stop()
         marketAnalyzer.close()
         tradeMonitor.close()

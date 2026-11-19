@@ -153,9 +153,68 @@ class ChainBarSeries(val barMs: Long, private val maxBars: Int = 1_500) {
         return out
     }
 
-    /** Свечи для потребителя (стратегий — когда сверка позволит): закрытые бары по правилу GeckoTerminal. */
+    /** Свечи серии: закрытые бары по правилу GeckoTerminal (полные, неполные и бары GeckoTerminal вперемешку). */
     fun candles(nowMs: Long, coverage: Coverage, includeOpen: Boolean = false): List<Candle> =
         bars(nowMs, coverage, includeOpen).map { it.candle }
+
+    /**
+     * Бары для стратегий поверх чужой истории (см. `ClosedBarSource`): размер [outBarMs] — кратный [barMs] (15m из
+     * 5m), открытие — от [fromMs] по последний бар, закончившийся не позже [closedByMs]. Только если весь отрезок
+     * покрыт подпиской одним куском (без обрыва) и не позже [liveUntilMs] — до какого момента соединение точно
+     * было живо: тихо умершее соединение сделки теряет, а покрытие закрывается, лишь когда это заметят.
+     *
+     * Правило GeckoTerminal: open первого бара — [prevClose] (последняя сделка до отрезка), дальше — close
+     * предыдущего; high/low включают open; отрезок без сделок бара не даёт.
+     * @return бары по возрастанию (пусто — новых закрытых баров нет или сделок в них не было); null — отрезок
+     *   покрыт не целиком, сделки могли пропасть.
+     */
+    fun coveredBars(
+        fromMs: Long,
+        outBarMs: Long,
+        closedByMs: Long,
+        liveUntilMs: Long,
+        coverage: Coverage,
+        prevClose: Double,
+    ): List<Candle>? {
+        if (outBarMs <= 0L || outBarMs % barMs != 0L) return null
+        if (prevClose <= 0.0 || prevClose.isNaN() || prevClose.isInfinite()) return null
+        val from = fromMs - fromMs.mod(outBarMs)
+        val lastOpen = (closedByMs - outBarMs).let { it - it.mod(outBarMs) }
+        if (lastOpen < from) return emptyList()
+        val end = lastOpen + outBarMs
+        if (end > liveUntilMs || !coverage.covers(from, end)) return null
+        // Старые бары вычищаются (maxBars): начало отрезка должно быть ещё в памяти.
+        if (aggs.size >= maxBars && (aggs.keys.minOrNull() ?: Long.MAX_VALUE) > from) return null
+        val out = ArrayList<Candle>()
+        var bucket = Long.MIN_VALUE
+        var open = prevClose
+        var high = 0.0
+        var low = 0.0
+        var close = 0.0
+        var volume = 0.0
+        for (k in aggs.keys.filter { it >= from && it < end }.sorted()) {
+            val a = aggs.getValue(k)
+            val b = k - k.mod(outBarMs)
+            if (b != bucket) {
+                if (bucket != Long.MIN_VALUE) {
+                    out += Candle(bucket, open, high, low, close, volume)
+                    open = close
+                }
+                bucket = b
+                high = maxOf(a.high, open)
+                low = minOf(a.low, open)
+                close = a.last
+                volume = a.volume
+            } else {
+                high = maxOf(high, a.high)
+                low = minOf(low, a.low)
+                close = a.last
+                volume += a.volume
+            }
+        }
+        if (bucket != Long.MIN_VALUE) out += Candle(bucket, open, high, low, close, volume)
+        return out
+    }
 
     private fun prune() {
         if (aggs.size > maxBars) aggs.keys.sorted().take(aggs.size - maxBars).forEach { aggs.remove(it) }

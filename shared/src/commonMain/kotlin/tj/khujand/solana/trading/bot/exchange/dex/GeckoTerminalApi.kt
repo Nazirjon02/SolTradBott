@@ -80,7 +80,8 @@ data class GtPool(
  *  - торговля (стратегии, монитор сделок, сканер) — всегда без ключа: бесплатно и без месячного предела;
  *  - человек (бэктест, «Анализ», график) — с ключом, пока не потрачен дневной лимит [KeyBudget]; потом, до новых
  *    суток, — тоже без ключа. Квота кончилась раньше расчёта — бот сам продолжает без ключа ([KeyQuotaWatch]).
- * Свечи для стратегий хранит [CandleStore] — закрытые бары, один запрос на бар (см. там же, почему).
+ * Свечи для стратегий хранит [CandleStore] — закрытые бары, один запрос на бар (см. там же, почему); со свечами из
+ * блокчейна ([setChainBars]) у пулов с полным покрытием подпиской — без запроса, кроме первого.
  */
 object GeckoTerminalApi {
 
@@ -120,14 +121,29 @@ object GeckoTerminalApi {
     private val freeRoute = RequestRoute(RequestLimiter(intervalMs = { KEYLESS_INTERVAL_MS }), keyed = false)
     private val keyedRoute = RequestRoute(RequestLimiter(intervalMs = { KEYED_INTERVAL_MS }), keyed = true)
 
+    // Свечи из блокчейна для торговли — подключает рантайм по настройке (по умолчанию нет).
+    private val chainBars = MutableStateFlow<ClosedBarSource?>(null)
+
     private val store = CandleStore(
         fetch = ::fetchCandles,
         route = ::routeFor,
         onUnauthorized = ::rejectKey,
+        chainBars = { chainBars.value },
     )
 
     /** Состояние источника: ключ, его расход, отказы по лимиту, последний успешный ответ. */
     val status: StateFlow<CandleFeedStatus> get() = store.status
+
+    /**
+     * Свечи из блокчейна для торговли ([CandleStore] продлевает ими прежний ответ вместо нового запроса); null —
+     * только GeckoTerminal, как раньше.
+     */
+    fun setChainBars(source: ClosedBarSource?) {
+        chainBars.value = source
+    }
+
+    /** Подключены ли свечи из блокчейна к торговле. */
+    val chainBarsAttached: Boolean get() = chainBars.value != null
 
     /**
      * Demo-ключ CoinGecko из настроек; null или пусто — работаем без ключа. Повторное сохранение того же
@@ -206,6 +222,7 @@ object GeckoTerminalApi {
      * @param live график сделки: с незакрытым баром и обновлением раз в 30 с — только если запрос идёт с ключом.
      * @param maxWaitMs сколько ждать очереди к API; не дождались — прежние бары или пусто.
      * @param lane кто просит: торговля (по умолчанию) — без ключа, человек — с ключом, пока его хватает.
+     * @param allowChain false — только бары GeckoTerminal, без баров из блокчейна (сверка свечей из блокчейна).
      * Пустой список = данных нет.
      */
     suspend fun getCandles(
@@ -217,7 +234,9 @@ object GeckoTerminalApi {
         maxWaitMs: Long = CandleStore.DEFAULT_MAX_WAIT_MS,
         lane: RequestLane = RequestLane.TRADING,
         network: String = "solana",
-    ): List<Candle> = store.get(CandleKey(network, poolAddress, timeframe, aggregate), limit, live, maxWaitMs, lane)
+        allowChain: Boolean = true,
+    ): List<Candle> =
+        store.get(CandleKey(network, poolAddress, timeframe, aggregate), limit, live, maxWaitMs, lane, allowChain)
 
     /**
      * Запрос к API: [keyed] — на CoinGecko с ключом, иначе — на публичный GeckoTerminal. Второе значение — шёл ли

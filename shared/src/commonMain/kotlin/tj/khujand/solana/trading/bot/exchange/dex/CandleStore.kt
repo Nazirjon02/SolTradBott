@@ -1,5 +1,6 @@
 package tj.khujand.solana.trading.bot.exchange.dex
 
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -38,6 +39,21 @@ sealed interface CandleFetch {
 }
 
 /**
+ * Источник закрытых баров для торговли помимо GeckoTerminal — свечи из блокчейна
+ * ([tj.khujand.solana.trading.bot.exchange.chain.ChainCandleService]).
+ */
+fun interface ClosedBarSource {
+    /**
+     * Бары пула размера [barMs] с открытием от [fromMs] по последний, закончившийся не позже [closedByMs]. open первого
+     * бара — [prevClose] (close последнего бара перед отрезком, то есть последняя сделка до него — правило
+     * GeckoTerminal), дальше — close предыдущего; отрезок без сделок бара не даёт.
+     * @return пусто — новых закрытых баров нет или сделок в них не было; null — источник видел не все сделки
+     *   отрезка (нет подписки, был обрыв, пул не поддержан): свечи нужно взять у GeckoTerminal.
+     */
+    suspend fun closedBars(pool: String, barMs: Long, fromMs: Long, prevClose: Double, closedByMs: Long): List<Candle>?
+}
+
+/**
  * Состояние источника свечей — для ленты активности, настроек и `/health`.
  * @param usingKey ключ API задан и в работе (бэктест, «Анализ» и график идут с ним; торговля — всегда без ключа).
  * @param keyRejected сервер отклонил ключ — работаем без него.
@@ -46,6 +62,8 @@ sealed interface CandleFetch {
  * @param rateLimitHits сколько раз сервер отказал по лимиту с начала работы.
  * @param keyUsedToday запросов с ключом за текущие сутки (UTC) из дневного лимита [keyDailyAllowance];
  *   [keyUsedMonth] — за месяц из [keyMonthlyQuota]; [keyNextDayMs] — когда начнутся новые сутки (см. [KeyBudget]).
+ * @param chainServed сколько раз с запуска торговля получила свежие закрытые бары из блокчейна вместо запроса к
+ *   GeckoTerminal ([ClosedBarSource]); [geckoRequests] — сколько запросов свечей ушло к GeckoTerminal.
  */
 data class CandleFeedStatus(
     val usingKey: Boolean = false,
@@ -59,6 +77,8 @@ data class CandleFeedStatus(
     val keyUsedMonth: Int = 0,
     val keyMonthlyQuota: Int = 0,
     val keyNextDayMs: Long = 0L,
+    val chainServed: Int = 0,
+    val geckoRequests: Int = 0,
 )
 
 /**
@@ -84,6 +104,11 @@ data class CandleFeedStatus(
  * Режим [get] `live` (график сделки): свежесть [LIVE_TTL_MS] и незакрытый бар в конце — только когда запрос
  * идёт с ключом; иначе тот же ответ, что у стратегий.
  *
+ * Свечи из блокчейна ([chainBars], по умолчанию нет): торговле прежний ответ GeckoTerminal продлевается барами,
+ * закрывшимися после него, — без запроса, по тому же правилу закрытого бара; источник отдаёт их, только если видел
+ * все сделки с конца ответа (иначе — запрос к GeckoTerminal, как раньше). История и глубина остаются за
+ * GeckoTerminal; человеку (бэктест, «Анализ», график) — всегда GeckoTerminal.
+ *
  * Сеть — за [fetch] (третий параметр — идёт ли запрос с ключом), выбор пути — за [route], часы — параметром:
  * логика покрыта тестами без сети и ожидания.
  */
@@ -92,12 +117,15 @@ class CandleStore(
     private val route: (lane: RequestLane) -> RequestRoute,
     private val onUnauthorized: () -> Unit = {},
     private val nowMs: () -> Long = { Clock.System.now().toEpochMilliseconds() },
+    private val chainBars: () -> ClosedBarSource? = { null },
 ) {
     /**
      * @param candles как пришли: по возрастанию времени, последняя может быть незакрытой.
      * @param limit сколько свечей запрашивали (запрос на меньшее число обслуживается из этой же записи).
      * @param asOfMs момент, на который ответ верен: получение минус возраст копии в CDN.
      * @param validUntilMs до этого времени закрытые бары перезапрашивать незачем.
+     * @param complete в записи вся история пула (источник отдал меньше, чем просили).
+     * @param chainFromMs с какого бара в записи бары из блокчейна; null — вся запись от GeckoTerminal.
      */
     private class Entry(
         val candles: List<Candle>,
@@ -105,7 +133,12 @@ class CandleStore(
         val fetchedAtMs: Long,
         val asOfMs: Long,
         val validUntilMs: Long,
+        val complete: Boolean = candles.size < limit,
+        val chainFromMs: Long? = null,
     )
+
+    /** Запись, если она годится просящему: тому, кому нужен только GeckoTerminal, — без баров из блокчейна. */
+    private fun usable(e: Entry?, allowChain: Boolean): Entry? = if (!allowChain && e?.chainFromMs != null) null else e
 
     private val guard = Mutex()
     private val entries = mutableMapOf<CandleKey, Entry>()
@@ -139,6 +172,8 @@ class CandleStore(
      * @param live график: с незакрытым баром и свежестью [LIVE_TTL_MS], если запрос идёт с ключом.
      * @param maxWaitMs сколько можно ждать очереди к API; не дождались — прежние бары или пусто.
      * @param lane кто просит: торговля идёт без ключа, человек — с ключом, пока его хватает.
+     * @param allowChain годятся ли бары из блокчейна; false — только GeckoTerminal (сверка свечей из блокчейна с
+     *   ним самим): запись с барами из блокчейна для такого запроса как будто устарела.
      */
     suspend fun get(
         key: CandleKey,
@@ -146,31 +181,75 @@ class CandleStore(
         live: Boolean = false,
         maxWaitMs: Long = DEFAULT_MAX_WAIT_MS,
         lane: RequestLane = RequestLane.TRADING,
+        allowChain: Boolean = true,
     ): List<Candle> {
         if (key.pool.isBlank() || limit <= 0) return emptyList()
         val want = limit.coerceAtMost(MAX_FETCH_LIMIT)
         val path = route(lane)
         val liveMode = live && path.keyed
-        cached(key, want, liveMode)?.let { return it }
+        cached(key, want, liveMode, allowChain)?.let { return it }
         if (!liveMode) {
-            derived(key, want, allowStale = false)?.let { return it }
+            derived(key, want, allowStale = false, allowChain)?.let { return it }
             // Младший ТФ этого пула уже кто-то смотрит, но запись устарела или неглубока: обновляем её — это тот
             // же один запрос, что и за старшим ТФ, но младший нужен и своим стратегиям, — и собираем старший из неё.
             baseFor(key, want)?.let { (base, baseLimit) ->
-                get(base, baseLimit, live = false, maxWaitMs = maxWaitMs, lane = lane)
-                derived(key, want, allowStale = true)?.let { return it }
+                get(base, baseLimit, live = false, maxWaitMs = maxWaitMs, lane = lane, allowChain = allowChain)
+                derived(key, want, allowStale = true, allowChain)?.let { return it }
             }
         }
         return lockFor(key).withLock {
             // Пока ждали замок, эти же свечи мог обновить соседний запрос.
-            cached(key, want, liveMode)
-                ?: (if (liveMode) null else derived(key, want, allowStale = false))
-                ?: refresh(key, want, liveMode, maxWaitMs, path)
+            cached(key, want, liveMode, allowChain)
+                ?: (if (liveMode) null else derived(key, want, allowStale = false, allowChain))
+                ?: (if (liveMode || lane != RequestLane.TRADING || !allowChain) null else extendFromChain(key, want))
+                ?: refresh(key, want, liveMode, maxWaitMs, path, allowChain)
         }
     }
 
-    private suspend fun cached(key: CandleKey, limit: Int, liveMode: Boolean): List<Candle>? {
-        val e = guard.withLock { entries[key] } ?: return null
+    /**
+     * Свежие закрытые бары без запроса к GeckoTerminal: прежний его ответ плюс бары из блокчейна ([chainBars]),
+     * закрывшиеся после ответа (с тем же запасом [SETTLE_MS]). Только когда прежний ответ достаточно глубок и
+     * источник видел все сделки с его конца; иначе null — бары запрашиваются у GeckoTerminal, как раньше.
+     */
+    private suspend fun extendFromChain(key: CandleKey, want: Int): List<Candle>? {
+        val source = chainBars() ?: return null
+        val old = guard.withLock { entries[key] } ?: return null
+        if (old.limit < want) return null
+        val base = view(old, key.barMs, liveMode = false)
+        val prevClose = base.lastOrNull()?.close ?: return null
+        val now = nowMs()
+        val closedBy = now - SETTLE_MS
+        // Первый бар, которого в ответе нет: на момент ответа он ещё не был закрыт с запасом SETTLE_MS.
+        val edge = old.asOfMs - SETTLE_MS
+        val from = edge - edge.mod(key.barMs)
+        val tail = try {
+            source.closedBars(key.pool, key.barMs, from, prevClose, closedBy)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (_: Exception) {
+            null // сбой источника не должен стоить торговле свечей — идём к GeckoTerminal
+        } ?: return null
+        // Источник обязан отдать только бары после ответа и только закрытые — иначе ему не верим.
+        if (tail.any { it.openTimeMs < from || it.openTimeMs + key.barMs > closedBy }) return null
+        if (tail.zipWithNext().any { (a, b) -> b.openTimeMs <= a.openTimeMs }) return null
+        val all = base + tail
+        val trimmed = all.size > MAX_FETCH_LIMIT
+        val e = Entry(
+            candles = if (trimmed) all.takeLast(MAX_FETCH_LIMIT) else all,
+            limit = old.limit,
+            fetchedAtMs = now,
+            asOfMs = now,
+            validUntilMs = nextSettledClose(now, key.barMs),
+            complete = old.complete && !trimmed,
+            chainFromMs = old.chainFromMs ?: from,
+        )
+        guard.withLock { entries[key] = e }
+        _status.update { it.copy(chainServed = it.chainServed + 1) }
+        return view(e, key.barMs, liveMode = false).takeLast(want)
+    }
+
+    private suspend fun cached(key: CandleKey, limit: Int, liveMode: Boolean, allowChain: Boolean): List<Candle>? {
+        val e = usable(guard.withLock { entries[key] }, allowChain) ?: return null
         if (e.limit < limit) return null
         val now = nowMs()
         val fresh = if (liveMode) now - e.fetchedAtMs < LIVE_TTL_MS else now < e.validUntilMs
@@ -193,12 +272,13 @@ class CandleStore(
      * следующий бар (иначе старший мог закрыться, а младших в ней нет; с [allowStale] — как прежние бары у
      * [stale]), и когда в ней хватает истории: либо это вся история пула, либо глубины хватает на [want] баров.
      */
-    private suspend fun derived(target: CandleKey, want: Int, allowStale: Boolean): List<Candle>? {
+    private suspend fun derived(target: CandleKey, want: Int, allowStale: Boolean, allowChain: Boolean): List<Candle>? {
         val now = nowMs()
-        for ((base, e) in baseEntries(target)) {
+        for ((base, entry) in baseEntries(target)) {
+            val e = usable(entry, allowChain) ?: continue
             val fresh = now < e.validUntilMs ||
                 (allowStale && now - e.asOfMs <= MAX_STALE_BARS * target.barMs + SETTLE_MS)
-            val wholeHistory = e.candles.size < e.limit
+            val wholeHistory = e.complete
             if (!fresh || (!wholeHistory && e.limit < neededBaseBars(target, base, want))) continue
             val bars = aggregate(view(e, base.barMs, liveMode = false), target.barMs, e.asOfMs)
             // История обрезана лимитом запроса — первый старший бар может быть собран не из всех младших.
@@ -211,7 +291,7 @@ class CandleStore(
     private suspend fun baseFor(target: CandleKey, want: Int): Pair<CandleKey, Int>? {
         for ((base, e) in baseEntries(target)) {
             val needed = neededBaseBars(target, base, want)
-            if (needed <= MAX_FETCH_LIMIT || e.candles.size < e.limit) {
+            if (needed <= MAX_FETCH_LIMIT || e.complete) {
                 return base to needed.coerceAtMost(MAX_FETCH_LIMIT.toLong()).toInt()
             }
         }
@@ -224,12 +304,16 @@ class CandleStore(
         liveMode: Boolean,
         maxWaitMs: Long,
         path: RequestRoute,
+        allowChain: Boolean,
     ): List<Candle> {
-        val old = guard.withLock { entries[key] }
+        val current = guard.withLock { entries[key] }
+        // Прежние бары на случай отказа — только годные просящему (кому нужен лишь GeckoTerminal — без блокчейна).
+        val old = usable(current, allowChain)
         if (!path.limiter.acquire(maxWaitMs)) return stale(old, key.barMs, limit)
         // Берём с запасом: стратегии, монитор и график просят разное число свечей одного пула, а старший ТФ
         // собирается из этой же записи — однажды углублённая, она такой и остаётся.
-        val fetchLimit = maxOf(limit, old?.limit ?: 0, MIN_FETCH_LIMIT).coerceAtMost(MAX_FETCH_LIMIT)
+        val fetchLimit = maxOf(limit, current?.limit ?: 0, MIN_FETCH_LIMIT).coerceAtMost(MAX_FETCH_LIMIT)
+        _status.update { it.copy(geckoRequests = it.geckoRequests + 1) }
         return when (val r = fetch(key, fetchLimit, path.keyed)) {
             is CandleFetch.Ok -> {
                 val now = nowMs()
@@ -328,6 +412,15 @@ class CandleStore(
             if (t - open < SETTLE_MS) t = open + SETTLE_MS
             if (empty) t = minOf(t, fetchedAtMs + EMPTY_RETRY_MS)
             return maxOf(t, fetchedAtMs + MIN_REFRESH_MS)
+        }
+
+        /**
+         * Когда закроется (с запасом [SETTLE_MS]) следующий бар после [nowMs] — до тех пор бары из блокчейна, собранные
+         * в [nowMs], не устаревают: копии CDN у них нет.
+         */
+        internal fun nextSettledClose(nowMs: Long, barMs: Long): Long {
+            val t = nowMs - SETTLE_MS
+            return t - t.mod(barMs) + barMs + SETTLE_MS
         }
 
         /**

@@ -3,6 +3,7 @@ package tj.khujand.solana.trading.bot.exchange.chain
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import tj.khujand.solana.trading.bot.exchange.dex.Candle
 
@@ -124,6 +125,42 @@ class ChainBarSeriesTest {
         // закрытым бар считается через CLOSE_LAG_MS после конца
         assertEquals(1, s.bars(nowMs = 120_000 + ChainBarSeries.CLOSE_LAG_MS - 1, coverage = cov).size)
         assertEquals(2, s.bars(nowMs = 120_000 + ChainBarSeries.CLOSE_LAG_MS, coverage = cov).size)
+    }
+
+    @Test
+    fun `стратегиям — только отрезок, покрытый без разрыва, пока соединение живо`() {
+        val s = ChainBarSeries(60_000L)
+        val cov = Coverage().apply { open(50_000) }
+        s.add(PricedTrade(70_000, 1, 2.0, 1.0)) // бар 60–120 с
+        s.add(PricedTrade(80_000, 2, 1.5, 2.0))
+        s.add(PricedTrade(200_000, 3, 3.0, 4.0)) // бар 180–240 с; в баре 120–180 с сделок нет
+        // open первого — close чужой истории перед отрезком, high/low его включают; минута без сделок бара не даёт.
+        assertEquals(
+            listOf(Candle(60_000, 1.8, 2.0, 1.5, 1.5, 3.0), Candle(180_000, 1.5, 3.0, 1.5, 3.0, 4.0)),
+            s.coveredBars(60_000, 60_000, closedByMs = 240_000, liveUntilMs = 250_000, coverage = cov, prevClose = 1.8),
+        )
+        assertEquals(1, s.coveredBars(60_000, 60_000, 239_999, 250_000, cov, 1.8)!!.size, "последний бар ещё не закрыт")
+        assertNull(s.coveredBars(60_000, 60_000, 240_000, 239_999, cov, 1.8), "соединение молчит с конца бара")
+        assertNull(s.coveredBars(0, 60_000, 240_000, 250_000, cov, 1.8), "подписка началась позже начала отрезка")
+        assertEquals(emptyList<Candle>(), s.coveredBars(240_000, 60_000, 250_000, 250_000, cov, 3.0), "новых закрытых баров нет")
+        cov.close(130_000) // обрыв посреди отрезка
+        cov.open(135_000)
+        assertNull(s.coveredBars(60_000, 60_000, 240_000, 250_000, cov, 1.8))
+    }
+
+    @Test
+    fun `бар крупнее бара серии собирается из её баров`() {
+        val s = ChainBarSeries(60_000L)
+        val cov = Coverage().apply { open(0) }
+        s.add(PricedTrade(10_000, 1, 1.0, 1.0))
+        s.add(PricedTrade(70_000, 2, 1.4, 2.0))
+        s.add(PricedTrade(130_000, 3, 0.9, 3.0))
+        s.add(PricedTrade(190_000, 4, 1.2, 4.0))
+        assertEquals(
+            listOf(Candle(0, 1.1, 1.4, 0.9, 0.9, 6.0), Candle(180_000, 0.9, 1.2, 0.9, 1.2, 4.0)),
+            s.coveredBars(0, 180_000, closedByMs = 360_000, liveUntilMs = 400_000, coverage = cov, prevClose = 1.1),
+        )
+        assertNull(s.coveredBars(0, 90_000, 360_000, 400_000, cov, 1.1), "размер не кратен бару серии")
     }
 
     @Test

@@ -38,6 +38,7 @@ class SettingsStore(private val db: DrxDatabase) {
         const val ANALYSIS_FAVORITES = "analysis.favorites"
         const val CHAIN_CANDLES    = "chain.candles_enabled"
         const val CHAIN_CREDIT_LIMIT = "chain.daily_credit_limit"
+        const val CHAIN_TO_STRATEGIES = "chain.candles_to_strategies"
     }
 
     // ─── Raw API ─────────────────────────────────────────────────────────────
@@ -120,10 +121,14 @@ class SettingsStore(private val db: DrxDatabase) {
 
     fun setCoinGeckoUsage(v: KeyUsage) = set(Keys.COINGECKO_USAGE, json.encodeToString(v))
 
-    // Свечи из блокчейна (прототип, теневой режим: стратегии их не получают) — по умолчанию выключены.
+    // Свечи из блокчейна (прототип) — по умолчанию выключены.
     // Узел — тот же «Solana RPC URL» (ключ Helius живёт в нём); лимит — кредитов Helius в сутки.
     fun getChainCandlesEnabled(): Boolean = get(Keys.CHAIN_CANDLES)?.toBooleanStrictOrNull() ?: false
     fun setChainCandlesEnabled(v: Boolean) = set(Keys.CHAIN_CANDLES, v.toString())
+
+    // Отдавать ли их стратегиям вместо запроса к GeckoTerminal (пулы с полным покрытием) — по умолчанию нет.
+    fun getChainCandlesToStrategies(): Boolean = get(Keys.CHAIN_TO_STRATEGIES)?.toBooleanStrictOrNull() ?: false
+    fun setChainCandlesToStrategies(v: Boolean) = set(Keys.CHAIN_TO_STRATEGIES, v.toString())
 
     fun getChainCreditLimit(): Int   = get(Keys.CHAIN_CREDIT_LIMIT)?.toIntOrNull()?.takeIf { it > 0 } ?: DEFAULT_CHAIN_CREDIT_LIMIT
     fun setChainCreditLimit(v: Int)  = set(Keys.CHAIN_CREDIT_LIMIT, v.toString())

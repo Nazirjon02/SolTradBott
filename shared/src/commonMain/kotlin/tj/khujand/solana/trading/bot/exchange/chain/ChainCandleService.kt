@@ -40,6 +40,7 @@ import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.longOrNull
 import tj.khujand.solana.trading.bot.exchange.dex.Candle
+import tj.khujand.solana.trading.bot.exchange.dex.ClosedBarSource
 
 /**
  * Состояние прототипа для экрана настроек и отчёта.
@@ -63,6 +64,11 @@ data class ChainCandleStatus(
     val subscriptionDrops: Int = 0,
     val lastReconcile: String? = null,
     val error: String? = null,
+    /**
+     * Пулы, чьи бары сейчас могут уйти стратегиям ([ChainCandleService.closedBars]): PumpSwap, Raydium AMM v4 или CPMM
+     * с живой подпиской. Им GeckoTerminal нужен не каждый бар, а только после обрыва — для оценки спроса на свечи.
+     */
+    val strategyPools: Set<String> = emptySet(),
 )
 
 /**
@@ -89,8 +95,9 @@ data class ChainPoolStat(
 }
 
 /**
- * Свечи OHLCV прямо из блокчейна Solana для пулов списка наблюдения — прототип в теневом режиме: свечи
- * строятся и сверяются с GeckoTerminal, но стратегии их не получают.
+ * Свечи OHLCV прямо из блокчейна Solana для пулов списка наблюдения — прототип: свечи строятся и сверяются с
+ * GeckoTerminal; стратегии получают их, только если это включено в настройках (по умолчанию нет), — через
+ * [closedBars] ([ClosedBarSource] для [tj.khujand.solana.trading.bot.exchange.dex.CandleStore]).
  *
  * Как работает:
  *  - WebSocket к RPC ([rpcUrl] — тот же адрес, что в настройке «Solana RPC URL»; ключ Helius живёт в нём),
@@ -133,7 +140,7 @@ class ChainCandleService(
     private val pingIntervalMs: Long = PING_INTERVAL_MS,
     private val keepLeftMs: Long = KEEP_LEFT_MS,
     private val nowMs: () -> Long = { Clock.System.now().toEpochMilliseconds() },
-) {
+) : ClosedBarSource {
     private class PoolState(val meta: ChainPool, var symbol: String) {
         val coverage = Coverage()
         val rate = RateWindow()
@@ -252,6 +259,27 @@ class ChainCandleService(
         series.candles(nowMs(), st.coverage, includeOpen)
     }
 
+    /**
+     * Адаптер к стратегиям ([ClosedBarSource]): бары из цепочки поверх истории GeckoTerminal — только у пулов
+     * PumpSwap, Raydium AMM v4 и CPMM (сверены с GeckoTerminal), с живой подпиской, которая без разрыва покрывает
+     * весь отрезок, и пока соединение после конца отрезка ещё присылало сообщения (запас [SERVE_LIVE_MARGIN_MS]).
+     * Иначе null — дорогим (снятым) пулам, Raydium CLMM, после обрыва и пулам без подписки свечи даёт GeckoTerminal.
+     */
+    override suspend fun closedBars(pool: String, barMs: Long, fromMs: Long, prevClose: Double, closedByMs: Long): List<Candle>? {
+        // После stop() подписки в памяти выглядят живыми, но сообщений больше нет — это и отсекает.
+        val liveUntil = lastMessageAt - SERVE_LIVE_MARGIN_MS
+        return lock.withLock {
+            val st = pools[pool] ?: return@withLock null
+            if (st.meta.dex !in STRATEGY_DEXES || st.subId == null) return@withLock null
+            val series = when {
+                barMs % st.m5.barMs == 0L -> st.m5
+                barMs % st.m1.barMs == 0L -> st.m1
+                else -> return@withLock null
+            }
+            series.coveredBars(fromMs, barMs, closedByMs, liveUntil, st.coverage, prevClose)
+        }
+    }
+
     /** Бары серии с источником (для отчёта и прогона сверки). */
     suspend fun bars(pool: String, aggregate: Int): List<ChainBar> = lock.withLock {
         val st = pools[pool] ?: return@withLock emptyList()
@@ -324,6 +352,15 @@ class ChainCandleService(
         solUsd = usd
     }
 
+    /** Новое соединение после остановки — то, что делает [connectionLoop] перед первым подключением. */
+    internal suspend fun testConnectionStarting() = lock.withLock { closeCoverageLocked(nowMs()) }
+
+    /** Пул снова просится в подписку запросом [reqId] (как при новом соединении в [resubscribeAll]). */
+    internal suspend fun testResubscribe(pool: String, reqId: Long) = lock.withLock {
+        pools.getValue(pool).reqId = reqId
+        pendingSubs[reqId] = pool
+    }
+
     // ─── Цена SOL ────────────────────────────────────────────────────────────
 
     private suspend fun priceLoop() {
@@ -339,6 +376,9 @@ class ChainCandleService(
     private suspend fun alive(): Boolean = currentCoroutineContext().isActive && scope != null
 
     private suspend fun connectionLoop(client: HttpClient, wsUrl: String) {
+        // stop() покрытие не закрывает (подписки гаснут вместе с соединением): закрываем его по последнему сообщению
+        // прошлого запуска — иначе время, пока сервис стоял, считалось бы покрытым, то есть без сделок.
+        lock.withLock { closeCoverageLocked(nowMs()) }
         var failures = 0
         while (alive()) {
             try {
@@ -479,18 +519,24 @@ class ChainCandleService(
         val now = nowMs()
         lock.withLock {
             reconnects++
-            // Соединение могло молча умереть раньше, чем это заметили: сделки после последнего сообщения
-            // считаем потерянными.
-            val end = minOf(now, lastMessageAt + 2_000L) - END_MARGIN_MS
-            for (st in pools.values) {
-                st.subId = null
-                st.reqId = null
-                st.coverage.close(end)
-            }
-            pendingSubs.clear()
-            pendingSentAt.clear()
-            subToPool.clear()
+            closeCoverageLocked(now)
         }
+    }
+
+    /**
+     * Под [lock]: подписок больше нет — у всех пулов они сбрасываются, покрытие закрывается. Соединение могло молча
+     * умереть раньше, чем это заметили: сделки после последнего сообщения считаем потерянными.
+     */
+    private fun closeCoverageLocked(now: Long) {
+        val end = minOf(now, lastMessageAt + 2_000L) - END_MARGIN_MS
+        for (st in pools.values) {
+            st.subId = null
+            st.reqId = null
+            st.coverage.close(end)
+        }
+        pendingSubs.clear()
+        pendingSentAt.clear()
+        subToPool.clear()
     }
 
     // ─── Сообщения узла ──────────────────────────────────────────────────────
@@ -1007,6 +1053,9 @@ class ChainCandleService(
                 subscriptionDrops = subscriptionDrops,
                 lastReconcile = lastReconcileText,
                 error = lastError,
+                strategyPools = pools.values
+                    .filter { it.subId != null && it.meta.dex in STRATEGY_DEXES }
+                    .mapTo(HashSet()) { it.meta.address },
             )
         }
         _status.value = status
@@ -1015,6 +1064,19 @@ class ChainCandleService(
     companion object {
         /** DexScreener dexId пулов, которые разбираем (Raydium — AMM v4, CPMM и CLMM по владельцу аккаунта). */
         val SUPPORTED_DEX_IDS = setOf("pumpswap", "raydium")
+
+        /**
+         * Чьи бары можно отдавать стратегиям: сверены с GeckoTerminal на Helius (2026-11-12: close ±1% у 98–100%
+         * баров, пропусков 0). Raydium CLMM — нет: по нему мало данных, а на PublicNode его бары расходились.
+         */
+        val STRATEGY_DEXES = setOf(ChainDex.PUMPSWAP, ChainDex.RAYDIUM_AMM_V4, ChainDex.RAYDIUM_CPMM)
+
+        /**
+         * Бар отдаётся стратегиям, только если соединение присылало сообщения хотя бы столько после его конца:
+         * при десятках подписок сообщения идут каждую секунду, а тихо умершее соединение сторож замечает лишь через
+         * [WATCHDOG_SILENCE_MS] — бар, собранный за это время, был бы без части сделок.
+         */
+        const val SERVE_LIVE_MARGIN_MS = 10_000L
 
         /** WS-пинг: Helius закрывает соединение после 10 минут без активности. */
         const val PING_INTERVAL_MS = 60_000L

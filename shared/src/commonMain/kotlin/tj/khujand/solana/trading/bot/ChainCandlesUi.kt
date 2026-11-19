@@ -21,9 +21,11 @@ import tj.khujand.solana.trading.bot.exchange.chain.ChainCandleStatus
 import tj.khujand.solana.trading.bot.exchange.chain.WatchedPool
 import tj.khujand.solana.trading.bot.exchange.chain.appendChainFile
 import tj.khujand.solana.trading.bot.exchange.chain.chainReportDir
+import tj.khujand.solana.trading.bot.exchange.dex.CandleFeedStatus
 import tj.khujand.solana.trading.bot.exchange.dex.DexClient
 import tj.khujand.solana.trading.bot.exchange.dex.GeckoTerminalApi
 import tj.khujand.solana.trading.bot.exchange.dex.TokenCache
+import tj.khujand.solana.trading.bot.util.plural
 
 /** Пауза между своими запросами прототипа к GeckoTerminal: очередь без ключа общая со стратегиями. */
 private const val CHAIN_GECKO_SPACING_MS = 90_000L
@@ -51,8 +53,10 @@ internal fun createChainCandles(
             tokenCache.all().map { WatchedPool(it.pairAddress, it.mint, it.symbol, it.dexId, it.volumeH1Usd) }
         },
         solPriceUsd = client::getSolPriceUsd,
+        // История и сверка — только бары GeckoTerminal: когда свечи из блокчейна отдаются стратегиям, их записи в
+        // кеше свечей продлены блокчейном, и сверка сравнивала бы бары из цепочки сами с собой.
         geckoCandles = { pool, tf, agg, limit ->
-            GeckoTerminalApi.getCandles(pool, tf, agg, limit, maxWaitMs = CHAIN_GECKO_MAX_WAIT_MS)
+            GeckoTerminalApi.getCandles(pool, tf, agg, limit, maxWaitMs = CHAIN_GECKO_MAX_WAIT_MS, allowChain = false)
         },
         dailyCreditLimit = settingsStore::getChainCreditLimit,
         geckoSpacingMs = { CHAIN_GECKO_SPACING_MS },
@@ -62,7 +66,14 @@ internal fun createChainCandles(
 }
 
 /**
- * «Настройки» → «Свечи из блокчейна»: выключатель (применяется сразу), состояние и расход кредитов, лимит
+ * Пулы, которым свечи сейчас дают блокчейн, а не GeckoTerminal: подключено к стратегиям, сервис работает, подписка
+ * жива. Для оценки спроса на свечи в карточке «Почему нет сделок».
+ */
+internal fun DrxRuntime.chainServedPools(): Set<String> =
+    if (GeckoTerminalApi.chainBarsAttached && chainCandles.isRunning) chainCandles.status.value.strategyPools else emptySet()
+
+/**
+ * «Настройки» → «Свечи из блокчейна»: выключатели (применяются сразу), состояние и расход кредитов, лимит
  * в сутки. Без рантайма (превью, тесты отрисовки) раздел не показывается.
  */
 @Composable
@@ -71,7 +82,9 @@ fun ChainCandlesSection() {
     val service = runtime.chainCandles
     val store = runtime.settingsStore
     val st by service.status.collectAsState()
+    val feed by GeckoTerminalApi.status.collectAsState()
     var enabled by remember { mutableStateOf(store.getChainCandlesEnabled()) }
+    var toStrategies by remember { mutableStateOf(store.getChainCandlesToStrategies()) }
     var limit by remember { mutableStateOf(store.getChainCreditLimit().toString()) }
     ChainCandlesSectionContent(
         status = st,
@@ -86,12 +99,21 @@ fun ChainCandlesSection() {
             limit = v
             v.toIntOrNull()?.takeIf { it > 0 }?.let(store::setChainCreditLimit)
         },
+        toStrategies = toStrategies,
+        onToggleStrategies = { v ->
+            toStrategies = v
+            store.setChainCandlesToStrategies(v)
+            runtime.syncChainBars()
+        },
+        feed = feed,
     )
 }
 
 /**
  * Содержимое раздела — от состояния, без рантайма (рисуется и в тестах). Карточка в «Подключениях» после
- * Telegram; в отличие от остальных полей экрана выключатель и лимит применяются сразу, без «Сохранить».
+ * Telegram; в отличие от остальных полей экрана выключатели и лимит применяются сразу, без «Сохранить».
+ * @param toStrategies отдавать ли свечи стратегиям; [feed] — счётчики источника свечей (сколько раз бары дал
+ *   блокчейн, сколько запросов ушло к GeckoTerminal).
  */
 @Composable
 internal fun ChainCandlesSectionContent(
@@ -100,18 +122,28 @@ internal fun ChainCandlesSectionContent(
     limit: String,
     onToggle: (Boolean) -> Unit,
     onLimit: (String) -> Unit,
+    toStrategies: Boolean = false,
+    onToggleStrategies: (Boolean) -> Unit = {},
+    feed: CandleFeedStatus? = null,
 ) {
+    val feeding = enabled && toStrategies
     DrxCard {
         CardTitle(
             "Свечи из блокчейна",
             icon = Icons.Rounded.CandlestickChart,
-            subtitle = "теневой режим — стратегии их не получают",
+            subtitle = if (feeding) "стратегии получают их у пулов с полным покрытием" else "теневой режим — стратегии их не получают",
             trailing = { Pill("ПРОТОТИП", Amber) },
         )
         Spacer(Modifier.height(10.dp))
         HintText(
             "Свечи 1m/5m строятся из сделок в блокчейне (PumpSwap, Raydium) и раз в час сверяются с " +
-                "GeckoTerminal. Торговля от них не меняется."
+                "GeckoTerminal. " + if (feeding) {
+                "Стратегии получают закрытые бары из блокчейна вместо запроса к GeckoTerminal — у пулов PumpSwap, " +
+                    "Raydium AMM v4 и CPMM, чья подписка жива без разрыва; историю по-прежнему даёт GeckoTerminal. " +
+                    "Дорогим пулам, Raydium CLMM и после обрыва — свечи GeckoTerminal, как раньше."
+            } else {
+                "Торговля от них не меняется."
+            }
         )
         Spacer(Modifier.height(6.dp))
         SettingSwitch(
@@ -120,9 +152,20 @@ internal fun ChainCandlesSectionContent(
             description = "Включается и выключается сразу, без «Сохранить»",
             onChange = onToggle,
         )
+        SettingSwitch(
+            "Отдавать свечи стратегиям",
+            toStrategies,
+            description = "Вместо запроса к GeckoTerminal — у пулов с полным покрытием подпиской; разгружает " +
+                "очередь GeckoTerminal без ключа. Сразу, без «Сохранить»",
+            onChange = onToggleStrategies,
+        )
+        if (toStrategies && !enabled) {
+            Spacer(Modifier.height(6.dp))
+            Banner("Стратегии получают свечи GeckoTerminal: включите «Строить свечи из блокчейна»", Tone.WARN)
+        }
         if (enabled) {
             Spacer(Modifier.height(8.dp))
-            val (text, tone) = chainStatusText(status)
+            val (text, tone) = chainStatusText(status, if (toStrategies) feed else null)
             Banner(text, tone)
         }
         Spacer(Modifier.height(12.dp))
@@ -145,8 +188,8 @@ internal fun ChainCandlesSectionContent(
     }
 }
 
-/** Строки состояния и тон плашки. */
-private fun chainStatusText(st: ChainCandleStatus): Pair<String, Tone> {
+/** Строки состояния и тон плашки; [feed] — счётчики источника свечей, когда свечи отдаются стратегиям. */
+private fun chainStatusText(st: ChainCandleStatus, feed: CandleFeedStatus?): Pair<String, Tone> {
     if (!st.running) return "Не запущено${st.error?.let { ": $it" } ?: ""}" to Tone.BAD
     val lines = ArrayList<String>()
     lines += when {
@@ -159,6 +202,11 @@ private fun chainStatusText(st: ChainCandleStatus): Pair<String, Tone> {
     lines += "Пулов: подписано ${st.poolsLive} из ${st.poolsWatched} в наблюдении"
     if (st.skipped.isNotEmpty()) {
         lines += "Без подписки: " + st.skipped.entries.sortedByDescending { it.value }.joinToString("; ") { "${it.key.text} — ${it.value}" }
+    }
+    if (feed != null) {
+        lines += "Стратегиям: свечи из блокчейна сейчас у ${st.strategyPools.size} " +
+            plural(st.strategyPools.size, "пула", "пулов", "пулов") + "; с запуска свежие бары дал блокчейн — " +
+            "${feed.chainServed} раз, запросов к GeckoTerminal — ${feed.geckoRequests}"
     }
     lines += "Сделок сегодня: ${st.tradesToday}"
     val perDay = st.usage.creditsPerDayNow.roundToLong()

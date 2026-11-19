@@ -50,8 +50,14 @@ internal fun candleShortageHint(demand: CandleDemand, budgetPerMinute: Double): 
     val need = kotlin.math.round(demand.requestsPerMinute * 10) / 10
     // После дробного числа — «запроса» (7,2 запроса), после целого — по обычному правилу.
     val word = if (need % 1.0 != 0.0) "запроса" else plural(need.toInt(), "запрос", "запроса", "запросов")
+    val chain = if (demand.chainPools > 0) {
+        "; ещё ${demand.chainPools} ${plural(demand.chainPools, "монета получает", "монеты получают", "монет получают")} " +
+            "свечи из блокчейна"
+    } else {
+        ""
+    }
     val head = "Свечей не хватает: стратегиям нужно около ${oneDecimal(need)} $word в минуту " +
-        "(${demand.pools} ${plural(demand.pools, "монета", "монеты", "монет")}), источник даёт ${oneDecimal(budgetPerMinute)} — " +
+        "(${demand.pools} ${plural(demand.pools, "монета", "монеты", "монет")}$chain), источник даёт ${oneDecimal(budgetPerMinute)} — " +
         "часть монет разбирается по свечам с опозданием."
     val heaviest = demand.poolsByTimeframeMs.maxByOrNull { (tfMs, pools) -> pools * 60_000.0 / tfMs }
     val advice = if (heaviest != null && heaviest.value * 60_000.0 / heaviest.key > demand.requestsPerMinute / 2 &&

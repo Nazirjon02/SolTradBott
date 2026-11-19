@@ -174,7 +174,8 @@ private fun DrxAppContent(runtime: DrxRuntime?, wide: Boolean) {
             clockTick++
         }
     }
-    val funnelSnapshot = remember(funnelVersion, clockTick) { funnel?.snapshot() }
+    // Пулы, которым бары даёт блокчейн, очередь GeckoTerminal не нагружают — в спросе на свечи их нет.
+    val funnelSnapshot = remember(funnelVersion, clockTick) { funnel?.snapshot(chainPools = runtime?.chainServedPools().orEmpty()) }
     val feed by GeckoTerminalApi.status.collectAsState()
 
     var balance by remember { mutableStateOf<AccountBalance?>(null) }

@@ -18,6 +18,7 @@ import org.jetbrains.skia.EncodedImageFormat
 import tj.khujand.solana.trading.bot.exchange.chain.ChainCandleStatus
 import tj.khujand.solana.trading.bot.exchange.chain.SkipReason
 import tj.khujand.solana.trading.bot.exchange.chain.UsageSnapshot
+import tj.khujand.solana.trading.bot.exchange.dex.CandleFeedStatus
 
 /** Раздел «Свечи из блокчейна» рисуется (Skia без окна); PNG — в `build/chain-render/`, посмотреть глазами. */
 class ChainCandlesRenderTest {
@@ -57,6 +58,32 @@ class ChainCandlesRenderTest {
             ChainCandlesSectionContent(status, enabled = true, limit = "25000", onToggle = {}, onLimit = {})
         }
         assertTrue(png.size > 10_000)
+    }
+
+    @Test fun feedingStrategiesSectionRenders() {
+        val status = ChainCandleStatus(
+            running = true,
+            connected = true,
+            host = "mainnet.helius-rpc.com",
+            helius = true,
+            poolsLive = 33,
+            poolsWatched = 52,
+            usage = UsageSnapshot(creditsToday = 6_120.0, creditsPerDayNow = 13_400.0),
+            dailyLimit = 25_000,
+            strategyPools = (1..27).map { "pool$it" }.toSet(),
+        )
+        val png = render("chain-feeding", 1800) {
+            ChainCandlesSectionContent(
+                status, enabled = true, limit = "25000", onToggle = {}, onLimit = {},
+                toStrategies = true, feed = CandleFeedStatus(chainServed = 412, geckoRequests = 96),
+            )
+        }
+        assertTrue(png.size > 10_000)
+        // Свечи стратегиям включены, а сами свечи — нет: карточка предупреждает.
+        val off = render("chain-feeding-off", 1000) {
+            ChainCandlesSectionContent(ChainCandleStatus(), enabled = false, limit = "25000", onToggle = {}, onLimit = {}, toStrategies = true)
+        }
+        assertTrue(off.size > 5_000)
     }
 
     @Test fun disabledSectionRenders() {

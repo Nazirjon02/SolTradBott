@@ -80,6 +80,8 @@ data class CandleDemand(
     val requestsPerMinute: Double = 0.0,
     /** ТФ (мс) → сколько пулов разбирается на нём как на самом мелком. */
     val poolsByTimeframeMs: Map<Long, Int> = emptyMap(),
+    /** Ещё столько пулов получают свечи из блокчейна — в [pools] и [requestsPerMinute] их нет. */
+    val chainPools: Int = 0,
 )
 
 /**
@@ -172,7 +174,11 @@ class EntryFunnel(
         _version.update { it + 1 }
     }
 
-    fun snapshot(): FunnelSnapshot {
+    /**
+     * @param chainPools пулы, которым свечи сейчас даёт блокчейн (подписка без разрыва): очередь GeckoTerminal они не
+     *   нагружают, и в спросе на свечи их нет.
+     */
+    fun snapshot(chainPools: Set<String> = emptySet()): FunnelSnapshot {
         val now = nowMs()
         val s = state.value
         val inWindow = s.buckets.filter { it.startMs + bucketMs > now - windowMs }
@@ -195,18 +201,21 @@ class EntryFunnel(
             opened = inWindow.sumOf { it.opened },
             lastCycleAt = s.lastCycleAt,
             strategies = s.strategies,
-            candleDemand = demand(s.candles.values.filter { now - it.atMs <= DEMAND_FRESH_MS }),
+            candleDemand = demand(s.candles.values.filter { now - it.atMs <= DEMAND_FRESH_MS }, chainPools),
         )
     }
 
-    private fun demand(needs: Collection<CandleNeed>): CandleDemand {
+    private fun demand(needs: Collection<CandleNeed>, chainPools: Set<String>): CandleDemand {
         val finest = HashMap<String, Long>()
         needs.forEach { n -> n.pools.forEach { pool -> finest[pool] = minOf(finest[pool] ?: Long.MAX_VALUE, n.timeframeMs) } }
-        if (finest.isEmpty()) return CandleDemand()
+        val fromChain = finest.keys.count { it in chainPools }
+        finest.keys.removeAll(chainPools)
+        if (finest.isEmpty()) return CandleDemand(chainPools = fromChain)
         return CandleDemand(
             pools = finest.size,
             requestsPerMinute = finest.values.sumOf { 60_000.0 / it },
             poolsByTimeframeMs = finest.values.groupingBy { it }.eachCount(),
+            chainPools = fromChain,
         )
     }
 
