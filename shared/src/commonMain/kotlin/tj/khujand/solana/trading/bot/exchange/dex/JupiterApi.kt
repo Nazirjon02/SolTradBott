@@ -12,8 +12,11 @@ import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.doubleOrNull
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.longOrNull
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
 import kotlin.time.Clock
@@ -22,6 +25,26 @@ import kotlin.time.Clock
 data class JupiterPriceResponse(
     val data: JsonObject? = null
 )
+
+private val priceJson = Json { isLenient = true; ignoreUnknownKeys = true }
+
+/**
+ * Ответ Price API v3: `{ "<mint>": { "usdPrice": …, "blockId": …, … }, … }`. Монеты, которую Jupiter не знает,
+ * в ответе нет (или там null); у монеты, которую он считает ненадёжной, нет `usdPrice` — тогда [JupiterTokenPrice.usdPrice]
+ * null. null — тело не JSON-объект.
+ */
+internal fun parsePriceBatch(body: String, cdnAgeMs: Long, fetchedAtMs: Long): JupiterPriceBatch? = runCatching {
+    val root = priceJson.parseToJsonElement(body).jsonObject
+    val tokens = HashMap<String, JupiterTokenPrice>()
+    for ((mint, element) in root) {
+        val o = element as? JsonObject ?: continue
+        tokens[mint] = JupiterTokenPrice(
+            usdPrice = (o["usdPrice"] as? JsonPrimitive)?.doubleOrNull,
+            blockId = (o["blockId"] as? JsonPrimitive)?.longOrNull,
+        )
+    }
+    JupiterPriceBatch(tokens, cdnAgeMs, fetchedAtMs)
+}.getOrNull()
 
 @Serializable
 data class JupiterSwapRequest(
@@ -79,6 +102,27 @@ class JupiterApi {
             throw e
         } catch (e: Exception) {
             println("❌ Jupiter price error: ${e.message}")
+            null
+        }
+    }
+
+    /**
+     * Цены монет пачкой (Price API v3, до 50 mint за запрос) — основной источник цены бота. Время ответа и
+     * заголовок Age (сколько ответ пролежал в CDN, `max-age=5`) нужны [PriceFeed] для возраста цены.
+     * null — Jupiter не ответил (сеть, 429/5xx после повторов).
+     */
+    suspend fun getPriceBatch(mints: List<String>, apiKey: String? = null): JupiterPriceBatch? {
+        if (mints.isEmpty()) return JupiterPriceBatch(emptyMap(), 0L, Clock.System.now().toEpochMilliseconds())
+        val url = "$baseUrl/price/v3"
+        return try {
+            val response = getWithRetry(url, apiKey) { parameter("ids", mints.joinToString(",")) } ?: return null
+            val fetchedAt = Clock.System.now().toEpochMilliseconds()
+            val ageMs = response.headers["Age"]?.trim()?.toLongOrNull()?.coerceAtLeast(0L)?.times(1000L) ?: 0L
+            parsePriceBatch(response.bodyAsText(), ageMs, fetchedAt)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            println("❌ Jupiter price batch error: ${e.message}")
             null
         }
     }

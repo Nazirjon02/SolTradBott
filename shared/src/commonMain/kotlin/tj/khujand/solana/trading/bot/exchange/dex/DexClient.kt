@@ -25,10 +25,21 @@ class DexClient(
     val jupiter = JupiterApi()
     val rpc = SolanaRpcClient(rpcUrl = rpcUrl)
 
+    /**
+     * Цена для торговых решений (вход, стоп, тейк, трейлинг): Jupiter — основной, DexScreener — запасной, с возрастом
+     * каждой цены. См. [PriceFeed].
+     */
+    val priceFeed = PriceFeed(ApiPriceSources(jupiter, dexScreener))
+
     // ─── Цены ────────────────────────────────────────────────────────────────
 
+    /** Цена DexScreener без возраста — для экранов анализа; торговые решения берут [priceFeed]. */
     suspend fun getTokenPriceUsd(mint: String): Double? =
         dexScreener.getTokenPriceUsd("solana", mint)
+
+    /** Пара DexScreener с возрастом ответа: ликвидность для ликвидность-стопа и запасная цена позиции. */
+    suspend fun getPairSnapshot(pairAddress: String): PairSnapshot? =
+        dexScreener.getPairSnapshot(pairAddress)
 
     // Гонка двух одновременных запросов безвредна: оба положат свежую цену.
     private var solPriceCache: Pair<Double, Long>? = null

@@ -43,7 +43,14 @@ CREATE TABLE IF NOT EXISTS trade (
     exit_retry_at INTEGER NOT NULL DEFAULT 0,
     exit_note TEXT NOT NULL DEFAULT '',
     -- Как исполнялась сделка: DEMO, SHADOW (DEMO по котировкам Jupiter) или REAL; '' — старые сделки.
-    exec_mode TEXT NOT NULL DEFAULT ''
+    exec_mode TEXT NOT NULL DEFAULT '',
+    -- Сравнение режимов (поздние колонки): PnL тех же выходов по рыночной цене решения — как посчитал бы DEMO
+    -- (у DEMO совпадает с pnl; у SHADOW/REAL разница = издержки исполнения и комиссии), и откуда была цена
+    -- входа и последнего выхода (JUPITER / DEXSCREENER / QUOTE; '' — цена сигнала или старые сделки).
+    -- fee — сетевые комиссии (SHADOW — оценка), они уже вычтены из pnl.
+    market_pnl REAL NOT NULL DEFAULT 0,
+    entry_price_source TEXT NOT NULL DEFAULT '',
+    exit_price_source TEXT NOT NULL DEFAULT ''
 );
 
 getAll:
@@ -102,6 +109,14 @@ UPDATE trade SET last_price = ? WHERE id = ?;
 -- Вне insert (поздняя колонка): пишется TradeExecutor'ом вместе со строкой сделки.
 setExecMode:
 UPDATE trade SET exec_mode = ? WHERE id = ?;
+
+-- Вне insert (поздняя колонка): откуда цена входа.
+setEntryPriceSource:
+UPDATE trade SET entry_price_source = ? WHERE id = ?;
+
+-- Каждая продажа (полная и частичная): PnL этой доли по рыночной цене и источник цены выхода.
+recordMarketExit:
+UPDATE trade SET market_pnl = market_pnl + ?, exit_price_source = ? WHERE id = ?;
 
 -- Продажа не прошла: счётчик неудач подряд, когда пробовать снова и почему не вышло.
 setExitFailure:

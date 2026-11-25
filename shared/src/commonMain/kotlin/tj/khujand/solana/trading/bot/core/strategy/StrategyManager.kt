@@ -30,6 +30,9 @@ import tj.khujand.solana.trading.bot.data.db.DrxDatabase
 import tj.khujand.solana.trading.bot.domain.backtest.timeframeMs
 import tj.khujand.solana.trading.bot.exchange.dex.Candle
 import tj.khujand.solana.trading.bot.exchange.dex.DexClient
+import tj.khujand.solana.trading.bot.exchange.dex.ENTRY_MAX_PRICE_AGE_MS
+import tj.khujand.solana.trading.bot.exchange.dex.LivePrice
+import tj.khujand.solana.trading.bot.exchange.dex.PriceFeed
 import tj.khujand.solana.trading.bot.exchange.dex.TokenCandidate
 import tj.khujand.solana.trading.bot.exchange.dex.TokenScanner
 
@@ -94,6 +97,7 @@ private sealed interface EntryOutcome {
  * @param entryGuard общая проверка монеты перед покупкой; null — без проверки (тесты, старые сборки).
  * @param watchBoard доска наблюдения: что стратегии видят по каждому кандидату; null — не ведётся.
  * @param entryFunnel воронка входа для карточки «почему нет сделок»: только счёт, на решения не влияет.
+ * @param priceFeed живая цена входа (Jupiter, запасной — DexScreener); параметром — ради тестов.
  */
 class StrategyManager(
     private val client: DexClient,
@@ -107,6 +111,7 @@ class StrategyManager(
     private val entryGuard: EntryGuard? = null,
     private val watchBoard: WatchBoard? = null,
     private val entryFunnel: EntryFunnel? = null,
+    private val priceFeed: PriceFeed = client.priceFeed,
 ) {
     /**
      * Режим «только сигнал» (глобальный переключатель из настроек/Telegram).
@@ -316,7 +321,10 @@ class StrategyManager(
                     db.txJournalQueries.hasPendingBuy(candidate.mint).executeAsOne() > 0L
                 if (alreadyTraded) return@withLock EntryOutcome.Skipped(EntryLoss.ALREADY_TRADED)
                 if (!riskManager.canTrade(config)) return@withLock EntryOutcome.Skipped(EntryLoss.STRATEGY_LIMIT)
-                val fresh = withFreshEntryPrice(signal) ?: return@withLock EntryOutcome.Skipped(EntryLoss.PRICE_RAN)
+                val fresh = when (val f = withFreshEntryPrice(signal)) {
+                    is FreshEntry.Ready -> f.signal
+                    is FreshEntry.Lost -> return@withLock EntryOutcome.Skipped(f.loss)
+                }
                 // ATR входа — для ATR-трейлинга (если включён); по тем же свечам, что видела стратегия.
                 executeSignal(fresh, config, candidate, atrFraction(candles, config.atrPeriod, fresh.entryPrice))
             }
@@ -348,20 +356,22 @@ class StrategyManager(
      * разрешено боту. Лимиты стратегии и кулдаун не применяются: стратегии у сделки нет. Сделку дальше ведёт
      * монитор по стопу и тейку из [stopLossPercent]/[takeProfitPercent].
      *
-     * @param livePrice живая цена (вызывающий спрашивает её прямо перед покупкой); null — цена кандидата.
+     * @param livePrice живая цена (вызывающий спрашивает её прямо перед покупкой). null или старше
+     *   [ENTRY_MAX_PRICE_AGE_MS] — покупка запрещена, как и вход бота: стоп и тейк считаются от этой цены.
      */
     suspend fun openManual(
         candidate: TokenCandidate,
         sizeUsd: Double,
         stopLossPercent: Double,
         takeProfitPercent: Double,
-        livePrice: Double?,
+        livePrice: LivePrice?,
     ): ManualResult {
         if (sizeUsd <= 0.0) return ManualResult.Rejected("сумма покупки должна быть больше нуля")
         if (stopLossPercent <= 0.0 || stopLossPercent >= 90.0) return ManualResult.Rejected("стоп — от 0 до 90%")
         if (takeProfitPercent <= 0.0) return ManualResult.Rejected("тейк должен быть больше нуля")
-        val entry = livePrice?.takeIf { it > 0.0 } ?: candidate.priceUsd
-        if (entry <= 0.0) return ManualResult.Rejected("нет цены монеты")
+        val live = livePrice?.takeIf { it.isFresh(now(), ENTRY_MAX_PRICE_AGE_MS) }
+            ?: return ManualResult.Rejected("нет свежей цены монеты (Jupiter и DexScreener) — покупка отменена, повторите позже")
+        val entry = live.priceUsd
         val demoFlag = if (executor.isDemo()) 1L else 0L
 
         // Тот же лок по mint, что у стратегий: бот и человек не купят монету одновременно.
@@ -396,6 +406,7 @@ class StrategyManager(
                     entryPrice = entry,
                     stopLoss = config.stopLossPrice(entry),
                     takeProfit = config.takeProfitPrice(entry),
+                    priceSource = live.source.name,
                 )
                 val buyQuote = (verdict as? EntryGuard.Verdict.Pass)?.buyQuote
                 executor.openTrade(signal, config, sizeUsd, candidate.liquidityUsd, entryAtrFrac = 0.0, buyQuote = buyQuote)
@@ -477,6 +488,15 @@ class StrategyManager(
                 val done = mutex.withLock { if (_armed.value.isEmpty()) { armedJob = null; true } else false }
                 if (done) return else continue
             }
+            // Цены всех взведённых монет — одним запросом к Jupiter: дальше проверки берут их из кеша PriceFeed
+            // (без ключа Jupiter даёт ~0,5 запроса в секунду на всё).
+            try {
+                priceFeed.jupiterPrices(setups.map { it.second.candidate.mint })
+            } catch (e: CancellationException) {
+                throw e
+            } catch (_: Exception) {
+                // не ответил — каждая проверка спросит запасной источник сама
+            }
             for ((key, s) in setups) {
                 try {
                     checkArmed(key, s)
@@ -496,18 +516,21 @@ class StrategyManager(
             disarm(key, "○ $symbol: взвод снят — за ${s.config.armedExpiryBars} бар(а) пробоя не было")
             return
         }
-        val price = client.getTokenPriceUsd(s.candidate.mint)?.takeIf { it > 0.0 } ?: return // цены нет — ждём
+        // Свежей цены нет ни у Jupiter, ни у DexScreener — не входим и ждём следующей проверки.
+        val live = freshEntryPrice(s.candidate.mint) ?: return
+        val price = live.priceUsd
         when (armedAction(s.plan, price)) {
             ArmedAction.HOLD -> Unit
             ArmedAction.INVALID -> disarm(key, "○ $symbol: взвод снят — цена ${fmtNum(price)} у точки слома ${fmtNum(s.plan.invalidationPrice)}")
             ArmedAction.OVERSHOOT -> disarm(key, "○ $symbol: взвод снят — цена проскочила уровень (${fmtNum(price)} > ${fmtNum(s.plan.maxEntryPrice)})")
-            ArmedAction.FIRE -> fireArmed(key, s, price)
+            ArmedAction.FIRE -> fireArmed(key, s, live)
         }
     }
 
     /** Цена прошла уровень — вход тем же путём, что у сигнала: лимиты, слот портфеля, проверка монеты. */
-    private suspend fun fireArmed(key: String, s: ArmedSetup, price: Double) {
+    private suspend fun fireArmed(key: String, s: ArmedSetup, live: LivePrice) {
         val config = s.config
+        val price = live.priceUsd
         val last = mutex.withLock { lastTradeAt[config.id] } ?: 0L
         if (now() - last < config.cooldownSeconds * 1000L) return // кулдаун стратегии — ждём, пока не истечёт срок
         if (riskManager.blockReason(config) != null) return
@@ -520,6 +543,7 @@ class StrategyManager(
             entryPrice = price,
             stopLoss = s.plan.stopPrice,
             takeProfit = config.takeProfitPrice(price),
+            priceSource = live.source.name,
         )
         val demoFlag = if (executor.isDemo()) 1L else 0L
         val outcome = mintLock(s.candidate.mint).withLock {
@@ -595,35 +619,52 @@ class StrategyManager(
         )
     }
 
+    /** Итог подстановки живой цены в сигнал. */
+    internal sealed interface FreshEntry {
+        data class Ready(val signal: Signal) : FreshEntry
+        data class Lost(val loss: EntryLoss) : FreshEntry
+    }
+
+    /**
+     * Свежая цена для входа (Jupiter, при его отказе — DexScreener) не старше [ENTRY_MAX_PRICE_AGE_MS];
+     * null — свежей цены нет нигде, вход запрещён.
+     */
+    private suspend fun freshEntryPrice(mint: String): LivePrice? = try {
+        priceFeed.freshPrice(mint, ENTRY_MAX_PRICE_AGE_MS)
+    } catch (e: CancellationException) {
+        throw e
+    } catch (_: Exception) {
+        null
+    }
+
     /**
      * Перед входом заменяет цену сигнала (закрытие последнего закрытого бара или цена кандидата) на живую.
      * SL/TP тянутся за ней пропорционально, поэтому проценты риска сохраняются.
      * Если цена ушла больше чем на [MAX_ENTRY_PRICE_DRIFT] — сетап уже не тот, вход отменяем.
-     * Живой цены нет → идём по цене сигнала (лучше вход по ней, чем пропуск вслепую).
+     * Свежей живой цены нет (оба источника молчат или цена старая) — вход запрещён: стоп и тейк считались бы
+     * от цены, которой на рынке уже может не быть.
      */
-    private suspend fun withFreshEntryPrice(signal: Signal): Signal? {
-        if (signal.entryPrice <= 0.0) return null
-        val live = try {
-            client.getTokenPriceUsd(signal.mint)
-        } catch (e: CancellationException) {
-            throw e
-        } catch (_: Exception) {
-            null
+    internal suspend fun withFreshEntryPrice(signal: Signal): FreshEntry {
+        if (signal.entryPrice <= 0.0) return FreshEntry.Lost(EntryLoss.NO_PRICE)
+        val live = freshEntryPrice(signal.mint) ?: run {
+            activityLog.info("○ ${signal.symbol}: нет свежей цены (Jupiter и DexScreener) — вход отменён")
+            return FreshEntry.Lost(EntryLoss.NO_PRICE)
         }
-        if (live == null || live <= 0.0) return signal
-
-        val drift = abs(live - signal.entryPrice) / signal.entryPrice
+        val drift = abs(live.priceUsd - signal.entryPrice) / signal.entryPrice
         if (drift > MAX_ENTRY_PRICE_DRIFT) {
             activityLog.info(
-                "○ ${signal.symbol}: цена ушла на ${(drift * 100).toInt()}% от цены сигнала — вход отменён"
+                "○ ${signal.symbol}: цена ушла на ${(drift * 100).toInt()}% от цены сигнала (${live.source.label}) — вход отменён"
             )
-            return null
+            return FreshEntry.Lost(EntryLoss.PRICE_RAN)
         }
-        val k = live / signal.entryPrice
-        return signal.copy(
-            entryPrice = live,
-            stopLoss = signal.stopLoss * k,
-            takeProfit = signal.takeProfit * k,
+        val k = live.priceUsd / signal.entryPrice
+        return FreshEntry.Ready(
+            signal.copy(
+                entryPrice = live.priceUsd,
+                stopLoss = signal.stopLoss * k,
+                takeProfit = signal.takeProfit * k,
+                priceSource = live.source.name,
+            )
         )
     }
 

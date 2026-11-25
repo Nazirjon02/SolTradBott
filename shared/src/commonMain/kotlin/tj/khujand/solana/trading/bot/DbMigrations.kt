@@ -132,6 +132,10 @@ fun migrateStrategyTable(driver: SqlDriver) {
         "ALTER TABLE trade ADD COLUMN exit_retry_at INTEGER NOT NULL DEFAULT 0",
         "ALTER TABLE trade ADD COLUMN exit_note TEXT NOT NULL DEFAULT ''",
         "ALTER TABLE trade ADD COLUMN exec_mode TEXT NOT NULL DEFAULT ''",
+        // Сравнение режимов: PnL по рыночной цене (как в DEMO) и источники цены входа и выхода
+        "ALTER TABLE trade ADD COLUMN market_pnl REAL NOT NULL DEFAULT 0",
+        "ALTER TABLE trade ADD COLUMN entry_price_source TEXT NOT NULL DEFAULT ''",
+        "ALTER TABLE trade ADD COLUMN exit_price_source TEXT NOT NULL DEFAULT ''",
     )
     for (sql in alters) {
         try {

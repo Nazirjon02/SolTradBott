@@ -11,6 +11,7 @@ enum class EntryLoss(val label: String) {
     RANGE("цена у верха диапазона"),
     CONFIDENCE("уверенность ниже порога"),
     PRICE_RAN("цена убежала от сигнала"),
+    NO_PRICE("нет свежей цены"),
     COIN_CHECK("проверка монеты"),
     PORTFOLIO("лимиты портфеля"),
     STRATEGY_LIMIT("лимиты стратегии"),

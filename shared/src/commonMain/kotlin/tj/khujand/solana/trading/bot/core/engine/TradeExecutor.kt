@@ -50,6 +50,35 @@ private const val BASE_SELL_SLIPPAGE_BPS = 300
 /** Котировку старше этого не исполняем — запрашиваем заново. */
 private const val QUOTE_MAX_AGE_MS = 15_000L
 
+/**
+ * Оценка сетевых расходов одного свопа в SHADOW: базовая комиссия подписи (5 000 lamports) + приоритетная.
+ * REAL просит у Jupiter приоритет "auto", точную сумму без сборки транзакции не узнать — берём типичные 0,0002 SOL.
+ */
+internal const val SHADOW_SWAP_FEE_LAMPORTS = 205_000L
+
+/**
+ * Рента токен-аккаунта новой монеты (~0,00204 SOL): Jupiter создаёт его при покупке и не закрывает после продажи,
+ * так что для бота это расход каждой новой монеты.
+ */
+internal const val SHADOW_TOKEN_ACCOUNT_RENT_LAMPORTS = 2_039_280L
+
+/**
+ * Цена выхода по котировке продажи остатка позиции (USD за целый токен); [problem] — почему цены нет.
+ * Запасной путь монитора, когда ни Jupiter, ни DexScreener свежей цены не дали.
+ */
+data class ExitQuote(val priceUsd: Double?, val problem: String?)
+
+/**
+ * PnL доли [closedQty] из [qty] по рыночной цене — как посчитал бы DEMO: на тот же [sizeUsd] куплено по цене
+ * входа и продано по [marketPrice]. У DEMO совпадает с фактическим PnL, у SHADOW/REAL разница — издержки
+ * исполнения. 0 — цены нет.
+ */
+internal fun marketPnlDelta(sizeUsd: Double, entryPrice: Double, qty: Double, closedQty: Double, marketPrice: Double): Double {
+    if (sizeUsd <= 0.0 || entryPrice <= 0.0 || qty <= 0.0 || marketPrice <= 0.0) return 0.0
+    val portion = (closedQty / qty).coerceIn(0.0, 1.0)
+    return sizeUsd * portion * (marketPrice / entryPrice - 1)
+}
+
 /** Сверка берёт запись журнала не раньше: этого обычному пути хватает на подтверждение и запись. */
 private const val RECONCILE_MIN_AGE_MS = 90_000L
 
@@ -82,8 +111,11 @@ data class CloseResult(
 
 /** Итог попытки продать: REAL — своп, SHADOW — котировка, DEMO — по рыночной цене. */
 private sealed interface Sale {
-    /** Продано на [proceedsUsd]; [soldAll] — на кошельке больше нечего продавать; [signature] — запись журнала. */
-    data class Filled(val proceedsUsd: Double, val soldAll: Boolean, val signature: String? = null) : Sale
+    /**
+     * Продано на [proceedsUsd]; [soldAll] — на кошельке больше нечего продавать; [signature] — запись журнала;
+     * [feeUsd] — сетевые расходы продажи (оценка SHADOW), вычитаются из PnL.
+     */
+    data class Filled(val proceedsUsd: Double, val soldAll: Boolean, val signature: String? = null, val feeUsd: Double = 0.0) : Sale
 
     /** Не продано (нет котировки или маршрута, своп упал) — позиция открыта, попытка идёт в счётчик неудач. */
     data class Failed(val reason: String) : Sale
@@ -121,6 +153,7 @@ internal data class SellIntent(
     val proceedsUsd: Double,
     val soldAll: Boolean,
     val currentPrice: Double,
+    val priceSource: String = "",
 )
 
 /**
@@ -267,7 +300,8 @@ class TradeExecutor(
      * SHADOW-вход: сколько потрачено и сколько токенов получено — по котировке Jupiter на наш размер,
      * как при настоящем свопе (комиссии пулов и проскальзывание уже внутри), но транзакция не уходит.
      * Цена входа в сделке — рыночная из сигнала, как в REAL: издержки видны через size_usd и qty.
-     * qty — в целых токенах, как у всех DEMO-сделок.
+     * qty — в целых токенах, как у всех DEMO-сделок. Сетевые расходы (комиссия свопа и рента токен-аккаунта,
+     * оценка) — в колонке fee и сразу в pnl: так их видят итоги и лимиты убытка.
      */
     private suspend fun openShadow(
         signal: Signal,
@@ -293,19 +327,23 @@ class TradeExecutor(
         val spentSol = quote.inAmount.toDouble() / LAMPORTS_PER_SOL
         val spentUsd = spentSol * solPrice
         if (tokens <= 0.0 || spentUsd <= 0.0) return null
+        val feeUsd = (SHADOW_SWAP_FEE_LAMPORTS + SHADOW_TOKEN_ACCOUNT_RENT_LAMPORTS).toDouble() / LAMPORTS_PER_SOL * solPrice
         return demoMutex.withLock {
             val balance = demoBalanceUsd()
-            if (balance < spentUsd) {
-                activityLog.warn("⚠️ SHADOW: недостаточно демо-баланса ($balance < $spentUsd)")
+            if (balance < spentUsd + feeUsd) {
+                activityLog.warn("⚠️ SHADOW: недостаточно демо-баланса ($balance < ${spentUsd + feeUsd})")
                 return@withLock null
             }
             val id = newTradeId(signal.symbol)
-            insertTrade(id, signal, config.id, config.name, tokens, spentUsd, spentSol, liq, atrFrac, isDemo = true, EXEC_SHADOW)
-            setDemoBalance(balance - spentUsd)
+            insertTrade(
+                id, signal, config.id, config.name, tokens, spentUsd, spentSol, liq, atrFrac, isDemo = true, EXEC_SHADOW,
+                feeUsd = feeUsd,
+            )
+            setDemoBalance(balance - spentUsd - feeUsd)
             val overMarketPct = (spentUsd / tokens / signal.entryPrice - 1) * 100
             activityLog.success(
                 "🟢 SHADOW вход: ${signal.symbol} $${fmtNum(spentUsd)} @ ${signal.entryPrice} " +
-                    "(по котировке дороже рынка на ${fmtNum(overMarketPct)}%)"
+                    "(по котировке дороже рынка на ${fmtNum(overMarketPct)}%, сеть ≈ $${fmtNum(feeUsd)})"
             )
             id
         }
@@ -453,8 +491,9 @@ class TradeExecutor(
     }
 
     /**
-     * Строка сделки + база выходов в R (начальный стоп и ATR входа) и режим исполнения — одной
-     * транзакцией: стоп потом двигают безубыток/трейлинг, а R считается от начального.
+     * Строка сделки + база выходов в R (начальный стоп и ATR входа), режим исполнения и источник цены входа —
+     * одной транзакцией: стоп потом двигают безубыток/трейлинг, а R считается от начального.
+     * @param feeUsd сетевые расходы входа (SHADOW): пишутся в fee и сразу вычитаются из pnl; null — не учитываются.
      */
     private fun insertTrade(
         id: String,
@@ -469,6 +508,7 @@ class TradeExecutor(
         isDemo: Boolean,
         execMode: String,
         openedAt: Long = nowMs(),
+        feeUsd: Double? = null,
     ) = db.transaction {
         db.tradeQueries.insert(
             id = id,
@@ -489,9 +529,9 @@ class TradeExecutor(
             tp1_done = 0,
             tp2_done = 0,
             entry_liquidity_usd = entryLiquidityUsd,
-            pnl = null,
+            pnl = feeUsd?.let { -it },
             pnl_percent = null,
-            fee = null,
+            fee = feeUsd,
             status = "OPEN",
             open_reason = signal.reason,
             close_reason = null,
@@ -501,6 +541,7 @@ class TradeExecutor(
         )
         db.tradeQueries.setRiskBasis(signal.stopLoss, entryAtrFrac, id)
         db.tradeQueries.setExecMode(execMode, id)
+        if (signal.priceSource.isNotEmpty()) db.tradeQueries.setEntryPriceSource(signal.priceSource, id)
     }
 
     // ─── Закрытие ────────────────────────────────────────────────────────────
@@ -527,7 +568,10 @@ class TradeExecutor(
      *
      * Неудачная продажа (REAL/SHADOW) → null, а в сделке растёт счётчик неудач (exit_failures): со
      * следующей попыткой slippage выше, с [EXIT_BLOCKED_AFTER] подряд — пауза между попытками.
+     * @param currentPrice рыночная цена, по которой принято решение (DEMO исполняется по ней; у SHADOW/REAL — база
+     *   для market_pnl, сравнения с DEMO).
      * @param manual закрытие вручную: если токенов на кошельке нет, позиция закрывается сразу, без продажи.
+     * @param priceSource откуда [currentPrice] ([tj.khujand.solana.trading.bot.exchange.dex.PriceSource.name]).
      */
     suspend fun closeTrade(
         trade: TradeRow,
@@ -537,11 +581,12 @@ class TradeExecutor(
         tp1Done: Boolean = trade.tp1_done == 1L,
         tp2Done: Boolean = trade.tp2_done == 1L,
         manual: Boolean = false,
+        priceSource: String = "",
     ): CloseResult? = closeLock(trade.id).withLock {
         // Закрытие не прерываем отменой (стоп бота, пересоздание рантайма): продажа, исполненная
         // без записи в БД, оставила бы позицию «открытой» без токенов на кошельке.
         withContext(NonCancellable) {
-            closeLocked(trade, currentPrice, portionOfOriginal, reason, tp1Done, tp2Done, manual)
+            closeLocked(trade, currentPrice, portionOfOriginal, reason, tp1Done, tp2Done, manual, priceSource)
         }
     }
 
@@ -553,6 +598,7 @@ class TradeExecutor(
         tp1Done: Boolean,
         tp2Done: Boolean,
         manual: Boolean,
+        priceSource: String,
     ): CloseResult? {
         val t = db.tradeQueries.getById(trade.id).executeAsOneOrNull()
         if (t == null || t.status != "OPEN") {
@@ -573,12 +619,12 @@ class TradeExecutor(
         if (t.is_demo == 0L && hasPendingSell(t.id)) return null
 
         val sale = when {
-            t.is_demo == 0L -> sellReal(t, requestedQty, currentPrice, fullRequested, reason, tp1Done, tp2Done)
+            t.is_demo == 0L -> sellReal(t, requestedQty, currentPrice, fullRequested, reason, tp1Done, tp2Done, priceSource)
             t.exec_mode == EXEC_SHADOW -> sellShadow(t, requestedQty)
             else -> Sale.Filled(proceedsUsd = requestedQty * currentPrice, soldAll = false)
         }
         return when (sale) {
-            is Sale.Filled -> recordSale(t, requestedQty, fullRequested, sale, currentPrice, reason, tp1Done, tp2Done)
+            is Sale.Filled -> recordSale(t, requestedQty, fullRequested, sale, currentPrice, reason, tp1Done, tp2Done, priceSource)
             is Sale.Failed -> {
                 registerExitFailure(t, sale.reason)
                 null
@@ -597,8 +643,9 @@ class TradeExecutor(
 
     /**
      * Учитывает исполненную продажу: строка сделки (частично или полностью), DEMO/SHADOW-баланс, сброс
-     * счётчика неудач и — для REAL — итог записи журнала, всё одной транзакцией БД.
-     * null — запись журнала уже закрыта другим путём (эту продажу учла сверка).
+     * счётчика неудач, PnL этой доли по рыночной цене (market_pnl — сравнение с DEMO) и — для REAL — итог записи
+     * журнала, всё одной транзакцией БД. Сетевые расходы продажи ([Sale.Filled.feeUsd]) вычитаются из PnL и
+     * копятся в fee. null — запись журнала уже закрыта другим путём (эту продажу учла сверка).
      */
     private suspend fun recordSale(
         t: TradeRow,
@@ -609,18 +656,22 @@ class TradeExecutor(
         reason: String,
         tp1Done: Boolean,
         tp2Done: Boolean,
+        priceSource: String,
     ): CloseResult? {
         // На кошельке оказалось меньше, чем в БД (qty записан по котировке покупки), и продано
         // всё, что было: позиция исчерпана — иначе остаток в БД висел бы открытым без токенов.
         val isFull = fullRequested || sale.soldAll
         val closedQty = if (isFull) t.qty_remaining else requestedQty
         val costUsdPortion = t.size_usd * (closedQty / t.qty)
-        val pnlUsd = sale.proceedsUsd - costUsdPortion
+        val pnlUsd = sale.proceedsUsd - costUsdPortion - sale.feeUsd
         // Цена выхода — в единицах цены входа (USD за целый токен), через фактическую доходность продажи:
         // в REAL qty — raw-единицы, и выручка/qty давала цену в 10^decimals раз меньше. Для DEMO формула
         // совпадает с рыночной ценой, для SHADOW — рыночный эквивалент с учётом издержек.
         val exitPrice = if (costUsdPortion > 0) t.entry_price * sale.proceedsUsd / costUsdPortion else currentPrice
         val totalPnl = (t.pnl ?: 0.0) + pnlUsd
+        // У сделок без комиссий fee остаётся null, как раньше.
+        val totalFee = if (sale.feeUsd > 0.0 || t.fee != null) (t.fee ?: 0.0) + sale.feeUsd else null
+        val marketDelta = marketPnlDelta(t.size_usd, t.entry_price, t.qty, closedQty, currentPrice)
 
         val writeSale: () -> Unit = {
             if (isFull) {
@@ -629,7 +680,7 @@ class TradeExecutor(
                     exit_price = exitPrice,
                     pnl = totalPnl,
                     pnl_percent = pnlPercent,
-                    fee = t.fee,
+                    fee = totalFee,
                     close_reason = reason,
                     closed_at = nowMs(),
                     id = t.id,
@@ -640,12 +691,13 @@ class TradeExecutor(
                     tp1_done = if (tp1Done) 1 else 0,
                     tp2_done = if (tp2Done) 1 else 0,
                     pnl = totalPnl,
-                    fee = t.fee,
+                    fee = totalFee,
                     id = t.id,
                 )
             }
+            db.tradeQueries.recordMarketExit(marketDelta, priceSource, t.id)
             db.tradeQueries.clearExitFailures(t.id)
-            if (t.is_demo == 1L) setDemoBalance(demoBalanceUsd() + sale.proceedsUsd)
+            if (t.is_demo == 1L) setDemoBalance(demoBalanceUsd() + sale.proceedsUsd - sale.feeUsd)
         }
         val applied = when {
             sale.signature != null -> settleJournalWith(sale.signature, JOURNAL_CONFIRMED, tradeId = t.id, note = "", onClaimed = writeSale)
@@ -691,7 +743,10 @@ class TradeExecutor(
         activityLog.warn("⚠️ ${t.symbol}: продажа не прошла ($failures подряд) — $note")
     }
 
-    /** SHADOW-выход: выручка — котировка Jupiter на продажу этого количества (транзакция не отправляется). */
+    /**
+     * SHADOW-выход: выручка — котировка Jupiter на продажу этого количества (транзакция не отправляется), минус
+     * оценка сетевых расходов свопа.
+     */
     private suspend fun sellShadow(t: TradeRow, qty: Double): Sale {
         val decimals = quotes.mintInfo(t.mint)?.decimals ?: return Sale.Failed("нет данных mint-аккаунта (decimals)")
         val amountRaw = (qty * 10.0.pow(decimals)).toLong()
@@ -699,9 +754,35 @@ class TradeExecutor(
         val solPrice = quotes.solPriceUsd()?.takeIf { it > 0 } ?: return Sale.Failed("нет цены SOL")
         val slippage = sellSlippageBps(t.exit_failures.toInt(), settings.getProtection().maxSellSlippagePct)
         return when (val r = quotes.quote(t.mint, SOL_MINT, amountRaw, slippage)) {
-            is QuoteResult.Ok -> Sale.Filled(r.quote.outAmount.toDouble() / LAMPORTS_PER_SOL * solPrice, soldAll = false)
+            is QuoteResult.Ok -> Sale.Filled(
+                proceedsUsd = r.quote.outAmount.toDouble() / LAMPORTS_PER_SOL * solPrice,
+                soldAll = false,
+                feeUsd = SHADOW_SWAP_FEE_LAMPORTS.toDouble() / LAMPORTS_PER_SOL * solPrice,
+            )
             is QuoteResult.NoRoute -> Sale.Failed("нет маршрута продажи (${r.reason})")
             is QuoteResult.Failed -> Sale.Failed("котировка продажи недоступна: ${r.reason}")
+        }
+    }
+
+    /**
+     * Цена выхода по котировке продажи остатка позиции, USD за целый токен: последний запасной путь монитора,
+     * когда ни Jupiter, ни DexScreener свежей цены не дали, — по этой котировке продажа и исполнилась бы
+     * (с влиянием нашего объёма на цену, поэтому для стопа она осторожнее рыночной).
+     */
+    suspend fun quotedExitPrice(t: TradeRow): ExitQuote {
+        val decimals = quotes.mintInfo(t.mint)?.decimals ?: return ExitQuote(null, "нет данных mint-аккаунта")
+        val scale = 10.0.pow(decimals)
+        // REAL хранит количество в raw-единицах, DEMO/SHADOW — в целых токенах.
+        val amountRaw = (if (t.is_demo == 0L) t.qty_remaining else t.qty_remaining * scale).toLong()
+        if (amountRaw <= 0L) return ExitQuote(null, "нечего продавать")
+        val solPrice = quotes.solPriceUsd()?.takeIf { it > 0 } ?: return ExitQuote(null, "нет цены SOL")
+        return when (val r = quotes.quote(t.mint, SOL_MINT, amountRaw, BASE_SELL_SLIPPAGE_BPS)) {
+            is QuoteResult.Ok -> {
+                val price = r.quote.outAmount.toDouble() / LAMPORTS_PER_SOL * solPrice / (amountRaw / scale)
+                if (price > 0.0 && price.isFinite()) ExitQuote(price, null) else ExitQuote(null, "пустая котировка")
+            }
+            is QuoteResult.NoRoute -> ExitQuote(null, "нет маршрута продажи (${r.reason})")
+            is QuoteResult.Failed -> ExitQuote(null, "котировка недоступна: ${r.reason}")
         }
     }
 
@@ -718,6 +799,7 @@ class TradeExecutor(
         reason: String,
         tp1Done: Boolean,
         tp2Done: Boolean,
+        priceSource: String,
     ): Sale {
         val s = signer() ?: return Sale.Failed("кошелёк недоступен (seed-фраза)")
         val pubkey = s.publicKeyBase58()
@@ -754,6 +836,7 @@ class TradeExecutor(
             proceedsUsd = proceedsUsd,
             soldAll = soldAll,
             currentPrice = currentPrice,
+            priceSource = priceSource,
         )
         journalInsert(signature, KIND_SELL, t.mint, t.symbol, t.id, journalJson.encodeToString(intent))
         when (val sent = client.rpc.sendTransaction(signed)) {
@@ -891,7 +974,7 @@ class TradeExecutor(
                 val sale = Sale.Filled(intent.proceedsUsd, intent.soldAll, row.signature)
                 val result = recordSale(
                     t, intent.requestedQty.coerceAtMost(t.qty_remaining), intent.fullRequested, sale,
-                    intent.currentPrice, intent.reason, intent.tp1Done, intent.tp2Done,
+                    intent.currentPrice, intent.reason, intent.tp1Done, intent.tp2Done, intent.priceSource,
                 ) ?: return@withContext null
                 "↩️ Продажа ${t.symbol} подтвердилась с опозданием — " +
                     "${if (result.isFull) "позиция закрыта" else "частичный выход учтён"} (${intent.reason}), " +

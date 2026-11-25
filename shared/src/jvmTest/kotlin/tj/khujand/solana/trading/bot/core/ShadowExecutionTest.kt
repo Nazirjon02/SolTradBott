@@ -9,6 +9,8 @@ import kotlin.test.assertTrue
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.JsonObject
 import tj.khujand.solana.trading.bot.core.engine.ActivityLog
+import tj.khujand.solana.trading.bot.core.engine.SHADOW_SWAP_FEE_LAMPORTS
+import tj.khujand.solana.trading.bot.core.engine.SHADOW_TOKEN_ACCOUNT_RENT_LAMPORTS
 import tj.khujand.solana.trading.bot.core.engine.TradeExecutor
 import tj.khujand.solana.trading.bot.core.strategy.Signal
 import tj.khujand.solana.trading.bot.core.strategy.StrategyConfig
@@ -23,9 +25,13 @@ import tj.khujand.solana.trading.bot.exchange.dex.SwapQuote
 /**
  * SHADOW: DEMO-счёт, но вход и выход — по котировкам Jupiter, и неудачная продажа ведёт себя как в REAL
  * (счётчик неудач, рост slippage, пауза). Рынок в тестах: токен $0.001, SOL $100 → по рынку 100 raw-единиц
- * (6 знаков) за lamport; котировка покупки даёт 98 — на 2% хуже рынка.
+ * (6 знаков) за lamport; котировка покупки даёт 98 — на 2% хуже рынка. Сетевые расходы (оценка): вход —
+ * своп + рента токен-аккаунта, 2 244 280 lamports = $0.224428; продажа — своп, 205 000 lamports = $0.0205.
  */
 class ShadowExecutionTest {
+
+    private val entryFee = (SHADOW_SWAP_FEE_LAMPORTS + SHADOW_TOKEN_ACCOUNT_RENT_LAMPORTS) / 1e9 * 100.0
+    private val sellFee = SHADOW_SWAP_FEE_LAMPORTS / 1e9 * 100.0
 
     private class Env(val db: DrxDatabase, val executor: TradeExecutor, val quotes: FakeSwapQuotes, val settings: SettingsStore)
 
@@ -62,7 +68,11 @@ class ShadowExecutionTest {
         assertEquals(100.0, t.size_usd, 1e-9)
         assertEquals(1.0, t.size_sol, 1e-12)
         assertEquals(0.001, t.entry_price) // цена входа — рыночная, издержки — в количестве
-        assertEquals(9_900.0, e.executor.demoBalanceUsd(), 1e-6)
+        // Сетевые расходы входа — в fee и сразу в pnl (их видят итоги и лимиты убытка), и списаны со счёта.
+        assertEquals(0.224428, entryFee, 1e-9)
+        assertEquals(entryFee, t.fee!!, 1e-9)
+        assertEquals(-entryFee, t.pnl!!, 1e-9)
+        assertEquals(9_900.0 - entryFee, e.executor.demoBalanceUsd(), 1e-6)
     }
 
     @Test fun shadowExitTakesProceedsFromSellQuote() = runBlocking {
@@ -70,14 +80,22 @@ class ShadowExecutionTest {
         val id = open(e)
         // Цена выросла на 20%: за lamport дают в 1.2 раза меньше токенов.
         e.quotes.tokensPerLamport = 100.0 / 1.2
-        val result = assertNotNull(e.executor.closeTrade(trade(e, id), currentPrice = 0.0012, portionOfOriginal = 100.0, reason = "TP"))
-        // 9.8e10 raw / 83.33 × 0.98 = 1.15248e9 lamports = $115.248: +20% рынка минус издержки входа и выхода.
-        assertEquals(15.248, result.pnlUsd, 0.01)
+        val result = assertNotNull(
+            e.executor.closeTrade(trade(e, id), currentPrice = 0.0012, portionOfOriginal = 100.0, reason = "TP", priceSource = "JUPITER")
+        )
+        // 9.8e10 raw / 83.33 × 0.98 = 1.15248e9 lamports = $115.248: +20% рынка минус издержки котировок,
+        // минус сетевые расходы продажи.
+        assertEquals(15.248 - sellFee, result.pnlUsd, 1e-3)
         assertTrue(result.isFull)
         val t = trade(e, id)
         assertEquals("CLOSED", t.status)
         assertEquals(0.00115248, t.exit_price!!, 1e-8)
-        assertEquals(10_015.248, e.executor.demoBalanceUsd(), 0.01)
+        assertEquals(15.248 - sellFee - entryFee, t.pnl!!, 1e-3)
+        assertEquals(entryFee + sellFee, t.fee!!, 1e-9)
+        // DEMO-эквивалент той же сделки по рыночным ценам: +20% на $100. Разница с pnl — цена исполнения.
+        assertEquals(20.0, t.market_pnl, 1e-9)
+        assertEquals("JUPITER", t.exit_price_source)
+        assertEquals(10_015.248 - entryFee - sellFee, e.executor.demoBalanceUsd(), 1e-3)
         assertTrue("sell:98000000000@300" in e.quotes.calls)
     }
 
@@ -97,7 +115,7 @@ class ShadowExecutionTest {
         assertEquals(listOf(300, 600, 1200, 1500), slippages)
         // С третьей неудачи подряд — «продажа заблокирована»: следующая попытка не раньше паузы.
         assertTrue(trade(e, id).exit_retry_at > System.currentTimeMillis())
-        assertEquals(9_900.0, e.executor.demoBalanceUsd(), 1e-6, "неудачная продажа не трогает баланс")
+        assertEquals(9_900.0 - entryFee, e.executor.demoBalanceUsd(), 1e-6, "неудачная продажа не трогает баланс")
 
         // Маршрут вернулся — частичная продажа проходит, счётчик неудач сброшен.
         e.quotes.sell = null
@@ -149,5 +167,38 @@ class ShadowExecutionTest {
         val result = assertNotNull(e.executor.closeTrade(t, 0.0012, 100.0, "TP"))
         assertEquals(20.0, result.pnlUsd, 1e-6)
         assertTrue(e.quotes.calls.isEmpty())
+        val closed = trade(e, id)
+        assertEquals(20.0, closed.market_pnl, 1e-9, "у DEMO рыночный PnL и есть фактический")
+        assertNull(closed.fee, "у DEMO комиссий нет — fee как раньше пуст")
+    }
+
+    @Test fun partialExitsAccumulateMarketPnlAndFees() = runBlocking {
+        val e = env()
+        val id = open(e)
+        // TP1: половина по рынку +10%, остаток — по рынку −5%.
+        e.quotes.tokensPerLamport = 100.0 / 1.1
+        assertNotNull(e.executor.closeTrade(trade(e, id), 0.0011, 50.0, "TP1", tp1Done = true, priceSource = "JUPITER"))
+        e.quotes.tokensPerLamport = 100.0 / 0.95
+        assertNotNull(e.executor.closeTrade(trade(e, id), 0.00095, 100.0, "Stop Loss", priceSource = "DEXSCREENER"))
+        val t = trade(e, id)
+        assertEquals("CLOSED", t.status)
+        // По рынку: $50 × +10% + $50 × −5% = +2.5.
+        assertEquals(2.5, t.market_pnl, 1e-9)
+        assertEquals(entryFee + 2 * sellFee, t.fee!!, 1e-9)
+        assertEquals("DEXSCREENER", t.exit_price_source, "источник цены последнего выхода")
+        assertTrue(t.pnl!! < t.market_pnl, "котировки и сеть делают SHADOW хуже рыночного расчёта")
+    }
+
+    @Test fun exitQuoteGivesPricePerWholeToken() = runBlocking {
+        val e = env()
+        val id = open(e)
+        // Остаток 98 000 токенов (9.8e10 raw): по курсу 98 raw/lamport × 0.98 → 9.8e8 lamports = $98 → $0.001 за токен.
+        val q = e.executor.quotedExitPrice(trade(e, id))
+        assertEquals(0.001, q.priceUsd!!, 1e-9)
+        assertNull(q.problem)
+        e.quotes.sell = { QuoteResult.NoRoute("COULD_NOT_FIND_ANY_ROUTE") }
+        val none = e.executor.quotedExitPrice(trade(e, id))
+        assertNull(none.priceUsd)
+        assertTrue("маршрута" in none.problem!!)
     }
 }

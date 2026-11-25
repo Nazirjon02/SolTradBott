@@ -359,11 +359,35 @@ class DexScreenerApi {
     suspend fun getTokenPriceUsd(chainId: String, tokenAddress: String): Double? {
         val url = "https://api.dexscreener.com/tokens/v1/$chainId/$tokenAddress"
         val jsonElement = getJsonElementWithRetry(url) ?: return null
-        val pairs = parsePairsFromJson(jsonElement)
-        val pair = pairs.filter { it.baseToken?.address == tokenAddress && it.priceUsd?.toDoubleOrNull() != null }
-            .maxByOrNull { it.liquidity?.usd ?: 0.0 }
-        return pair?.priceUsd?.toDoubleOrNull()
+        return bestBasePair(parsePairsFromJson(jsonElement), tokenAddress)?.priceUsd?.toDoubleOrNull()
     }
+
+    /**
+     * То же, что [getTokenPriceUsd], но с возрастом ответа в кеше Cloudflare (заголовок Age): запасная цена
+     * [PriceFeed], когда у Jupiter её нет. null — нет ответа или пары с ценой.
+     */
+    suspend fun getTokenPriceQuote(chainId: String, tokenAddress: String): DexScreenerPrice? {
+        val (element, ageMs) = getJsonWithAge("https://api.dexscreener.com/tokens/v1/$chainId/$tokenAddress") ?: return null
+        val fetchedAt = Clock.System.now().toEpochMilliseconds()
+        val pair = bestBasePair(parsePairsFromJson(element), tokenAddress) ?: return null
+        val price = pair.priceUsd?.toDoubleOrNull()?.takeIf { it > 0.0 && it.isFinite() } ?: return null
+        return DexScreenerPrice(price, ageMs, fetchedAt, pair.pairAddress)
+    }
+
+    /**
+     * Пара по адресу с возрастом ответа — для монитора: ликвидность (ликвидность-стоп остаётся на DexScreener)
+     * и запасная цена позиции. null — нет ответа.
+     */
+    suspend fun getPairSnapshot(pairAddress: String): PairSnapshot? {
+        val (element, ageMs) = getJsonWithAge("https://api.dexscreener.com/latest/dex/pairs/solana/$pairAddress") ?: return null
+        val pair = parsePairsFromJson(element).firstOrNull() ?: return null
+        return PairSnapshot(pair, ageMs, Clock.System.now().toEpochMilliseconds())
+    }
+
+    /** Самая ликвидная пара, где монета — БАЗОВАЯ (в парах, где она котируемая, priceUsd — цена другой монеты). */
+    private fun bestBasePair(pairs: List<TokenPair>, tokenAddress: String): TokenPair? =
+        pairs.filter { it.baseToken?.address == tokenAddress && it.priceUsd?.toDoubleOrNull() != null }
+            .maxByOrNull { it.liquidity?.usd ?: 0.0 }
 
     /**
      * Лучшие пары монет — по одной на монету — пакетными запросами по [TOKENS_BATCH_SIZE] адресов
@@ -523,7 +547,16 @@ class DexScreenerApi {
     private suspend fun getJsonElementWithRetry(
         url: String,
         queryParams: Map<String, String> = emptyMap()
-    ): JsonElement? {
+    ): JsonElement? = getJsonWithAge(url, queryParams)?.first
+
+    /**
+     * Ответ с повторами при 429/5xx и сетевых сбоях + сколько он пролежал в кеше Cloudflare (заголовок Age, мс;
+     * DexScreener отдаёт `max-age=30`). null — ответа нет.
+     */
+    private suspend fun getJsonWithAge(
+        url: String,
+        queryParams: Map<String, String> = emptyMap()
+    ): Pair<JsonElement, Long>? {
         var attempt = 0
         var backoffMs = 500L
 
@@ -551,7 +584,8 @@ class DexScreenerApi {
                     return null
                 }
 
-                return response.body()
+                val ageMs = response.headers["Age"]?.trim()?.toLongOrNull()?.coerceAtLeast(0L)?.times(1000L) ?: 0L
+                return response.body<JsonElement>() to ageMs
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {

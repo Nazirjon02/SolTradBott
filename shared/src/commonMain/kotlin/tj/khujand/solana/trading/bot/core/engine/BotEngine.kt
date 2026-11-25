@@ -1,5 +1,6 @@
 package tj.khujand.solana.trading.bot.core.engine
 
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -27,6 +28,7 @@ import tj.khujand.solana.trading.bot.data.db.DrxDatabase
 import tj.khujand.solana.trading.bot.data.db.Trade as TradeRow
 import tj.khujand.solana.trading.bot.exchange.dex.AccountCache
 import tj.khujand.solana.trading.bot.exchange.dex.DexClient
+import tj.khujand.solana.trading.bot.exchange.dex.EXIT_MAX_PRICE_AGE_MS
 
 /**
  * Сколько стратегий движок крутит одновременно. У каждой свой цикл скана (~30 с), а пул монет и свечи общие:
@@ -252,11 +254,22 @@ class BotEngine(
         )
     }
 
-    /** Открытые позиции с текущим PnL (цены — DexScreener, позиций мало, спама нет). */
+    /**
+     * Открытые позиции с текущим PnL. Цены — Jupiter одним запросом на все позиции (тот же кеш, что у монитора),
+     * запасной — DexScreener; нет обоих — последняя цена монитора, в крайнем случае цена входа.
+     */
     suspend fun getPositions(): List<OpenPosition> {
         val open = db.tradeQueries.getOpenTrades().executeAsList()
+        if (open.isEmpty()) return emptyList()
+        val live = try {
+            client.priceFeed.freshPrices(open.map { it.mint }, EXIT_MAX_PRICE_AGE_MS)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (_: Exception) {
+            emptyMap()
+        }
         return open.map { t ->
-            val price = runCatching { client.getTokenPriceUsd(t.mint) }.getOrNull() ?: t.entry_price
+            val price = live[t.mint]?.priceUsd ?: t.last_price.takeIf { it > 0.0 } ?: t.entry_price
             val costRemaining = t.size_usd * (t.qty_remaining / t.qty.coerceAtLeast(1e-12))
             val valueRemaining = if (t.is_demo == 1L) t.qty_remaining * price
             else costRemaining * (price / t.entry_price)
@@ -285,13 +298,21 @@ class BotEngine(
     }
 
     /**
-     * Цена для ручного закрытия. DEMO исполняется ровно по этой цене, поэтому без живой цены
-     * закрывать нельзя (null): подстановка цены входа записала бы выдуманный нулевой PnL.
-     * REAL продаёт через Jupiter и считает выход по фактической выручке — там цена лишь подсказка.
+     * Цена для ручного закрытия: Jupiter, запасной — DexScreener, не старше [EXIT_MAX_PRICE_AGE_MS]. DEMO
+     * исполняется ровно по этой цене, поэтому без живой цены закрывать нельзя (null): подстановка цены входа
+     * записала бы выдуманный нулевой PnL. SHADOW и REAL продают по котировке Jupiter и считают выход по
+     * выручке — там цена лишь подсказка (и база market_pnl).
      */
-    private suspend fun manualClosePrice(t: TradeRow): Double? {
-        val live = runCatching { client.getTokenPriceUsd(t.mint) }.getOrNull()?.takeIf { it > 0 }
-        return live ?: if (t.is_demo == 1L) null else t.entry_price
+    private suspend fun manualClosePrice(t: TradeRow): Pair<Double, String>? {
+        val live = try {
+            client.priceFeed.freshPrice(t.mint, EXIT_MAX_PRICE_AGE_MS)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (_: Exception) {
+            null
+        }
+        if (live != null) return live.priceUsd to live.source.name
+        return if (t.is_demo == 1L && t.exec_mode != EXEC_SHADOW) null else t.entry_price to ""
     }
 
     /** 🚨 Закрыть все позиции немедленно (рыночно, по текущей цене). */
@@ -300,7 +321,9 @@ class BotEngine(
         var closed = 0
         open.forEach { t ->
             val price = manualClosePrice(t)
-            val result = price?.let { executor.closeTrade(t, it, 100.0, "Закрыто вручную", manual = true) }
+            val result = price?.let { (p, source) ->
+                executor.closeTrade(t, p, 100.0, "Закрыто вручную", manual = true, priceSource = source)
+            }
             when {
                 result != null -> closed++
                 // Уже закрыта параллельно (монитором по стопу/тейку) — цель достигнута.
@@ -334,11 +357,11 @@ class BotEngine(
             ?: return ClosePositionResult(ClosePositionStatus.NOT_FOUND)
         if (t.status != "OPEN") return ClosePositionResult(ClosePositionStatus.NOT_OPEN, symbol = t.symbol)
 
-        val price = manualClosePrice(t) ?: run {
+        val (price, source) = manualClosePrice(t) ?: run {
             activityLog.error("⚠️ ${t.symbol}: нет текущей цены — позиция не закрыта, повторите позже")
             return ClosePositionResult(ClosePositionStatus.FAILED, symbol = t.symbol)
         }
-        val result = executor.closeTrade(t, price, 100.0, "Закрыто вручную", manual = true) ?: run {
+        val result = executor.closeTrade(t, price, 100.0, "Закрыто вручную", manual = true, priceSource = source) ?: run {
             // Пока ждали лок, позицию закрыл монитор (стоп/тейк) — сообщаем «уже закрыта», а не сбой.
             if (!executor.isOpen(t.id)) return ClosePositionResult(ClosePositionStatus.NOT_OPEN, symbol = t.symbol)
             val why = if (executor.hasPendingSell(t.id)) "продажа уже отправлена, ждём подтверждения"

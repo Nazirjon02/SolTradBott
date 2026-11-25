@@ -1,5 +1,6 @@
 package tj.khujand.solana.trading.bot
 
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -25,6 +26,7 @@ import tj.khujand.solana.trading.bot.domain.backtest.BacktestService
 import tj.khujand.solana.trading.bot.domain.dars.MarketAnalyzerService
 import tj.khujand.solana.trading.bot.exchange.dex.AccountCache
 import tj.khujand.solana.trading.bot.exchange.dex.DexClient
+import tj.khujand.solana.trading.bot.exchange.dex.ENTRY_MAX_PRICE_AGE_MS
 import tj.khujand.solana.trading.bot.exchange.dex.GeckoTerminalApi
 import tj.khujand.solana.trading.bot.exchange.dex.JupiterSwapQuotes
 import tj.khujand.solana.trading.bot.exchange.dex.KeyBudget
@@ -204,14 +206,21 @@ class DrxRuntime(val db: DrxDatabase) {
 
     /**
      * Ручная покупка монеты из «Анализа»: пара — из кеша сканера или DexScreener, цена — живая прямо перед
-     * покупкой. Дальше — [StrategyManager.openManual]: лимиты портфеля, проверка монеты, исполнение режима.
+     * покупкой (Jupiter, запасной — DexScreener; без свежей цены покупка запрещена). Дальше —
+     * [StrategyManager.openManual]: лимиты портфеля, проверка монеты, исполнение режима.
      */
     suspend fun manualBuy(mint: String, sizeUsd: Double, stopLossPercent: Double, takeProfitPercent: Double): StrategyManager.ManualResult {
         val now = Clock.System.now().toEpochMilliseconds()
         val candidate = tokenCache.all().firstOrNull { it.mint == mint }
             ?: runCatching { client.dexScreener.findSolanaPair(mint)?.toTokenCandidate(now) }.getOrNull()
             ?: return StrategyManager.ManualResult.Rejected("пара монеты не найдена на DexScreener")
-        val live = runCatching { client.getTokenPriceUsd(mint) }.getOrNull()
+        val live = try {
+            client.priceFeed.freshPrice(mint, ENTRY_MAX_PRICE_AGE_MS)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (_: Exception) {
+            null
+        }
         return strategyManager.openManual(candidate, sizeUsd, stopLossPercent, takeProfitPercent, live)
     }
 

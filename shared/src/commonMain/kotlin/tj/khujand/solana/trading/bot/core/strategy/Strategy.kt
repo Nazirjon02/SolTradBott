@@ -66,6 +66,11 @@ data class Signal(
     val entryPrice: Double,
     val stopLoss: Double,
     val takeProfit: Double,
+    /**
+     * Откуда живая цена входа ([tj.khujand.solana.trading.bot.exchange.dex.PriceSource.name]); "" — цена сигнала.
+     * Пишется в сделку для сравнения режимов. С умолчанием — старые записи журнала читаются как раньше.
+     */
+    val priceSource: String = "",
 )
 
 enum class StrategyType(val displayName: String) {

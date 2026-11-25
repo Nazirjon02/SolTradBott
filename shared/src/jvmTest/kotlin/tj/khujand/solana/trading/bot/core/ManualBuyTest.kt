@@ -17,6 +17,8 @@ import tj.khujand.solana.trading.bot.data.SettingsStore
 import tj.khujand.solana.trading.bot.data.db.DrxDatabase
 import tj.khujand.solana.trading.bot.exchange.dex.AccountCache
 import tj.khujand.solana.trading.bot.exchange.dex.DexClient
+import tj.khujand.solana.trading.bot.exchange.dex.LivePrice
+import tj.khujand.solana.trading.bot.exchange.dex.PriceSource
 import tj.khujand.solana.trading.bot.exchange.dex.TokenCache
 import tj.khujand.solana.trading.bot.exchange.dex.TokenCandidate
 import tj.khujand.solana.trading.bot.exchange.dex.TokenScanner
@@ -51,41 +53,60 @@ class ManualBuyTest {
         priceChangeM5 = 0.0, priceChangeH1 = 0.0, tokenAgeMinutes = 600, score = 0.0, scannedAt = 0L,
     )
 
+    /** Живая цена прямо перед покупкой (как её даёт PriceFeed). */
+    private fun live(price: Double = 2.0, source: PriceSource = PriceSource.JUPITER, ageMs: Long = 0L) =
+        LivePrice(price, source, fetchedAtMs = System.currentTimeMillis() - ageMs)
+
     @Test
     fun manualBuyOpensTradeWithDialogStopAndTake() = runBlocking {
         val e = env()
-        val r = e.manager.openManual(coin(), sizeUsd = 100.0, stopLossPercent = 10.0, takeProfitPercent = 50.0, livePrice = 2.5)
+        val r = e.manager.openManual(coin(), sizeUsd = 100.0, stopLossPercent = 10.0, takeProfitPercent = 50.0, livePrice = live(2.5))
         assertIs<ManualResult.Opened>(r)
         val t = e.db.tradeQueries.getOpenTrades().executeAsList().single()
         assertEquals(MANUAL_STRATEGY_ID, t.strategy_id)
         assertEquals(2.5, t.entry_price, 1e-9) // живая цена, а не цена кандидата
         assertEquals(2.25, t.stop_loss, 1e-9)
         assertEquals(3.75, t.take_profit, 1e-9)
+        assertEquals("JUPITER", t.entry_price_source)
         assertEquals(900.0, e.executor.demoBalanceUsd(), 1e-9)
+    }
+
+    @Test
+    fun manualBuyWithoutFreshPriceIsRejected() = runBlocking {
+        val e = env()
+        // Ни Jupiter, ни DexScreener цены не дали — как и вход бота, покупка запрещена.
+        val none = assertIs<ManualResult.Rejected>(e.manager.openManual(coin(), 100.0, 10.0, 50.0, null))
+        assertTrue(none.reason.contains("нет свежей цены"), none.reason)
+        // Цена есть, но старше минуты — тоже нет.
+        assertIs<ManualResult.Rejected>(e.manager.openManual(coin(), 100.0, 10.0, 50.0, live(ageMs = 90_000L)))
+        assertTrue(e.db.tradeQueries.getOpenTrades().executeAsList().isEmpty())
+        // Запасной источник со свежей ценой — покупка проходит, источник записан.
+        assertIs<ManualResult.Opened>(e.manager.openManual(coin(), 100.0, 10.0, 50.0, live(source = PriceSource.DEXSCREENER)))
+        assertEquals("DEXSCREENER", e.db.tradeQueries.getOpenTrades().executeAsList().single().entry_price_source)
     }
 
     @Test
     fun secondManualBuyOfOpenCoinIsRejected() = runBlocking {
         val e = env()
-        e.manager.openManual(coin(), 100.0, 10.0, 50.0, null)
-        val again = assertIs<ManualResult.Rejected>(e.manager.openManual(coin(), 100.0, 10.0, 50.0, null))
+        e.manager.openManual(coin(), 100.0, 10.0, 50.0, live())
+        val again = assertIs<ManualResult.Rejected>(e.manager.openManual(coin(), 100.0, 10.0, 50.0, live()))
         assertTrue(again.reason.contains("открытая позиция"), again.reason)
     }
 
     @Test
     fun portfolioLimitsApplyToManualBuys() = runBlocking {
         val e = env(ProtectionSettings(guardEnabled = false, maxOpenPositions = 1))
-        assertIs<ManualResult.Opened>(e.manager.openManual(coin("a"), 100.0, 10.0, 50.0, null))
-        val denied = assertIs<ManualResult.Rejected>(e.manager.openManual(coin("b"), 100.0, 10.0, 50.0, null))
+        assertIs<ManualResult.Opened>(e.manager.openManual(coin("a"), 100.0, 10.0, 50.0, live()))
+        val denied = assertIs<ManualResult.Rejected>(e.manager.openManual(coin("b"), 100.0, 10.0, 50.0, live()))
         assertTrue(denied.reason.startsWith("портфель"), denied.reason)
     }
 
     @Test
     fun badInputAndEmptyBalanceAreRejected() = runBlocking {
         val e = env()
-        assertIs<ManualResult.Rejected>(e.manager.openManual(coin(), 0.0, 10.0, 50.0, null))
-        assertIs<ManualResult.Rejected>(e.manager.openManual(coin(), 100.0, 95.0, 50.0, null))
-        val broke = assertIs<ManualResult.Rejected>(e.manager.openManual(coin(), 5_000.0, 10.0, 50.0, null))
+        assertIs<ManualResult.Rejected>(e.manager.openManual(coin(), 0.0, 10.0, 50.0, live()))
+        assertIs<ManualResult.Rejected>(e.manager.openManual(coin(), 100.0, 95.0, 50.0, live()))
+        val broke = assertIs<ManualResult.Rejected>(e.manager.openManual(coin(), 5_000.0, 10.0, 50.0, live()))
         assertTrue(broke.reason.contains("демо-счёте"), broke.reason)
         assertTrue(e.db.tradeQueries.getOpenTrades().executeAsList().isEmpty())
     }
